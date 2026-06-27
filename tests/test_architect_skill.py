@@ -54,6 +54,8 @@ def test_skill_name_matches_directory():
     text = _read(_SKILL_MD)
     m = re.search(r"^name:\s*(.+?)\s*$", text, re.MULTILINE)
     assert m and m.group(1).strip() == "architect", "frontmatter name must be 'architect'"
+    # The directory basename IS the command name, so it must equal the frontmatter name.
+    assert os.path.basename(_SKILL_DIR) == "architect", "skill directory must be named 'architect'"
 
 
 def test_reference_files_exist():
@@ -90,6 +92,38 @@ def test_gatemap_has_antitheater_scoping():
     # The MVP gate set must be present.
     for gate in ("tests", "assets", "ui-ux"):
         assert gate in gatemap, "MVP gate '%s' must appear in the map" % gate
+
+
+def test_gatemap_active_column_excludes_unbuilt_gates():
+    """Machine-enforce anti-theater: the 'Active in MVP (forward-coupled now)' column of the default
+    map must never promise an unbuilt gate. (a11y is exempt — it is *folded into* ui-ux, not a
+    standalone forward-coupled gate, so it legitimately appears as prose in the active column.)"""
+    text = _read(_GATEMAP)
+    idx = text.find("## Default map")
+    assert idx != -1, "usecase-gate-map must have a '## Default map' section"
+    section = text[idx:]
+    forbidden = [
+        "`api-contract`", "`security`", "`docs`", "`perf`", "`data-viz`",
+        "`completeness`", "`source-verification`", "`contract`",
+    ]
+    offenders = []
+    for line in section.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if len(cells) < 3:
+            continue
+        active = cells[-1]  # the 'Active in MVP (forward-coupled now)' column
+        # skip the header row and the |---|---| separator row
+        if active.lower().startswith("active") or set(active) <= set("-: "):
+            continue
+        for tok in forbidden:
+            if tok in active:
+                offenders.append("%s in active column: %s" % (tok, active))
+    assert not offenders, (
+        "future/unbuilt gate forward-coupled in the 'Active in MVP' column:\n  " + "\n  ".join(offenders)
+    )
 
 
 def test_phase4_references_loop_rails():

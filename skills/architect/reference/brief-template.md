@@ -4,7 +4,8 @@ A worker brief is a **zero-context** prompt: a fresh agent that has never seen t
 able to execute it *and* self-check against the gate. The defining move of this harness is the **MUST
 PASS GATES** block — each selected gate's **concrete pass-criteria are inlined** so the worker builds
 *toward* the bar, not blind. (No surveyed framework does this; briefs are normally authored independently
-of any rubric.) Keep the brief self-contained: inline the criteria so the worker passes the gate with
+of any rubric — though this is integration + packaging, not a proven algorithm: the uplift is unproven
+until the v0.8 showcase measures it.) Keep the brief self-contained: inline the criteria so the worker passes the gate with
 **zero external skills** — name skills only as optional enhancers.
 
 ## Required sections
@@ -87,8 +88,9 @@ YOU MUST PASS THESE GATES (self-verify before returning)
       * Alt text / accessible name on the hero visual and the CTA (folded a11y).
       * Not a generic AI-default layout (intentional type scale + rhythm).
   - GATE assets [tier: mixed (objective + advisory)]:
-      * Every local asset referenced exists and is >0 bytes; SVGs are well-formed XML; no placeholder
-        hosts / lorem / empty src / TODO. Remote/CDN refs and "AI-filler" judgments are advisory only.
+      * Every local asset referenced exists and is >0 bytes; SVGs are well-formed XML; a favicon is
+        present for HTML; no placeholder hosts / lorem / empty src / TODO. Remote/CDN refs and
+        "AI-filler" judgments are advisory only.
 
 LEAN-OUTPUT + INTEGRATION RULES
   - Return <=2 files + a 3-line summary; link assets by path, don't paste them.

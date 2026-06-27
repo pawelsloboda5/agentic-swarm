@@ -3,14 +3,20 @@
 Default GATE-set per use-case. The orchestrator may extend this from research, but obeys one
 **load-bearing rule**:
 
-> **Anti-theater scoping.** Only **forward-couple a gate into a brief** if that gate has **shipped,
-> checkable criteria** (an entry in the gate library + a runner path). Gates marked **`future /
+> **Anti-theater scoping.** Only **forward-couple a gate into a brief** if that gate has **concrete,
+> self-contained pass-criteria you can inline today** (present here + in the brief template) — in v0.6.0
+> that is `{tests, assets, ui-ux}`. The runnable, schema'd gate files + the gate runner that *checks*
+> them ship in v0.7.0, so v0.6 forward-couples the criteria now and the verifier arrives next version.
+> Gates marked **`future /
 > not-yet-built`** below may be **named in the PLAN** ("this would also want an `api-contract` gate") so
 > the human sees the full quality surface, but they must **not** appear in a worker's "MUST PASS GATES"
 > block — never tell a worker it must pass a gate that has no criteria and no verifier. As gates ship,
 > they flip from `future` to active and start being forward-coupled.
 
 ## Gate status (MVP = v0.7.0 target)
+
+> *"active" = its concrete criteria are inlinable into briefs **now** (v0.6.0); the runnable gate file +
+> runner that verify it ship in **v0.7.0**. "future / not-yet-built" = criteria not yet defined.*
 
 | Gate | Status | Notes |
 |---|---|---|

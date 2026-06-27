@@ -100,9 +100,9 @@ flowchart TD
 | --- | --- | --- |
 | Safe fan-out rails (8 patterns, template, watchdog, resume) | exists | `skills/agentic-swarm/` |
 | `/loop` pairing (3 loop layers, loop-until-dry/budget) | exists (v0.4) | `skills/agentic-swarm/reference/loops.md` |
-| **Architect orchestration** (Phases 0,1,3) | **new** | a new skill, e.g. `skills/swarm-architect/` (`/agentic-swarm:architect`) |
+| **Architect orchestration** (Phases 0,1,3) | **new** | a new skill, e.g. `skills/architect/` (`/agentic-swarm:architect`) |
 | **Brief synthesizer** (`/agent-prompt`-style, Phase 1) | **new** | `reference/brief-template.md` + synthesis guidance in the architect skill |
-| **Gate library** (Phase 3) | **new** | `skills/swarm-architect/gates/` (one file per gate) + a use-case→gate map |
+| **Gate library** (Phase 3) | **new** | `skills/architect/gates/` (one file per gate) + a use-case→gate map |
 | Robustness eval (safety proof) | in progress | `evals/loop-demo/code-review/` (fold in) |
 | Game-demo redo (quality showcase) | future | `evals/loop-demo/game/` |
 

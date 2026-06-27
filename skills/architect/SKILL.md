@@ -5,7 +5,7 @@ description: >-
   gate-aware subagent swarm — not just a swarm that survives. Use WHENEVER a goal is big or multi-part
   enough to fan out and you want the result to be genuinely good: "build an app / feature / landing page
   / dashboard / game", a large audit, migration, or review, or any "make this excellent end-to-end"
-  request. It runs four phases: (0) research what GOOD looks like, classify the use-case, decompose into
+  request. It runs five phases (0-4): (0) research what GOOD looks like, classify the use-case, decompose into
   workstreams, and select the skill-set + quality GATES per workstream; then present a PLAN for approval
   (plan-then-confirm) before the expensive fan-out; (1) synthesize a zero-context brief per workstream
   that FORWARD-COUPLES each gate's concrete pass-criteria into the worker's brief (the headline novelty)
@@ -18,14 +18,14 @@ description: >-
 # Architect — turn a one-line goal into excellent, gated, end-to-end output
 
 `/agentic-swarm` makes a large fan-out **survive** (bounded waves, retry, watchdog, resume). This skill
-makes it **excellent**: it researches what "good" looks like, decomposes the goal, and — the headline
+aims to make it **excellent**: it researches what "good" looks like, decomposes the goal, and — the headline
 move — **forward-couples each workstream's quality GATE into that workstream's brief**, so every worker
 builds *toward* a named, checkable bar instead of producing generic output that's verified (or not)
 after the fact.
 
 > **Three layers (see [the design](../../docs/plans/2026-06-27-swarm-architecture-harness-v1-design.md)).**
 > **SAFETY** (shipped — `/agentic-swarm`): the fan-out survives. **QUALITY** (this skill): the fan-out
-> produces better work than one agent could — research-driven decomposition + skill+gate-aware briefs +
+> *aims to* produce better work than one agent could — research-driven decomposition + skill+gate-aware briefs +
 > gated integration. **PERSISTENCE** (shipped — `/loop`): the work spans turns/sessions.
 
 **Headline novelty:** *forward-coupling the named gate into the brief.* No surveyed framework feeds the
@@ -74,8 +74,9 @@ The full design + Mermaid (color-coded by layer) is in
 Do this in the **orchestrator**, before any fan-out. Keep it a bounded, read-only scout — not a mega-swarm.
 
 1. **Research "what does GOOD look like here?"** Domain norms, constraints, prior art, the bar a
-   practitioner would hold. Verify any library/framework/SDK/CLI/cloud API with **Context7** before
-   asserting how it behaves; use web/official docs for domain knowledge. Bound it (a few targeted reads).
+   practitioner would hold. Verify any library/framework/SDK/CLI/cloud API with **Context7** if available
+   (else official docs) before asserting how it behaves; use web/official docs for domain knowledge too.
+   Bound it (a few targeted reads).
 2. **Classify the use-case:** web UI · game · frontend · API · backend · library · data/ML · CLI · docs ·
    audit · research. The class drives the default gate-set.
 3. **Decompose into workstreams** — the work-list. Each must be independently briefable and have a
