@@ -1,0 +1,141 @@
+{
+  "meta": {
+    "N": 43,
+    "wave": 7,
+    "seeds": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "rates": [
+      0,
+      0.1,
+      0.2,
+      0.3,
+      0.4
+    ],
+    "max_passes": 4,
+    "note": "deterministic model of the two orchestration shapes under seeded injected faults"
+  },
+  "transient_drop": [
+    {
+      "rate": 0,
+      "naive_coverage": 1,
+      "naive_silent_gaps": 0,
+      "naive_stalled": false,
+      "safe_coverage": 1,
+      "safe_flagged_gaps": 0,
+      "safe_recovered": 0
+    },
+    {
+      "rate": 0.1,
+      "naive_coverage": 0.8953488372093023,
+      "naive_silent_gaps": 4.5,
+      "naive_stalled": false,
+      "safe_coverage": 1,
+      "safe_flagged_gaps": 0,
+      "safe_recovered": 4.5
+    },
+    {
+      "rate": 0.2,
+      "naive_coverage": 0.7819767441860465,
+      "naive_silent_gaps": 9.375,
+      "naive_stalled": false,
+      "safe_coverage": 1,
+      "safe_flagged_gaps": 0,
+      "safe_recovered": 9.375
+    },
+    {
+      "rate": 0.3,
+      "naive_coverage": 0.7005813953488372,
+      "naive_silent_gaps": 12.875,
+      "naive_stalled": false,
+      "safe_coverage": 1,
+      "safe_flagged_gaps": 0,
+      "safe_recovered": 12.875
+    },
+    {
+      "rate": 0.4,
+      "naive_coverage": 0.5843023255813953,
+      "naive_silent_gaps": 17.875,
+      "naive_stalled": false,
+      "safe_coverage": 1,
+      "safe_flagged_gaps": 0,
+      "safe_recovered": 17.875
+    }
+  ],
+  "permanent_drop": [
+    {
+      "rate": 0,
+      "naive_coverage": 1,
+      "naive_silent_gaps": 0,
+      "naive_stalled": false,
+      "safe_coverage": 1,
+      "safe_flagged_gaps": 0,
+      "safe_recovered": 0
+    },
+    {
+      "rate": 0.1,
+      "naive_coverage": 0.9011627906976744,
+      "naive_silent_gaps": 4.25,
+      "naive_stalled": false,
+      "safe_coverage": 0.9011627906976744,
+      "safe_flagged_gaps": 4.25,
+      "safe_recovered": 0
+    },
+    {
+      "rate": 0.2,
+      "naive_coverage": 0.7819767441860466,
+      "naive_silent_gaps": 9.375,
+      "naive_stalled": false,
+      "safe_coverage": 0.7819767441860466,
+      "safe_flagged_gaps": 9.375,
+      "safe_recovered": 0
+    },
+    {
+      "rate": 0.3,
+      "naive_coverage": 0.694767441860465,
+      "naive_silent_gaps": 13.125,
+      "naive_stalled": false,
+      "safe_coverage": 0.694767441860465,
+      "safe_flagged_gaps": 13.125,
+      "safe_recovered": 0
+    },
+    {
+      "rate": 0.4,
+      "naive_coverage": 0.5988372093023255,
+      "naive_silent_gaps": 17.25,
+      "naive_stalled": false,
+      "safe_coverage": 0.5988372093023255,
+      "safe_flagged_gaps": 17.25,
+      "safe_recovered": 0
+    }
+  ],
+  "hang": {
+    "naive": {
+      "arm": "naive",
+      "coverage": 0,
+      "covered": 0,
+      "silent_gaps": 43,
+      "flagged_gaps": 0,
+      "recovered": 0,
+      "stalled": true,
+      "attempts": 43
+    },
+    "safe": {
+      "arm": "safe-swarm",
+      "coverage": 1,
+      "covered": 43,
+      "silent_gaps": 0,
+      "flagged_gaps": 0,
+      "recovered": 1,
+      "stalled": false,
+      "attempts": 44
+    }
+  }
+}

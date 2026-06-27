@@ -1,0 +1,1476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Prism Defenders — 3D Tower Defense</title>
+<style>
+  :root{
+    --bg:#0b1026;
+    --glass:rgba(18,24,54,0.72);
+    --glass-2:rgba(28,36,76,0.7);
+    --stroke:rgba(120,160,255,0.18);
+    --stroke-strong:rgba(140,180,255,0.45);
+    --txt:#e8eeff;
+    --muted:#9fb0d8;
+    --gold:#ffd24a;
+    --hp:#ff5a6a;
+    --accent:#5ce1ff;
+    --good:#62e08a;
+    --bad:#ff6b6b;
+    --shadow:0 10px 30px rgba(0,0,0,0.45);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--txt);}
+  canvas{display:block;}
+  #ui{position:fixed;inset:0;pointer-events:none;z-index:10;}
+  #ui > *{pointer-events:auto;}
+
+  /* ---------- TOP BAR ---------- */
+  #topbar{
+    position:absolute;top:14px;left:50%;transform:translateX(-50%);
+    display:flex;gap:10px;align-items:stretch;
+    background:var(--glass);backdrop-filter:blur(14px);
+    border:1px solid var(--stroke);border-radius:16px;padding:10px 14px;
+    box-shadow:var(--shadow);
+  }
+  .stat{display:flex;flex-direction:column;align-items:center;min-width:74px;padding:0 8px;}
+  .stat .lbl{font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted);}
+  .stat .val{font-size:20px;font-weight:800;line-height:1.15;display:flex;align-items:center;gap:5px;}
+  .sep{width:1px;background:var(--stroke);margin:2px 0;}
+  #waveWrap{min-width:150px;}
+  #waveBarOuter{width:100%;height:6px;border-radius:6px;background:rgba(255,255,255,0.12);margin-top:5px;overflow:hidden;}
+  #waveBar{height:100%;width:0%;background:linear-gradient(90deg,#5ce1ff,#7a7bff);border-radius:6px;transition:width .15s linear;}
+  .v-gold{color:var(--gold);} .v-hp{color:var(--hp);} .v-acc{color:var(--accent);}
+
+  /* ---------- SHOP ---------- */
+  #shop{
+    position:absolute;bottom:16px;left:50%;transform:translateX(-50%);
+    display:flex;gap:10px;align-items:flex-end;
+  }
+  .panel{
+    background:var(--glass);backdrop-filter:blur(14px);
+    border:1px solid var(--stroke);border-radius:16px;box-shadow:var(--shadow);
+  }
+  #towerShop{display:flex;gap:8px;padding:10px;}
+  .tower-btn{
+    position:relative;width:96px;cursor:pointer;border:1px solid var(--stroke);
+    border-radius:12px;padding:9px 8px 8px;background:var(--glass-2);
+    transition:transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+    text-align:center;user-select:none;
+  }
+  .tower-btn:hover{transform:translateY(-3px);border-color:var(--stroke-strong);}
+  .tower-btn.selected{border-color:var(--accent);box-shadow:0 0 0 2px rgba(92,225,255,0.35), var(--shadow);}
+  .tower-btn.cant{opacity:0.5;}
+  .tower-btn .swatch{width:30px;height:30px;border-radius:9px;margin:0 auto 6px;box-shadow:inset 0 -6px 10px rgba(0,0,0,0.25);}
+  .tower-btn .tname{font-size:13px;font-weight:700;}
+  .tower-btn .tcost{font-size:12px;color:var(--gold);font-weight:700;margin-top:2px;}
+  .tower-btn .tdesc{font-size:10px;color:var(--muted);margin-top:3px;line-height:1.25;height:26px;}
+  .tower-btn kbd{position:absolute;top:6px;right:7px;font-size:10px;color:var(--muted);
+    border:1px solid var(--stroke);border-radius:5px;padding:0 4px;background:rgba(0,0,0,0.2);}
+
+  #controls{display:flex;flex-direction:column;gap:8px;padding:10px;}
+  #controls .row{display:flex;gap:8px;}
+  .btn{
+    cursor:pointer;border:1px solid var(--stroke);border-radius:11px;background:var(--glass-2);
+    color:var(--txt);font-weight:700;font-size:13px;padding:9px 13px;user-select:none;
+    transition:transform .12s ease, border-color .12s ease, background .12s ease;
+    display:flex;align-items:center;gap:7px;justify-content:center;white-space:nowrap;
+  }
+  .btn:hover{transform:translateY(-2px);border-color:var(--stroke-strong);}
+  .btn.primary{background:linear-gradient(135deg,#3a7bff,#7a4bff);border-color:transparent;}
+  .btn.primary:hover{box-shadow:0 6px 18px rgba(90,90,255,0.45);}
+  .btn.ghosted{opacity:0.45;pointer-events:none;}
+  .btn.square{padding:9px 11px;min-width:42px;}
+  .btn.on{border-color:var(--accent);color:var(--accent);}
+
+  /* ---------- SELECTION PANEL ---------- */
+  #selPanel{
+    position:absolute;top:90px;right:16px;width:228px;padding:14px;display:none;
+  }
+  #selPanel h3{margin:0 0 2px;font-size:16px;display:flex;align-items:center;gap:8px;}
+  #selPanel .lvl{font-size:11px;color:var(--muted);margin-bottom:10px;letter-spacing:1px;text-transform:uppercase;}
+  .statline{display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px dashed var(--stroke);}
+  .statline span:last-child{font-weight:700;}
+  .statline .up{color:var(--good);font-size:11px;margin-left:6px;}
+  #selPanel .actions{display:flex;gap:8px;margin-top:12px;}
+  #selPanel .actions .btn{flex:1;}
+  .btn.sell{background:rgba(120,40,50,0.5);}
+  .btn.upg{background:linear-gradient(135deg,#1f8a4c,#3fd07a);border-color:transparent;}
+
+  /* ---------- TOAST ---------- */
+  #toast{
+    position:absolute;top:84px;left:50%;transform:translateX(-50%) translateY(-10px);
+    background:var(--glass);border:1px solid var(--stroke-strong);border-radius:12px;
+    padding:9px 18px;font-weight:700;font-size:14px;box-shadow:var(--shadow);
+    opacity:0;transition:opacity .25s ease, transform .25s ease;pointer-events:none;
+  }
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+
+  /* hint about build mode */
+  #buildHint{
+    position:absolute;bottom:130px;left:50%;transform:translateX(-50%);
+    background:rgba(0,0,0,0.45);border:1px solid var(--stroke);border-radius:10px;
+    padding:6px 14px;font-size:13px;color:var(--accent);display:none;pointer-events:none;
+  }
+
+  /* ---------- OVERLAY (intro / end) ---------- */
+  #overlay{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(1200px 700px at 50% 30%, rgba(40,60,140,0.35), rgba(5,8,22,0.82));
+    backdrop-filter:blur(4px);z-index:20;
+  }
+  #overlay .card{
+    width:min(560px,92vw);background:var(--glass);border:1px solid var(--stroke-strong);
+    border-radius:22px;padding:30px 34px;box-shadow:var(--shadow);text-align:center;
+  }
+  #overlay h1{margin:0 0 6px;font-size:38px;letter-spacing:0.5px;
+    background:linear-gradient(90deg,#5ce1ff,#9b8bff,#ff7ad9);-webkit-background-clip:text;background-clip:text;color:transparent;}
+  #overlay .sub{color:var(--muted);font-size:14px;margin-bottom:18px;}
+  #overlay .how{text-align:left;background:rgba(0,0,0,0.22);border:1px solid var(--stroke);
+    border-radius:14px;padding:14px 18px;font-size:13.5px;line-height:1.7;color:#dbe5ff;margin-bottom:20px;}
+  #overlay .how b{color:var(--accent);}
+  #overlay .big{font-size:15px;font-weight:800;padding:14px 22px;}
+  #overlay .endStats{display:flex;gap:24px;justify-content:center;margin-bottom:18px;}
+  #overlay .endStats .s{display:flex;flex-direction:column;}
+  #overlay .endStats .s b{font-size:28px;}
+  #overlay .endStats .s span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;}
+  .hide{display:none !important;}
+  #loadErr{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+    background:#0b1026;color:#ff9aa2;text-align:center;z-index:50;padding:30px;font-size:16px;line-height:1.6;}
+  .credit{position:absolute;bottom:6px;right:10px;font-size:11px;color:rgba(159,176,216,0.5);pointer-events:none;}
+  @media (max-width:720px){
+    .tower-btn{width:78px;} .tower-btn .tdesc{display:none;}
+    #selPanel{top:auto;bottom:150px;right:8px;width:200px;}
+    .stat{min-width:58px;} .stat .val{font-size:17px;}
+  }
+</style>
+</head>
+<body>
+<div id="ui">
+  <!-- TOP BAR -->
+  <div id="topbar">
+    <div class="stat"><div class="lbl">Lives</div><div class="val v-hp">❤ <span id="lives">20</span></div></div>
+    <div class="sep"></div>
+    <div class="stat"><div class="lbl">Gold</div><div class="val v-gold">🪙 <span id="gold">120</span></div></div>
+    <div class="sep"></div>
+    <div class="stat"><div class="lbl">Score</div><div class="val v-acc"><span id="score">0</span></div></div>
+    <div class="sep"></div>
+    <div class="stat" id="waveWrap">
+      <div class="lbl">Wave</div>
+      <div class="val"><span id="wave">0</span><span style="color:var(--muted);font-size:14px;font-weight:600;">&nbsp;/ 20</span></div>
+      <div id="waveBarOuter"><div id="waveBar"></div></div>
+    </div>
+  </div>
+
+  <!-- SELECTION PANEL -->
+  <div id="selPanel" class="panel">
+    <h3><span id="selSwatch" style="width:16px;height:16px;border-radius:5px;display:inline-block;"></span><span id="selName">Tower</span></h3>
+    <div class="lvl" id="selLvl">Level 1</div>
+    <div class="statline"><span>Damage</span><span id="selDmg">0</span></div>
+    <div class="statline"><span>Range</span><span id="selRange">0</span></div>
+    <div class="statline"><span>Fire rate</span><span id="selRate">0</span></div>
+    <div class="statline"><span>DPS</span><span id="selDps">0</span></div>
+    <div class="statline" id="selSpecialLine" style="display:none;"><span id="selSpecialK">—</span><span id="selSpecialV">—</span></div>
+    <div class="actions">
+      <div class="btn upg" id="btnUpg">Upgrade</div>
+      <div class="btn sell" id="btnSell">Sell</div>
+    </div>
+  </div>
+
+  <!-- SHOP / CONTROLS -->
+  <div id="shop">
+    <div id="towerShop" class="panel"></div>
+    <div id="controls" class="panel">
+      <div class="row">
+        <div class="btn primary" id="btnStart" style="flex:1;">▶ Start Wave 1</div>
+      </div>
+      <div class="row">
+        <div class="btn square" id="btnSpeed" title="Game speed">1×</div>
+        <div class="btn square" id="btnPause" title="Pause">⏸</div>
+        <div class="btn square" id="btnMute" title="Mute sound">🔊</div>
+        <div class="btn square" id="btnRestart" title="Restart">⟳</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="buildHint">Click a green tile to build &nbsp;•&nbsp; Esc to cancel</div>
+  <div id="toast"></div>
+  <div class="credit">Drag right-mouse to rotate • scroll to zoom</div>
+
+  <!-- OVERLAY -->
+  <div id="overlay">
+    <div class="card" id="overlayCard">
+      <h1 id="ovTitle">Prism Defenders</h1>
+      <div class="sub" id="ovSub">A 3D Tower Defense</div>
+      <div class="how" id="ovHow">
+        <div><b>Goal:</b> stop the prisms from reaching your core. Each leak costs lives.</div>
+        <div><b>Build:</b> pick a tower below, then click a glowing green tile.</div>
+        <div><b>Upgrade:</b> click any placed tower to upgrade or sell it.</div>
+        <div><b>Economy:</b> earn gold per kill + interest between waves. Survive all 20 waves.</div>
+        <div><b>Camera:</b> right-drag to rotate, scroll to zoom.</div>
+      </div>
+      <div class="endStats hide" id="ovEndStats">
+        <div class="s"><b id="ovScore" class="v-acc">0</b><span>Score</span></div>
+        <div class="s"><b id="ovWave" class="v-gold">0</b><span>Waves</span></div>
+      </div>
+      <div class="btn primary big" id="btnPlay" style="display:inline-flex;">Play ▶</div>
+    </div>
+  </div>
+</div>
+
+<div id="loadErr">⚠ Could not load Three.js from the CDN.<br/>Check your internet connection and reload the page.</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+window.__gameBooted = true;
+
+/* =========================================================================
+   PRISM DEFENDERS  —  single-file Three.js tower defense
+   ========================================================================= */
+
+/* ----------------------------- CONFIG --------------------------------- */
+const COLS = 16, ROWS = 11, TILE = 2;
+const START_GOLD = 120, START_LIVES = 20, MAX_WAVES = 20;
+
+// Path waypoints in (col,row) cell coords. First & last sit off-board.
+const PATH_CELLS = [
+  [-1,2],[3,2],[3,7],[8,7],[8,2],[12,2],[12,8],[16,8]
+];
+const BASE_CELL = [15,8];
+const SPAWN_CELL = [0,2];
+const DECOR_CELLS = [[1,5],[2,9],[5,0],[6,9],[10,5],[14,1],[14,5],[0,8],[5,3],[10,9],[13,4],[1,0]];
+
+/* tower definitions */
+const TOWER_TYPES = {
+  cannon: {
+    name:'Cannon', cost:50, color:0xff8a3d, accent:0xffd9b0, key:'1',
+    desc:'Reliable single-target damage.',
+    projSpeed:30, projColor:0xffb070,
+    upgrades:[55,95],
+    levels:[
+      {damage:18, range:5.5, cooldown:0.85, splash:0},
+      {damage:30, range:6.0, cooldown:0.72, splash:0},
+      {damage:54, range:6.6, cooldown:0.60, splash:1.7},
+    ]
+  },
+  frost: {
+    name:'Frost', cost:70, color:0x46c8ff, accent:0xd6f6ff, key:'2',
+    desc:'Slows enemies, light damage.',
+    projSpeed:34, projColor:0xbdf0ff,
+    upgrades:[60,100],
+    levels:[
+      {damage:6,  range:5.0, cooldown:0.70, slow:0.45, slowDur:1.4},
+      {damage:11, range:5.5, cooldown:0.62, slow:0.55, slowDur:1.7},
+      {damage:18, range:6.0, cooldown:0.55, slow:0.65, slowDur:2.2},
+    ]
+  },
+  sniper: {
+    name:'Sniper', cost:110, color:0x74e36a, accent:0xe3ffd6, key:'3',
+    desc:'Long range, heavy hits.',
+    projSpeed:85, projColor:0xc8ff9a,
+    upgrades:[95,165],
+    levels:[
+      {damage:80,  range:11,   cooldown:1.55},
+      {damage:140, range:12.5, cooldown:1.40},
+      {damage:250, range:14,   cooldown:1.20, splash:0},
+    ]
+  },
+};
+
+/* enemy definitions */
+const ENEMY_TYPES = {
+  grunt:{hp:46, speed:2.3, reward:7,  leak:1, color:0xff5a5a, size:0.55, shape:'cube',  name:'Grunt'},
+  fast: {hp:26, speed:4.3, reward:6,  leak:1, color:0xffd24a, size:0.42, shape:'cone',  name:'Scout'},
+  tank: {hp:215,speed:1.5, reward:18, leak:2, color:0xb06bff, size:0.85, shape:'box',   name:'Brute'},
+  boss: {hp:2600,speed:1.25,reward:170,leak:6, color:0x33324a, accent:0xff3b6b, size:1.15,shape:'ico', name:'Boss'},
+};
+
+/* ----------------------------- GLOBALS -------------------------------- */
+let renderer, scene, camera;
+let raycaster, ndc = new THREE.Vector2();
+let rangeGroup, rangeRingMat, rangeDiscMat;
+const tilesByMesh = new Map();
+let pathW = [];           // path waypoints in world coords
+let basePos, baseCore, portalRing;
+const clock = new THREE.Clock();
+
+const state = {
+  gold:START_GOLD, lives:START_LIVES, score:0, wave:0,
+  phase:'intro',          // intro | build | wave | gameover | victory
+  gameSpeed:1, paused:false, muted:false, endless:false,
+  time:0,                 // accumulated game time (scaled)
+  enemies:[], towers:[], projectiles:[], effects:[],
+  spawnQueue:[], waveTime:0, waveTotal:0,
+  selectedShop:null, selectedTower:null,
+  ghost:null, hoverTile:null,
+};
+
+/* ------------------------- SHARED RESOURCES --------------------------- */
+const GEO = {};
+const MAT = {};
+function buildShared(){
+  GEO.tile   = new THREE.BoxGeometry(TILE*0.94, 0.5, TILE*0.94);
+  GEO.path   = new THREE.BoxGeometry(TILE*0.98, 0.32, TILE*0.98);
+  GEO.proj   = new THREE.SphereGeometry(0.16, 10, 10);
+  GEO.bar    = new THREE.PlaneGeometry(1, 0.14);
+  GEO.spark  = new THREE.SphereGeometry(0.09, 6, 6);
+
+  MAT.ground = new THREE.MeshStandardMaterial({color:0x14321f, roughness:1, metalness:0});
+  MAT.path   = new THREE.MeshStandardMaterial({color:0xcaa873, roughness:0.95, metalness:0});
+  MAT.pathEdge = new THREE.MeshStandardMaterial({color:0x8c7350, roughness:1});
+  MAT.stone  = new THREE.MeshStandardMaterial({color:0x6b7488, roughness:0.85, metalness:0.1});
+  MAT.metalDark = new THREE.MeshStandardMaterial({color:0x2c3350, roughness:0.5, metalness:0.6});
+  MAT.barBg  = new THREE.MeshBasicMaterial({color:0x14182c});
+}
+
+/* ------------------------------ HELPERS ------------------------------- */
+function cellToWorld(c, r){
+  return new THREE.Vector3((c-(COLS-1)/2)*TILE, 0, (r-(ROWS-1)/2)*TILE);
+}
+const $ = id => document.getElementById(id);
+function lerp(a,b,t){return a+(b-a)*t;}
+
+/* ============================ INIT ==================================== */
+function init(){
+  buildShared();
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0b1026);
+  scene.fog = new THREE.Fog(0x0b1026, 42, 92);
+
+  renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  document.body.appendChild(renderer.domElement);
+
+  camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 200);
+  setupLights();
+  buildBoard();
+  buildRangeIndicator();
+
+  raycaster = new THREE.Raycaster();
+
+  // camera controller (custom orbit)
+  cam.target.set(0, 0, 1.5);
+  cam.radius = 30; cam.theta = -0.55; cam.phi = 0.92;
+  applyCamera();
+
+  bindEvents();
+  buildShopUI();
+  refreshHUD();
+
+  renderer.setAnimationLoop(animate);
+}
+
+function setupLights(){
+  const hemi = new THREE.HemisphereLight(0xbcd2ff, 0x1a2030, 1.15);
+  scene.add(hemi);
+
+  const sun = new THREE.DirectionalLight(0xfff3e0, 2.9);
+  sun.position.set(14, 24, 10);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  const s = 24;
+  sun.shadow.camera.left=-s; sun.shadow.camera.right=s;
+  sun.shadow.camera.top=s;   sun.shadow.camera.bottom=-s;
+  sun.shadow.camera.near=1;  sun.shadow.camera.far=70;
+  sun.shadow.bias = -0.0004;
+  scene.add(sun);
+
+  const fill = new THREE.DirectionalLight(0x6a86ff, 0.55);
+  fill.position.set(-16, 10, -12);
+  scene.add(fill);
+}
+
+/* ---------------------------- BOARD ----------------------------------- */
+function buildBoard(){
+  // big ground
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(120,120), MAT.ground);
+  ground.rotation.x = -Math.PI/2;
+  ground.position.y = -0.26;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // compute path cell set
+  const pathSet = new Set();
+  for(let i=0;i<PATH_CELLS.length-1;i++){
+    let [c0,r0]=PATH_CELLS[i], [c1,r1]=PATH_CELLS[i+1];
+    const dc=Math.sign(c1-c0), dr=Math.sign(r1-r0);
+    let c=c0, r=r0;
+    while(c!==c1 || r!==r1){
+      if(c>=0&&c<COLS&&r>=0&&r<ROWS) pathSet.add(c+','+r);
+      if(c!==c1) c+=dc; else if(r!==r1) r+=dr;
+    }
+    if(c1>=0&&c1<COLS&&r1>=0&&r1<ROWS) pathSet.add(c1+','+r1);
+  }
+  const decorSet = new Set(DECOR_CELLS.map(d=>d[0]+','+d[1]));
+
+  // path world waypoints
+  pathW = PATH_CELLS.map(([c,r])=>{ const w=cellToWorld(c,r); w.y=0; return w; });
+  basePos = cellToWorld(BASE_CELL[0], BASE_CELL[1]);
+
+  // simple deterministic noise for tile color variation
+  const noise = (c,r)=>{ const x=Math.sin(c*12.9898+r*78.233)*43758.5453; return x-Math.floor(x); };
+
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      const key=c+','+r;
+      const w = cellToWorld(c,r);
+      if(pathSet.has(key)){
+        const t = new THREE.Mesh(GEO.path, MAT.path);
+        t.position.set(w.x, 0.0, w.z);
+        t.receiveShadow = true;
+        scene.add(t);
+      } else {
+        const isDecor = decorSet.has(key);
+        const m = new THREE.MeshStandardMaterial({
+          color: new THREE.Color().setHSL(0.34, 0.42, 0.30 + noise(c,r)*0.06),
+          roughness:0.92, metalness:0
+        });
+        const t = new THREE.Mesh(GEO.tile, m);
+        t.position.set(w.x, 0.06, w.z);
+        t.receiveShadow = true;
+        t.castShadow = false;
+        scene.add(t);
+        if(isDecor){
+          addDecor(w, noise(c,r));
+        } else {
+          const tile = {mesh:t, col:c, row:r, world:w.clone(), occupied:false, mat:m,
+                        baseColor:m.color.clone()};
+          tilesByMesh.set(t.id, tile);
+        }
+      }
+    }
+  }
+  buildBase();
+  buildPortal();
+}
+
+function addDecor(w, n){
+  const g = new THREE.Group();
+  if(n>0.5){ // rock cluster
+    const rockMat = new THREE.MeshStandardMaterial({color:0x6d7385, roughness:0.9});
+    for(let i=0;i<3;i++){
+      const s=0.3+n*0.4-i*0.07;
+      const rk=new THREE.Mesh(new THREE.IcosahedronGeometry(s,0), rockMat);
+      rk.position.set((i-1)*0.45*(0.6+n), s*0.6+0.1, (n-0.5)*0.5);
+      rk.rotation.set(n*3,n*5,n*2);
+      rk.castShadow=true; rk.receiveShadow=true; g.add(rk);
+    }
+  } else { // tree
+    const trunk=new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.16,0.6,7),
+      new THREE.MeshStandardMaterial({color:0x6b4a2f, roughness:1}));
+    trunk.position.y=0.4; trunk.castShadow=true; g.add(trunk);
+    const leafMat=new THREE.MeshStandardMaterial({color:0x2f8f4e, roughness:0.85});
+    for(let i=0;i<3;i++){
+      const cone=new THREE.Mesh(new THREE.ConeGeometry(0.55-i*0.12,0.6,8), leafMat);
+      cone.position.y=0.8+i*0.34; cone.castShadow=true; g.add(cone);
+    }
+  }
+  g.position.set(w.x, 0.12, w.z);
+  scene.add(g);
+}
+
+function buildBase(){
+  const g = new THREE.Group();
+  const plat = new THREE.Mesh(new THREE.CylinderGeometry(1.1,1.3,0.5,16),
+    new THREE.MeshStandardMaterial({color:0x3a3f66, roughness:0.5, metalness:0.4}));
+  plat.position.y=0.25; plat.castShadow=true; plat.receiveShadow=true; g.add(plat);
+
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(0.85,0.08,10,32),
+    new THREE.MeshStandardMaterial({color:0x5ce1ff, emissive:0x2aa8ff, emissiveIntensity:1.4, roughness:0.3, metalness:0.3}));
+  ring.rotation.x=Math.PI/2; ring.position.y=0.6; g.add(ring);
+
+  baseCore=new THREE.Mesh(new THREE.OctahedronGeometry(0.7,0),
+    new THREE.MeshStandardMaterial({color:0x9bf0ff, emissive:0x39c6ff, emissiveIntensity:1.8, roughness:0.15, metalness:0.2}));
+  baseCore.position.y=1.5; baseCore.castShadow=true; g.add(baseCore);
+
+  const glow=new THREE.PointLight(0x49c6ff, 4, 12, 2);
+  glow.position.y=1.6; g.add(glow);
+
+  g.position.set(basePos.x, 0, basePos.z);
+  scene.add(g);
+}
+
+function buildPortal(){
+  const w=cellToWorld(SPAWN_CELL[0], SPAWN_CELL[1]);
+  portalRing=new THREE.Mesh(new THREE.TorusGeometry(0.7,0.12,12,28),
+    new THREE.MeshStandardMaterial({color:0xff5a8a, emissive:0xff2f6b, emissiveIntensity:1.6, roughness:0.3}));
+  portalRing.position.set(w.x-TILE, 0.9, w.z);
+  portalRing.rotation.y=Math.PI/2;
+  scene.add(portalRing);
+  const pl=new THREE.PointLight(0xff3b6b, 3, 9, 2);
+  pl.position.copy(portalRing.position); scene.add(pl);
+}
+
+function buildRangeIndicator(){
+  rangeGroup = new THREE.Group();
+  rangeDiscMat = new THREE.MeshBasicMaterial({color:0x5ce1ff, transparent:true, opacity:0.10, depthWrite:false, side:THREE.DoubleSide});
+  rangeRingMat = new THREE.MeshBasicMaterial({color:0x5ce1ff, transparent:true, opacity:0.55, depthWrite:false, side:THREE.DoubleSide});
+  const disc=new THREE.Mesh(new THREE.CircleGeometry(1,48), rangeDiscMat);
+  const ring=new THREE.Mesh(new THREE.RingGeometry(0.95,1,48), rangeRingMat);
+  disc.rotation.x=ring.rotation.x=-Math.PI/2;
+  rangeGroup.add(disc); rangeGroup.add(ring);
+  rangeGroup.position.y=0.4; rangeGroup.visible=false;
+  scene.add(rangeGroup);
+}
+function showRange(world, radius, ok=true){
+  rangeGroup.position.set(world.x, 0.4, world.z);
+  rangeGroup.scale.set(radius, 1, radius);
+  const col = ok ? 0x5ce1ff : 0xff5a6a;
+  rangeDiscMat.color.setHex(col); rangeRingMat.color.setHex(col);
+  rangeGroup.visible = true;
+}
+function hideRange(){ rangeGroup.visible=false; }
+
+/* ============================ CAMERA ================================== */
+const cam = { target:new THREE.Vector3(), radius:30, theta:-0.55, phi:0.92 };
+function applyCamera(){
+  cam.phi = Math.max(0.35, Math.min(1.25, cam.phi));
+  cam.radius = Math.max(14, Math.min(52, cam.radius));
+  const r=cam.radius;
+  camera.position.set(
+    cam.target.x + r*Math.sin(cam.phi)*Math.sin(cam.theta),
+    cam.target.y + r*Math.cos(cam.phi),
+    cam.target.z + r*Math.sin(cam.phi)*Math.cos(cam.theta)
+  );
+  camera.lookAt(cam.target);
+}
+
+/* ============================ TOWERS ================================== */
+function makeTowerMesh(type){
+  const def = TOWER_TYPES[type];
+  const g = new THREE.Group();
+  const colMat = new THREE.MeshStandardMaterial({color:def.color, roughness:0.4, metalness:0.4,
+    emissive:def.color, emissiveIntensity:0.12});
+
+  const base=new THREE.Mesh(new THREE.CylinderGeometry(0.7,0.85,0.4,14), MAT.stone);
+  base.position.y=0.2; base.castShadow=true; base.receiveShadow=true; g.add(base);
+
+  const pillar=new THREE.Mesh(new THREE.CylinderGeometry(0.42,0.52,0.55,12), MAT.metalDark);
+  pillar.position.y=0.62; pillar.castShadow=true; g.add(pillar);
+
+  const head=new THREE.Group(); head.position.y=1.0; g.add(head);
+
+  const body=new THREE.Mesh(new THREE.BoxGeometry(0.85,0.5,0.95), colMat);
+  body.castShadow=true; head.add(body);
+
+  // type-specific muzzle
+  let muzzleY=0.06, muzzleZ=0.9;
+  if(type==='cannon'){
+    const barrel=new THREE.Mesh(new THREE.CylinderGeometry(0.16,0.2,0.9,12), MAT.metalDark);
+    barrel.rotation.x=Math.PI/2; barrel.position.set(0,0.05,0.6); barrel.castShadow=true; head.add(barrel);
+    const tip=new THREE.Mesh(new THREE.CylinderGeometry(0.24,0.24,0.18,12), MAT.metalDark);
+    tip.rotation.x=Math.PI/2; tip.position.set(0,0.05,1.05); head.add(tip);
+    muzzleZ=1.15;
+  } else if(type==='sniper'){
+    const barrel=new THREE.Mesh(new THREE.CylinderGeometry(0.08,0.1,1.6,10), MAT.metalDark);
+    barrel.rotation.x=Math.PI/2; barrel.position.set(0,0.08,0.95); barrel.castShadow=true; head.add(barrel);
+    const scope=new THREE.Mesh(new THREE.BoxGeometry(0.18,0.18,0.4),
+      new THREE.MeshStandardMaterial({color:def.color, emissive:def.color, emissiveIntensity:0.4}));
+    scope.position.set(0,0.32,0.1); head.add(scope);
+    muzzleZ=1.75;
+  } else { // frost
+    const crystal=new THREE.Mesh(new THREE.OctahedronGeometry(0.34,0),
+      new THREE.MeshStandardMaterial({color:def.accent, emissive:def.color, emissiveIntensity:1.6, roughness:0.1, metalness:0.2}));
+    crystal.position.set(0,0.18,0.55); crystal.castShadow=true; head.add(crystal);
+    muzzleZ=0.85; muzzleY=0.18;
+    head.userData.crystal=crystal;
+  }
+  head.userData.muzzle = new THREE.Vector3(0, muzzleY, muzzleZ);
+
+  g.userData={isTower:true};
+  return {group:g, head, colMat};
+}
+
+function placeTower(type, tile){
+  const def=TOWER_TYPES[type];
+  if(state.gold < def.cost){ toast('Not enough gold'); sfx('error'); return false; }
+  const mesh=makeTowerMesh(type);
+  mesh.group.position.set(tile.world.x, 0.0, tile.world.z);
+  scene.add(mesh.group);
+
+  const tower={
+    type, level:0, tile, group:mesh.group, head:mesh.head, colMat:mesh.colMat,
+    cooldownTimer:0, invested:def.cost,
+    gems:[], get pos(){return tile.world;}
+  };
+  mesh.group.userData.tower=tower;
+  applyLevel(tower, 0);
+
+  state.gold-=def.cost;
+  tile.occupied=true;
+  state.towers.push(tower);
+  spawnBurst(new THREE.Vector3(tile.world.x,0.6,tile.world.z), def.color, 10, 4, 0.1);
+  sfx('place');
+  refreshHUD();
+  refreshShopAffordability();
+  return true;
+}
+
+function applyLevel(tower, level){
+  tower.level=level;
+  const L=TOWER_TYPES[tower.type].levels[level];
+  tower.damage=L.damage; tower.range=L.range; tower.cooldown=L.cooldown;
+  tower.splash=L.splash||0; tower.slow=L.slow||0; tower.slowDur=L.slowDur||0;
+  // visual: emissive ramps + upgrade gems
+  tower.colMat.emissiveIntensity = 0.12 + level*0.35;
+  // remove old gems
+  tower.gems.forEach(gm=>tower.group.remove(gm));
+  tower.gems=[];
+  for(let i=0;i<level;i++){
+    const gem=new THREE.Mesh(new THREE.OctahedronGeometry(0.12,0),
+      new THREE.MeshStandardMaterial({color:0xffe27a, emissive:0xffb627, emissiveIntensity:1.4, roughness:0.2}));
+    const a=i*(Math.PI*2/3)+Math.PI/2;
+    gem.position.set(Math.cos(a)*0.6, 0.46, Math.sin(a)*0.6);
+    tower.group.add(gem); tower.gems.push(gem);
+  }
+  if(level>=1) tower.group.scale.setScalar(1+level*0.06);
+}
+
+function upgradeTower(tower){
+  const def=TOWER_TYPES[tower.type];
+  if(tower.level>=2){ toast('Max level'); return; }
+  const cost=def.upgrades[tower.level];
+  if(state.gold<cost){ toast('Not enough gold'); sfx('error'); return; }
+  state.gold-=cost; tower.invested+=cost;
+  applyLevel(tower, tower.level+1);
+  spawnBurst(new THREE.Vector3(tower.pos.x,1.2,tower.pos.z), 0xffe27a, 14, 5, 0.1);
+  sfx('upgrade');
+  refreshHUD(); refreshShopAffordability();
+  if(state.selectedTower===tower) showSelPanel(tower);
+}
+
+function sellTower(tower){
+  const refund=Math.floor(tower.invested*0.7);
+  state.gold+=refund;
+  tower.tile.occupied=false;
+  scene.remove(tower.group);
+  const i=state.towers.indexOf(tower); if(i>=0) state.towers.splice(i,1);
+  spawnBurst(new THREE.Vector3(tower.pos.x,0.6,tower.pos.z), 0xffd24a, 12, 4, 0.1);
+  sfx('sell');
+  deselectTower();
+  toast('Sold for '+refund+' 🪙');
+  refreshHUD(); refreshShopAffordability();
+}
+
+function updateTowers(dt){
+  for(const t of state.towers){
+    t.cooldownTimer-=dt;
+    // find best target (furthest along path within range)
+    let best=null, bestProg=-1;
+    for(const e of state.enemies){
+      if(e.dead) continue;
+      const dx=e.group.position.x-t.pos.x, dz=e.group.position.z-t.pos.z;
+      if(dx*dx+dz*dz <= t.range*t.range){
+        if(e.progress>bestProg){ bestProg=e.progress; best=e; }
+      }
+    }
+    if(best){
+      // aim head
+      const dx=best.group.position.x-t.pos.x, dz=best.group.position.z-t.pos.z;
+      const targetYaw=Math.atan2(dx,dz);
+      t.head.rotation.y = lerpAngle(t.head.rotation.y, targetYaw, Math.min(1, dt*12));
+      if(t.cooldownTimer<=0){
+        fire(t, best);
+        t.cooldownTimer=t.cooldown;
+      }
+    }
+    if(t.head.userData.crystal){ t.head.userData.crystal.rotation.y+=dt*2; }
+  }
+}
+function lerpAngle(a,b,t){
+  let d=((b-a+Math.PI)%(Math.PI*2))-Math.PI;
+  if(d<-Math.PI) d+=Math.PI*2;
+  return a+d*t;
+}
+
+function fire(tower, target){
+  const def=TOWER_TYPES[tower.type];
+  const muz=tower.head.userData.muzzle.clone();
+  tower.head.localToWorld(muz);
+  // muzzle flash
+  spawnFlash(muz, def.color);
+  // projectile
+  const mat = new THREE.MeshBasicMaterial({color:def.projColor});
+  const mesh=new THREE.Mesh(GEO.proj, mat);
+  mesh.position.copy(muz);
+  if(tower.type==='sniper') mesh.scale.set(0.7,0.7,1.6);
+  scene.add(mesh);
+  state.projectiles.push({
+    mesh, target, speed:def.projSpeed, damage:tower.damage,
+    splash:tower.splash, slow:tower.slow, slowDur:tower.slowDur,
+    color:def.color, type:tower.type, mat
+  });
+  sfx(tower.type==='sniper'?'snipe':(tower.type==='frost'?'frost':'shoot'));
+}
+
+function updateProjectiles(dt){
+  for(let i=state.projectiles.length-1;i>=0;i--){
+    const p=state.projectiles[i];
+    let done=false;
+    if(!p.target || p.target.dead){ done=true; }
+    else {
+      const tp=p.target.group.position;
+      const d=new THREE.Vector3(tp.x-p.mesh.position.x, tp.y+0.3-p.mesh.position.y, tp.z-p.mesh.position.z);
+      const dist=d.length();
+      const step=p.speed*dt;
+      if(tower_proj_hit(dist, step)){
+        applyHit(p);
+        done=true;
+      } else {
+        d.multiplyScalar(step/dist);
+        p.mesh.position.add(d);
+        if(p.type==='sniper'){
+          p.mesh.lookAt(tp.x,tp.y+0.3,tp.z);
+        }
+      }
+    }
+    if(done){
+      scene.remove(p.mesh); p.mat.dispose();
+      state.projectiles.splice(i,1);
+    }
+  }
+}
+function tower_proj_hit(dist, step){ return dist<=step+0.25; }
+
+function applyHit(p){
+  const e=p.target;
+  if(!e||e.dead) return;
+  spawnBurst(new THREE.Vector3(e.group.position.x, e.group.position.y, e.group.position.z), p.color, 6, 3.5, 0.08);
+  damageEnemy(e, p.damage);
+  if(p.slow>0 && !e.dead){
+    e.slowAmount=Math.max(e.slowAmount||0, p.slow);
+    e.slowUntil=state.time+p.slowDur;
+  }
+  if(p.splash>0){
+    for(const o of state.enemies){
+      if(o===e||o.dead) continue;
+      const dx=o.group.position.x-e.group.position.x, dz=o.group.position.z-e.group.position.z;
+      if(dx*dx+dz*dz<=p.splash*p.splash){ damageEnemy(o, p.damage*0.5); }
+    }
+    spawnBurst(new THREE.Vector3(e.group.position.x,0.4,e.group.position.z), 0xffa050, 10, 6, 0.12);
+  }
+}
+
+/* ============================ ENEMIES ================================= */
+function makeEnemyMesh(type){
+  const def=ENEMY_TYPES[type];
+  const g=new THREE.Group();
+  const model=new THREE.Group();
+  const mat=new THREE.MeshStandardMaterial({color:def.color, roughness:0.45, metalness:0.25,
+    emissive:def.color, emissiveIntensity:0.18});
+  let body;
+  const s=def.size;
+  if(def.shape==='cube'){ body=new THREE.Mesh(new THREE.BoxGeometry(s*1.4,s*1.4,s*1.4), mat); body.position.y=s*0.9; }
+  else if(def.shape==='cone'){ body=new THREE.Mesh(new THREE.ConeGeometry(s,s*1.8,6), mat); body.position.y=s*1.0; }
+  else if(def.shape==='box'){ body=new THREE.Mesh(new THREE.BoxGeometry(s*1.6,s*1.3,s*1.9), mat); body.position.y=s*0.85; }
+  else { body=new THREE.Mesh(new THREE.IcosahedronGeometry(s,0), mat); body.position.y=s*1.1; }
+  body.castShadow=true;
+  model.add(body);
+  if(type==='boss'){
+    const crown=new THREE.Mesh(new THREE.TorusGeometry(s*0.7,0.1,8,16),
+      new THREE.MeshStandardMaterial({color:def.accent, emissive:def.accent, emissiveIntensity:1.5}));
+    crown.rotation.x=Math.PI/2; crown.position.y=s*1.1; model.add(crown);
+  }
+  g.add(model);
+
+  // health bar
+  const barGroup=new THREE.Group();
+  const bg=new THREE.Mesh(GEO.bar, MAT.barBg);
+  const fgMat=new THREE.MeshBasicMaterial({color:0x62e08a});
+  const fg=new THREE.Mesh(GEO.bar, fgMat);
+  fg.position.z=0.001;
+  const bw = type==='boss'?1.8:1.0;
+  bg.scale.x=bw; fg.scale.x=bw;
+  barGroup.add(bg); barGroup.add(fg);
+  barGroup.position.y = (def.shape==='cone'? s*2.0 : s*1.9)+0.5;
+  g.add(barGroup);
+
+  return {group:g, model, body, mat, barGroup, fg, fgMat, barW:bw};
+}
+
+function spawnEnemy(type){
+  const def=ENEMY_TYPES[type];
+  const waveN=state.wave+ (state.phase==='wave'?1:0);
+  const n=Math.max(1, state.curWaveN||waveN);
+  const hpScale=1 + 0.15*(n-1) + 0.013*(n-1)*(n-1);
+  const m=makeEnemyMesh(type);
+  m.group.position.copy(pathW[0]);
+  m.group.position.y=0;
+  scene.add(m.group);
+  const maxHp=Math.round(def.hp*hpScale);
+  const e={
+    type, ...m,
+    maxHp, hp:maxHp, baseSpeed:def.speed, reward:def.reward, leak:def.leak,
+    wpIndex:1, progress:0, dead:false, slowAmount:0, slowUntil:0, bob:Math.random()*6,
+  };
+  state.enemies.push(e);
+}
+
+function updateEnemies(dt){
+  for(let i=state.enemies.length-1;i>=0;i--){
+    const e=state.enemies[i];
+    if(e.dead){ continue; }
+    let speed=e.baseSpeed;
+    let slowed=false;
+    if(e.slowUntil>state.time){ speed*=(1-e.slowAmount); slowed=true; }
+    else { e.slowAmount=0; }
+
+    // move toward current waypoint
+    let remaining=speed*dt;
+    while(remaining>0 && e.wpIndex<pathW.length){
+      const tgt=pathW[e.wpIndex];
+      const pos=e.group.position;
+      const dx=tgt.x-pos.x, dz=tgt.z-pos.z;
+      const segDist=Math.hypot(dx,dz);
+      if(segDist<=remaining){
+        pos.x=tgt.x; pos.z=tgt.z;
+        remaining-=segDist;
+        e.wpIndex++;
+        e.progress=e.wpIndex;
+      } else {
+        pos.x+=dx/segDist*remaining;
+        pos.z+=dz/segDist*remaining;
+        e.progress=e.wpIndex + (1 - segDist/ (segDist+remaining));
+        // face direction
+        e.model.rotation.y=Math.atan2(dx,dz);
+        remaining=0;
+      }
+    }
+    if(e.wpIndex>=pathW.length){
+      leakEnemy(e); state.enemies.splice(i,1); continue;
+    }
+    // bob + slow tint
+    e.bob+=dt*6;
+    const by = e.type==='fast'? Math.abs(Math.sin(e.bob))*0.18 : Math.sin(e.bob)*0.06;
+    e.model.position.y=by;
+    e.model.rotation.x = (e.type==='cube'||e.type==='ico')?0:e.model.rotation.x;
+    if(e.type==='boss') e.model.rotation.y+=dt*0.4;
+    // slow visual tint
+    const targetEmissive = slowed?0.9:0.18;
+    e.mat.emissiveIntensity += (targetEmissive-e.mat.emissiveIntensity)*Math.min(1,dt*8);
+    if(slowed){ e.mat.emissive.setHex(0x6fd2ff); } else { e.mat.emissive.setHex(ENEMY_TYPES[e.type].color); }
+  }
+}
+
+function damageEnemy(e, dmg){
+  if(e.dead) return;
+  e.hp-=dmg;
+  if(e.hp<=0){ killEnemy(e); }
+}
+
+function killEnemy(e){
+  if(e.dead) return;
+  e.dead=true;
+  state.gold+=e.reward;
+  state.score+=e.reward + (e.type==='boss'?500:0);
+  spawnBurst(new THREE.Vector3(e.group.position.x, e.group.position.y+0.4, e.group.position.z),
+    ENEMY_TYPES[e.type].color, e.type==='boss'?28:12, e.type==='boss'?8:5, e.type==='boss'?0.2:0.12);
+  sfx(e.type==='boss'?'bosskill':'kill');
+  cleanupEnemy(e);
+  const idx=state.enemies.indexOf(e); if(idx>=0) state.enemies.splice(idx,1);
+  refreshHUD(); refreshShopAffordability();
+}
+
+function leakEnemy(e){
+  state.lives-=e.leak;
+  spawnBurst(new THREE.Vector3(basePos.x,1.2,basePos.z), 0xff4060, 16, 6, 0.18);
+  flashBase();
+  sfx('leak');
+  cleanupEnemy(e);
+  refreshHUD();
+  if(state.lives<=0){ state.lives=0; refreshHUD(); endGame(false); }
+}
+
+function cleanupEnemy(e){
+  scene.remove(e.group);
+  e.mat.dispose(); e.fgMat.dispose();
+}
+
+/* ============================ EFFECTS ================================= */
+function spawnBurst(pos, color, count, speed, size){
+  const mat=new THREE.MeshBasicMaterial({color, transparent:true, opacity:1});
+  const group=new THREE.Group();
+  const parts=[];
+  for(let i=0;i<count;i++){
+    const m=new THREE.Mesh(GEO.spark, mat);
+    m.scale.setScalar(size/0.09);
+    m.position.copy(pos);
+    const a=Math.random()*Math.PI*2, el=Math.random()*0.9+0.1;
+    parts.push({m, v:new THREE.Vector3(Math.cos(a)*Math.cos(el),Math.sin(el)*1.2,Math.sin(a)*Math.cos(el)).multiplyScalar(speed*(0.5+Math.random()*0.7))});
+    group.add(m);
+  }
+  scene.add(group);
+  let life=0; const dur=0.55;
+  state.effects.push({update:(dt)=>{
+    life+=dt;
+    for(const p of parts){
+      p.v.y-=14*dt;
+      p.m.position.addScaledVector(p.v, dt);
+    }
+    mat.opacity=Math.max(0,1-life/dur);
+    const sc=Math.max(0.01,1-life/dur);
+    for(const p of parts) p.m.scale.setScalar((size/0.09)*sc);
+    if(life>=dur){ scene.remove(group); mat.dispose(); return false; }
+    return true;
+  }});
+}
+
+function spawnFlash(pos, color){
+  const light=new THREE.PointLight(color, 6, 5, 2);
+  light.position.copy(pos);
+  scene.add(light);
+  const mat=new THREE.MeshBasicMaterial({color, transparent:true, opacity:0.9});
+  const flash=new THREE.Mesh(GEO.spark, mat);
+  flash.position.copy(pos); flash.scale.setScalar(3);
+  scene.add(flash);
+  let life=0; const dur=0.12;
+  state.effects.push({update:(dt)=>{
+    life+=dt;
+    light.intensity=6*(1-life/dur);
+    mat.opacity=0.9*(1-life/dur);
+    if(life>=dur){ scene.remove(light); scene.remove(flash); mat.dispose(); return false; }
+    return true;
+  }});
+}
+
+let baseFlashT=0;
+function flashBase(){ baseFlashT=0.4; }
+
+function updateEffects(dt){
+  for(let i=state.effects.length-1;i>=0;i--){
+    if(!state.effects[i].update(dt)) state.effects.splice(i,1);
+  }
+  // ambient animations
+  if(baseCore){ baseCore.rotation.y+=dt*0.8; baseCore.position.y=1.5+Math.sin(state.time*2)*0.08; }
+  if(portalRing){ portalRing.rotation.z+=dt*1.5; }
+  if(baseFlashT>0){
+    baseFlashT-=dt;
+    const k=Math.max(0,baseFlashT/0.4);
+    if(baseCore) baseCore.material.emissive.setHex(baseFlashT>0?0xff3050:0x39c6ff);
+    if(baseFlashT<=0 && baseCore) baseCore.material.emissive.setHex(0x39c6ff);
+  }
+}
+
+function updateBars(){
+  for(const e of state.enemies){
+    if(e.dead) continue;
+    e.barGroup.quaternion.copy(camera.quaternion);
+    const frac=Math.max(0,e.hp/e.maxHp);
+    e.fg.scale.x=e.barW*frac;
+    e.fg.position.x=-(e.barW*(1-frac))/2;
+    const c=frac>0.5?0x62e08a:(frac>0.25?0xffd24a:0xff5a6a);
+    e.fgMat.color.setHex(c);
+  }
+}
+
+/* ============================ WAVES =================================== */
+function generateWave(n){
+  const q=[]; let t=0;
+  const add=(type,count,gap)=>{ for(let i=0;i<count;i++){ q.push({type,t}); t+=gap; } };
+  add('grunt', 6+Math.floor(n*1.4), Math.max(0.45, 0.95-0.02*n));
+  if(n>=2){ t+=0.8; add('fast', 3+Math.floor(n*0.8), Math.max(0.28,0.6-0.015*n)); }
+  if(n>=4 && n%2===0){ t+=1.0; add('tank', 1+Math.floor(n/4), 1.4); }
+  if(n>=3){ t+=0.6; add('grunt', 4+Math.floor(n*0.6), 0.5); }
+  if(n%5===0){ t+=1.4; add('boss', 1+Math.floor(n/20), 2.0); }
+  q.sort((a,b)=>a.t-b.t);
+  return q;
+}
+
+function startWave(){
+  if(state.phase!=='build') return;
+  const n=state.wave+1;
+  state.curWaveN=n;
+  state.spawnQueue=generateWave(n);
+  state.waveTotal=state.spawnQueue.length;
+  state.waveTime=0;
+  state.phase='wave';
+  sfx('wavestart');
+  toast('Wave '+n+' incoming!');
+  updateStartButton();
+}
+
+function updateSpawns(dt){
+  state.waveTime+=dt;
+  while(state.spawnQueue.length && state.spawnQueue[0].t<=state.waveTime){
+    spawnEnemy(state.spawnQueue.shift().type);
+  }
+  // wave complete?
+  if(state.spawnQueue.length===0 && state.enemies.length===0){
+    onWaveComplete();
+  }
+}
+
+function onWaveComplete(){
+  state.wave++;
+  state.phase='build';
+  if(state.wave>=MAX_WAVES && !state.endless){ endGame(true); return; }
+  const interest=Math.floor(state.gold*0.1);
+  const bonus=15+state.wave*3;
+  state.gold+=interest+bonus;
+  state.score+=100*state.wave;
+  toast('Wave cleared!  +'+(interest+bonus)+' 🪙');
+  sfx('waveclear');
+  refreshHUD(); refreshShopAffordability(); updateStartButton();
+}
+
+/* ============================ INPUT =================================== */
+let pointer={x:0,y:0}, leftDownPos=null, rotating=false, lastRot={x:0,y:0}, dragged=false;
+
+function bindEvents(){
+  window.addEventListener('resize', onResize);
+  const dom=renderer.domElement;
+  dom.addEventListener('contextmenu', e=>e.preventDefault());
+  dom.addEventListener('pointermove', onPointerMove);
+  dom.addEventListener('pointerdown', onPointerDown);
+  window.addEventListener('pointerup', onPointerUp);
+  dom.addEventListener('wheel', onWheel, {passive:false});
+  window.addEventListener('keydown', onKey);
+
+  // UI
+  $('btnPlay').onclick=()=>{ startGameFromIntro(); };
+  $('btnStart').onclick=()=>{ startWave(); };
+  $('btnSpeed').onclick=()=>{ toggleSpeed(); };
+  $('btnPause').onclick=()=>{ togglePause(); };
+  $('btnMute').onclick=()=>{ toggleMute(); };
+  $('btnRestart').onclick=()=>{ restart(); };
+  $('btnUpg').onclick=()=>{ if(state.selectedTower) upgradeTower(state.selectedTower); };
+  $('btnSell').onclick=()=>{ if(state.selectedTower) sellTower(state.selectedTower); };
+}
+
+function setNDC(ev){
+  ndc.x=(ev.clientX/window.innerWidth)*2-1;
+  ndc.y=-(ev.clientY/window.innerHeight)*2+1;
+}
+
+function onPointerMove(ev){
+  setNDC(ev);
+  if(rotating){
+    const dx=ev.clientX-lastRot.x, dy=ev.clientY-lastRot.y;
+    cam.theta-=dx*0.005; cam.phi-=dy*0.005;
+    lastRot.x=ev.clientX; lastRot.y=ev.clientY;
+    applyCamera();
+  }
+  if(leftDownPos){
+    if(Math.hypot(ev.clientX-leftDownPos.x, ev.clientY-leftDownPos.y)>6) dragged=true;
+  }
+  updateHover();
+}
+
+function onPointerDown(ev){
+  setNDC(ev);
+  if(ev.button===2 || ev.button===1){
+    rotating=true; lastRot.x=ev.clientX; lastRot.y=ev.clientY;
+  } else if(ev.button===0){
+    leftDownPos={x:ev.clientX,y:ev.clientY}; dragged=false;
+  }
+}
+
+function onPointerUp(ev){
+  if(ev.button===2||ev.button===1){ rotating=false; }
+  if(ev.button===0 && leftDownPos){
+    if(!dragged) handleClick();
+    leftDownPos=null;
+  }
+}
+
+function onWheel(ev){
+  ev.preventDefault();
+  cam.radius+=ev.deltaY*0.02;
+  applyCamera();
+}
+
+function onKey(ev){
+  if(ev.key==='Escape'){ cancelBuild(); deselectTower(); }
+  else if(ev.key==='1'){ selectShop('cannon'); }
+  else if(ev.key==='2'){ selectShop('frost'); }
+  else if(ev.key==='3'){ selectShop('sniper'); }
+  else if(ev.key===' '){ ev.preventDefault(); if(state.phase==='build') startWave(); else togglePause(); }
+  else if(ev.key.toLowerCase()==='p'){ togglePause(); }
+}
+
+/* picking */
+function pickTile(){
+  raycaster.setFromCamera(ndc, camera);
+  const meshes=[...tilesByMesh.keys()].map(()=>null); // placeholder not used
+  const arr=[]; tilesByMesh.forEach((tile)=>arr.push(tile.mesh));
+  const hits=raycaster.intersectObjects(arr, false);
+  if(hits.length) return tilesByMesh.get(hits[0].object.id);
+  return null;
+}
+function pickTower(){
+  raycaster.setFromCamera(ndc, camera);
+  const arr=state.towers.map(t=>t.group);
+  const hits=raycaster.intersectObjects(arr, true);
+  if(hits.length){
+    let o=hits[0].object;
+    while(o){ if(o.userData && o.userData.tower) return o.userData.tower; o=o.parent; }
+  }
+  return null;
+}
+
+function updateHover(){
+  if(state.phase==='intro') return;
+  if(state.selectedShop){
+    const tile=pickTile();
+    // clear previous
+    if(state.hoverTile && state.hoverTile!==tile){ resetTileColor(state.hoverTile); }
+    state.hoverTile=tile;
+    if(tile){
+      const def=TOWER_TYPES[state.selectedShop];
+      const ok = !tile.occupied && state.gold>=def.cost;
+      tile.mat.emissive=tile.mat.emissive||new THREE.Color();
+      tile.mat.color.copy(tile.baseColor).lerp(new THREE.Color(ok?0x49ff88:0xff4d5e), 0.55);
+      showGhost(tile, ok);
+      showRange(tile.world, def.range, ok);
+    } else {
+      hideGhost(); if(!state.selectedTower) hideRange();
+    }
+  }
+}
+function resetTileColor(tile){ if(tile&&tile.mat) tile.mat.color.copy(tile.baseColor); }
+
+function handleClick(){
+  if(state.phase==='intro'||state.phase==='gameover'||state.phase==='victory') return;
+  if(state.selectedShop){
+    const tile=pickTile();
+    if(tile && !tile.occupied){
+      const ok=placeTower(state.selectedShop, tile);
+      if(ok){
+        resetTileColor(tile);
+        if(state.gold < TOWER_TYPES[state.selectedShop].cost){ cancelBuild(); }
+        else updateHover();
+      }
+    } else {
+      // clicked invalid -> keep build mode, small feedback
+      sfx('error');
+    }
+    return;
+  }
+  // selection mode
+  const tower=pickTower();
+  if(tower){ selectTower(tower); }
+  else { deselectTower(); }
+}
+
+/* ============================ BUILD MODE ============================== */
+function selectShop(type){
+  if(state.phase==='intro') return;
+  deselectTower();
+  if(state.selectedShop===type){ cancelBuild(); return; }
+  state.selectedShop=type;
+  buildGhostMesh(type);
+  $('buildHint').style.display='block';
+  document.querySelectorAll('.tower-btn').forEach(b=>b.classList.toggle('selected', b.dataset.type===type));
+}
+function cancelBuild(){
+  state.selectedShop=null;
+  hideGhost(); hideRange();
+  if(state.hoverTile){ resetTileColor(state.hoverTile); state.hoverTile=null; }
+  $('buildHint').style.display='none';
+  document.querySelectorAll('.tower-btn').forEach(b=>b.classList.remove('selected'));
+}
+function buildGhostMesh(type){
+  if(state.ghost){ scene.remove(state.ghost.group); }
+  const g=makeTowerMesh(type);
+  g.group.traverse(o=>{ if(o.material){ o.material=o.material.clone(); o.material.transparent=true; o.material.opacity=0.5; o.castShadow=false; }});
+  g.group.visible=false;
+  scene.add(g.group);
+  state.ghost=g;
+}
+function showGhost(tile, ok){
+  if(!state.ghost) return;
+  state.ghost.group.visible=true;
+  state.ghost.group.position.set(tile.world.x,0,tile.world.z);
+  state.ghost.group.traverse(o=>{ if(o.material){ o.material.opacity= ok?0.55:0.3; }});
+}
+function hideGhost(){ if(state.ghost) state.ghost.group.visible=false; }
+
+/* ============================ SELECTION ============================== */
+function selectTower(tower){
+  cancelBuild();
+  state.selectedTower=tower;
+  showRange(tower.pos, tower.range, true);
+  showSelPanel(tower);
+  sfx('select');
+}
+function deselectTower(){
+  state.selectedTower=null;
+  $('selPanel').style.display='none';
+  if(!state.selectedShop) hideRange();
+}
+function showSelPanel(tower){
+  const def=TOWER_TYPES[tower.type];
+  $('selPanel').style.display='block';
+  $('selSwatch').style.background='#'+def.color.toString(16).padStart(6,'0');
+  $('selName').textContent=def.name;
+  $('selLvl').textContent='Level '+(tower.level+1)+' / 3';
+  $('selDmg').textContent=tower.damage + (tower.splash?'  (splash)':'');
+  $('selRange').textContent=tower.range.toFixed(1);
+  $('selRate').textContent=(1/tower.cooldown).toFixed(2)+'/s';
+  $('selDps').textContent=Math.round(tower.damage/tower.cooldown);
+  if(tower.type==='frost'){
+    $('selSpecialLine').style.display='flex';
+    $('selSpecialK').textContent='Slow';
+    $('selSpecialV').textContent=Math.round(tower.slow*100)+'% / '+tower.slowDur+'s';
+  } else if(tower.splash){
+    $('selSpecialLine').style.display='flex';
+    $('selSpecialK').textContent='Splash radius';
+    $('selSpecialV').textContent=tower.splash.toFixed(1);
+  } else { $('selSpecialLine').style.display='none'; }
+
+  const upg=$('btnUpg');
+  if(tower.level>=2){ upg.textContent='Max Level'; upg.classList.add('ghosted'); }
+  else {
+    const cost=def.upgrades[tower.level];
+    upg.textContent='Upgrade ('+cost+' 🪙)';
+    upg.classList.toggle('ghosted', state.gold<cost);
+  }
+  $('btnSell').textContent='Sell ('+Math.floor(tower.invested*0.7)+' 🪙)';
+}
+
+/* ============================ HUD ==================================== */
+function buildShopUI(){
+  const shop=$('towerShop');
+  shop.innerHTML='';
+  for(const [type,def] of Object.entries(TOWER_TYPES)){
+    const el=document.createElement('div');
+    el.className='tower-btn'; el.dataset.type=type;
+    el.innerHTML=`<kbd>${def.key}</kbd>
+      <div class="swatch" style="background:#${def.color.toString(16).padStart(6,'0')}"></div>
+      <div class="tname">${def.name}</div>
+      <div class="tcost">${def.cost} 🪙</div>
+      <div class="tdesc">${def.desc}</div>`;
+    el.onclick=()=>selectShop(type);
+    shop.appendChild(el);
+  }
+}
+function refreshShopAffordability(){
+  document.querySelectorAll('.tower-btn').forEach(b=>{
+    const def=TOWER_TYPES[b.dataset.type];
+    b.classList.toggle('cant', state.gold<def.cost);
+  });
+  if(state.selectedTower) showSelPanel(state.selectedTower);
+}
+function refreshHUD(){
+  $('lives').textContent=state.lives;
+  $('gold').textContent=state.gold;
+  $('score').textContent=state.score;
+  $('wave').textContent=state.wave;
+  const total=state.waveTotal||1;
+  const spawned=total-state.spawnQueue.length;
+  const frac = state.phase==='wave' ? (spawned - state.enemies.length)/total : (state.wave/MAX_WAVES);
+  $('waveBar').style.width=Math.max(0,Math.min(1,frac))*100+'%';
+}
+function updateStartButton(){
+  const b=$('btnStart');
+  if(state.phase==='wave'){ b.classList.add('ghosted'); b.textContent='Wave '+ (state.wave+1) +' in progress…'; }
+  else if(state.wave>=MAX_WAVES && !state.endless){ b.classList.add('ghosted'); b.textContent='Complete!'; }
+  else { b.classList.remove('ghosted'); b.textContent='▶ Start Wave '+(state.wave+1); }
+}
+
+let toastT=null;
+function toast(msg){
+  const el=$('toast'); el.textContent=msg; el.classList.add('show');
+  clearTimeout(toastT); toastT=setTimeout(()=>el.classList.remove('show'),1800);
+}
+
+/* ============================ CONTROLS =============================== */
+function toggleSpeed(){
+  state.gameSpeed = state.gameSpeed===1?2:1;
+  $('btnSpeed').textContent=state.gameSpeed+'×';
+  $('btnSpeed').classList.toggle('on', state.gameSpeed===2);
+}
+function togglePause(){
+  if(state.phase==='intro'||state.phase==='gameover'||state.phase==='victory') return;
+  state.paused=!state.paused;
+  $('btnPause').textContent=state.paused?'▶':'⏸';
+  $('btnPause').classList.toggle('on', state.paused);
+}
+function toggleMute(){
+  state.muted=!state.muted;
+  $('btnMute').textContent=state.muted?'🔇':'🔊';
+}
+
+/* ============================ SOUND ================================== */
+let actx=null;
+function initAudio(){ try{ actx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+function tone(freq, dur, type='sine', gain=0.12, slideTo=null){
+  if(!actx||state.muted) return;
+  const t0=actx.currentTime;
+  const osc=actx.createOscillator(), g=actx.createGain();
+  osc.type=type; osc.frequency.setValueAtTime(freq, t0);
+  if(slideTo) osc.frequency.exponentialRampToValueAtTime(Math.max(1,slideTo), t0+dur);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(gain, t0+0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
+  osc.connect(g); g.connect(actx.destination);
+  osc.start(t0); osc.stop(t0+dur+0.02);
+}
+function sfx(kind){
+  if(!actx||state.muted) return;
+  switch(kind){
+    case 'shoot': tone(440,0.08,'square',0.07,260); break;
+    case 'snipe': tone(900,0.12,'sawtooth',0.08,180); break;
+    case 'frost': tone(680,0.12,'sine',0.06,920); break;
+    case 'kill':  tone(320,0.12,'triangle',0.09,120); break;
+    case 'bosskill': tone(160,0.4,'sawtooth',0.12,60); tone(400,0.4,'square',0.06,80); break;
+    case 'place': tone(330,0.07,'sine',0.1,520); setTimeout(()=>tone(520,0.08,'sine',0.1,660),60); break;
+    case 'upgrade': tone(520,0.08,'sine',0.1); setTimeout(()=>tone(780,0.12,'sine',0.1),70); break;
+    case 'sell': tone(600,0.08,'sine',0.08,300); break;
+    case 'error': tone(140,0.14,'square',0.08,90); break;
+    case 'select': tone(700,0.04,'sine',0.05); break;
+    case 'wavestart': tone(300,0.15,'sawtooth',0.09,600); break;
+    case 'waveclear': tone(523,0.1,'sine',0.1); setTimeout(()=>tone(659,0.1,'sine',0.1),90); setTimeout(()=>tone(784,0.18,'sine',0.1),180); break;
+    case 'leak': tone(200,0.2,'sawtooth',0.1,80); break;
+    case 'win': [523,659,784,1046].forEach((f,i)=>setTimeout(()=>tone(f,0.25,'sine',0.1),i*140)); break;
+    case 'lose': [400,330,260,180].forEach((f,i)=>setTimeout(()=>tone(f,0.3,'sawtooth',0.1),i*160)); break;
+  }
+}
+
+/* ============================ GAME FLOW ============================== */
+function startGameFromIntro(){
+  initAudio();
+  if(actx && actx.state==='suspended') actx.resume();
+  $('overlay').classList.add('hide');
+  state.phase='build';
+  updateStartButton();
+  toast('Build your defenses, then start the wave!');
+}
+
+function endGame(won){
+  state.phase = won?'victory':'gameover';
+  sfx(won?'win':'lose');
+  const ov=$('overlay'), card=$('overlayCard');
+  ov.classList.remove('hide');
+  $('ovHow').classList.add('hide');
+  $('ovEndStats').classList.remove('hide');
+  $('ovScore').textContent=state.score;
+  $('ovWave').textContent=state.wave;
+  $('ovTitle').textContent = won?'Victory! 🏆':'Core Destroyed';
+  $('ovSub').textContent = won? 'You survived all '+MAX_WAVES+' waves.' : 'The prisms overran your core.';
+  const btn=$('btnPlay');
+  if(won){
+    btn.textContent='Play Again ↺';
+    btn.onclick=()=>restart();
+    // offer endless
+    let cont=$('btnCont');
+    if(!cont){ cont=document.createElement('div'); cont.id='btnCont'; cont.className='btn big'; cont.style.marginLeft='10px'; cont.style.display='inline-flex';
+      btn.parentNode.appendChild(cont); }
+    cont.textContent='Continue (Endless) ∞';
+    cont.style.display='inline-flex';
+    cont.onclick=()=>{ state.endless=true; state.phase='build'; ov.classList.add('hide'); updateStartButton(); toast('Endless mode! Keep surviving.'); };
+  } else {
+    btn.textContent='Try Again ↺';
+    btn.onclick=()=>restart();
+    const cont=$('btnCont'); if(cont) cont.style.display='none';
+  }
+}
+
+function restart(){
+  // clear dynamic objects
+  state.enemies.forEach(e=>cleanupEnemy(e));
+  state.towers.forEach(t=>scene.remove(t.group));
+  state.projectiles.forEach(p=>{ scene.remove(p.mesh); p.mat.dispose(); });
+  state.effects.length=0;
+  tilesByMesh.forEach(t=>{ t.occupied=false; resetTileColor(t); });
+  state.enemies=[]; state.towers=[]; state.projectiles=[];
+  state.gold=START_GOLD; state.lives=START_LIVES; state.score=0; state.wave=0;
+  state.spawnQueue=[]; state.waveTotal=0; state.waveTime=0; state.time=0;
+  state.endless=false; state.paused=false; state.gameSpeed=1;
+  $('btnPause').textContent='⏸'; $('btnPause').classList.remove('on');
+  $('btnSpeed').textContent='1×'; $('btnSpeed').classList.remove('on');
+  cancelBuild(); deselectTower();
+  const cont=$('btnCont'); if(cont) cont.style.display='none';
+  $('overlay').classList.add('hide');
+  state.phase='build';
+  refreshHUD(); refreshShopAffordability(); updateStartButton();
+  toast('New game — good luck!');
+}
+
+/* ============================ MAIN LOOP ============================== */
+function animate(){
+  let dt=clock.getDelta();
+  dt=Math.min(dt, 0.05);
+  const sdt = (state.paused||state.phase==='intro'||state.phase==='gameover'||state.phase==='victory') ? 0 : dt*state.gameSpeed;
+
+  if(sdt>0){
+    state.time+=sdt;
+    if(state.phase==='wave') updateSpawns(sdt);
+    updateEnemies(sdt);
+    updateTowers(sdt);
+    updateProjectiles(sdt);
+    refreshHUD();
+  }
+  updateEffects(dt);
+  updateBars();
+  renderer.render(scene, camera);
+}
+
+function onResize(){
+  camera.aspect=window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+/* ===================== DEBUG API (optional) ========================== */
+/* A small handle for tinkering from the console — e.g. PD.state.gold = 999,
+   PD.simulate(15) to fast-forward the sim, PD.placeAt('sniper',4,3).        */
+window.PD = {
+  get state(){ return state; },
+  startWave, placeTower,
+  cellToWorld,
+  placeAt(type, col, row){
+    let tile=null; tilesByMesh.forEach(t=>{ if(t.col===col && t.row===row) tile=t; });
+    return tile ? placeTower(type, tile) : false;
+  },
+  // step the simulation deterministically without relying on requestAnimationFrame
+  simulate(seconds, dt=1/60){
+    for(let acc=0; acc<seconds; acc+=dt){
+      state.time+=dt;
+      if(state.phase==='wave') updateSpawns(dt);
+      updateEnemies(dt);
+      updateTowers(dt);
+      updateProjectiles(dt);
+      updateEffects(dt);
+    }
+    updateBars(); refreshHUD();
+    return {gold:state.gold, score:state.score, lives:state.lives,
+            enemies:state.enemies.length, projectiles:state.projectiles.length, phase:state.phase};
+  }
+};
+
+/* ============================ BOOT =================================== */
+try{
+  init();
+}catch(err){
+  console.error(err);
+  $('loadErr').style.display='flex';
+}
+</script>
+
+<script>
+  // CDN / import failure fallback
+  setTimeout(function(){
+    if(!window.__gameBooted){
+      document.getElementById('loadErr').style.display='flex';
+    }
+  }, 6000);
+</script>
+</body>
+</html>

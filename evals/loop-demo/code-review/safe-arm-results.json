@@ -1,0 +1,1416 @@
+{
+  "arm": "safe-swarm",
+  "reviews": [
+    {
+      "file": "lib/adapters/adapters.js",
+      "purpose": "Maps adapter names (http/xhr/fetch) to implementations and resolves the first usable adapter for a request from a config-supplied list.",
+      "findings": [
+        {
+          "severity": "medium",
+          "issue": "Asymmetric prototype-pollution hardening. The comment (lines 28-29) explains that the `name` descriptor uses `__proto__: null` so a polluted `Object.prototype.get` cannot reinterpret the data descriptor as an accessor descriptor, and that defineProperty call is also wrapped in try/catch (lines 27-33). But the very next `adapterName` defineProperty (line 34) is NOT null-proto AND is OUTSIDE the try/catch. If `Object.prototype.get` is polluted, line 34 throws an uncaught error during module initialization, breaking axios entirely \u2014 defeating the protection the author clearly intended.",
+          "line": "30-34",
+          "suggestion": "Give line 34 the same treatment: `Object.defineProperty(fn, 'adapterName', { __proto__: null, value });` and move it inside the same try/catch block as the `name` definition."
+        },
+        {
+          "severity": "low",
+          "issue": "The 'Unknown adapter' error (line 84) is constructed without an AxiosError error code, unlike the no-suitable-adapter error which passes AxiosError.ERR_NOT_SUPPORT (line 110). Consumers catching this cannot programmatically distinguish a typo'd adapter name from other failures via `error.code`.",
+          "line": "84",
+          "suggestion": "Pass a code, e.g. `new AxiosError(\\`Unknown adapter '${id}'\\`, AxiosError.ERR_NOT_SUPPORT)` for consistency with the other throw site."
+        },
+        {
+          "severity": "low",
+          "issue": "Misleading rejection text for null/undefined/placeholder adapters. The error message branches only on `state === false` -> 'is not supported by the environment', else 'is not available in the build' (line 99). When a resolved handle of `null` is supplied (a legitimate placeholder), or `adapter.get(config)` returns a non-false falsy value, the message incorrectly claims the adapter 'is not available in the build', which can mislead debugging.",
+          "line": "96-100",
+          "suggestion": "Differentiate null/undefined from explicit `false` when rendering reasons, or document that `null` entries are silently skipped."
+        },
+        {
+          "severity": "info",
+          "issue": "Resolution overall is correct and defensive: case-insensitive name lookup, in-order fallback, accumulation of rejection reasons, and clear final error. No resource leaks, no unsanitized input reaching dangerous sinks, and `id`/`#i` keying of rejectedReasons behaves correctly across resolved-handle vs named-adapter paths.",
+          "line": "65-115",
+          "suggestion": "No action required; the medium and low items above are the only refinements."
+        }
+      ]
+    },
+    {
+      "file": "lib/adapters/fetch.js",
+      "purpose": "Fetch-based axios transport adapter: builds a Request from axios config, enforces auth/maxContentLength/maxBodyLength limits, streams upload/download progress, and normalizes errors/cancellation.",
+      "findings": [
+        {
+          "severity": "medium",
+          "issue": "Stream-response path can leak the composed-signal subscription (timeout timer + abort listeners). When responseType is 'stream'/'response' (isStreamResponse true) but response.body is falsy/empty, the wrapping block at 458-462 is skipped, so unsubscribe is never registered on a flush callback. Then line 538 (`!isStreamResponse && unsubscribe && unsubscribe()`) does NOT fire because isStreamResponse is true. The success path therefore returns without ever calling unsubscribe, leaving the composeSignals timeout/abort listeners (and any setTimeout) dangling.",
+          "line": "458-462, 538",
+          "suggestion": "Ensure unsubscribe runs for stream responses that are never wrapped, e.g. call unsubscribe in a finally-style guard when response.body is absent, or unconditionally clean up when no flush wrapper was installed."
+        },
+        {
+          "severity": "medium",
+          "issue": "maxBodyLength enforcement for spec-compliant FormData fully materializes the body before the limit is checked. getBodyLength() builds `new Request(platform.origin,{body}).arrayBuffer()` (168-173) and that buffer is realized at line 313 BEFORE the `outboundLength > maxBodyLength` comparison at 316. A body far larger than maxBodyLength is buffered into memory (doubling resident memory for blob-backed forms) before being rejected, partially defeating the protective intent of the limit and creating an OOM/DoS vector for oversized forms.",
+          "line": "168-173, 312-318",
+          "suggestion": "For FormData, prefer a streaming/per-chunk size count (as already done for ReadableStream bodies via trackRequestStream) instead of buffering the whole body to measure it, or cap measurement at maxBodyLength+1."
+        },
+        {
+          "severity": "low",
+          "issue": "maybeWithAuthCredentials over-matches: it returns true whenever the part after '://' contains ':' (line 65), which is true for essentially every URL with a port (http://host:8080) or a colon in the path/query. This forces an unnecessary `new URL(url, platform.origin)` parse and href round-trip for the common case. It is not a correctness bug (username/password come back empty so auth stays undefined and url is not reassigned), but the guard fails its purpose of avoiding needless URL re-parsing/normalization.",
+          "line": "59-66",
+          "suggestion": "Tighten the heuristic to only short-circuit on a userinfo '@' before the first '/', '?', or '#' (authority component), not a bare ':' anywhere."
+        },
+        {
+          "severity": "low",
+          "issue": "Legacy maxContentLength byte-size fallback miscounts multibyte strings when TextEncoder is unavailable: it uses responseData.length (UTF-16 code units) instead of UTF-8 byte length (line 525). For multibyte content this under- or over-counts versus the actual byte size, so the limit can be enforced inaccurately in environments lacking both ReadableStream and TextEncoder.",
+          "line": "521-526",
+          "suggestion": "Document this as a best-effort approximation, or compute UTF-8 byte length manually (e.g. via encodeURIComponent length math) when TextEncoder is missing."
+        },
+        {
+          "severity": "low",
+          "issue": "seedCache is a module-level Map keyed by the env's Request/Response/fetch function references (616-639) holding strong references. Callers that pass distinct/per-call env function objects (e.g. wrapped or polyfilled fetch implementations) accumulate permanent entries plus their compiled factory closures, with no eviction \u2014 a slow memory growth/leak in long-lived processes that vary the env.",
+          "line": "616-639",
+          "suggestion": "Consider a WeakMap keyed on the function objects (so unused fetch/Request/Response can be GC'd), or bound the cache size."
+        },
+        {
+          "severity": "info",
+          "issue": "Overall the adapter is well-hardened: identity-based capture of pendingBodyError/cancellation reason avoids prototype-pollution reads and cross-runtime error mis-attribution, body-size limits use actual (not caller-declared) lengths, and Basic-auth UTF-8 encoding via encodeUTF8+btoa is correct. Remaining items above are edge-case/resource-cleanup refinements rather than primary correctness defects.",
+          "line": "n/a",
+          "suggestion": "No action required for the core happy paths; address the medium items if stream responses with empty bodies or large FormData uploads are in scope."
+        }
+      ]
+    },
+    {
+      "file": "lib/adapters/http.js",
+      "purpose": "Node.js HTTP/HTTPS/HTTP2 request adapter for axios: builds request options, handles proxies/tunneling, redirects, auth, compression, body/response streaming, timeouts, cancellation, and limits.",
+      "findings": [
+        {
+          "severity": "medium",
+          "issue": "On a redirect, setProxy() only strips the installed CONNECT-tunneling agent from options.agent (lines 286-288), but the same tunneling agent was also written to options.agents.https (lines 373-375), and that is the field follow-redirects actually consumes (it ignores options.agent). If a redirect lands on a target that should NOT be proxied (env/config proxy resolves to none for the new host), options.agents.https still references the stale tunneling agent, so the post-redirect HTTPS request is sent through a proxy tunnel that no longer applies.",
+          "line": "286-288, 373-375",
+          "suggestion": "In the isRedirect branch, also clear options.agents && options.agents.https/http when the bound agent carries the kAxiosInstalledTunnel marker, mirroring the options.agent reset, so a non-proxied redirect target gets a fresh agent."
+        },
+        {
+          "severity": "low",
+          "issue": "HTTP/2 request headers are forwarded with their original (normalized, mixed-case) names: forEach copies header names verbatim into http2Headers (lines 490-492). HTTP/2 forbids uppercase header field names; depending on Node version, ClientHttp2Session.request can throw on a non-lowercase name (e.g. 'Content-Type'), breaking the httpVersion:2 path for otherwise-valid requests.",
+          "line": "490-492",
+          "suggestion": "Lowercase header names before assigning into http2Headers (e.g. http2Headers[name.toLowerCase()] = header) to comply with the HTTP/2 header-name requirement."
+        },
+        {
+          "severity": "low",
+          "issue": "resolveFamily infers IP family purely from the presence of a dot: family = family || (address.indexOf('.') < 0 ? 6 : 4) (line 461). An IPv4-mapped IPv6 literal such as '::ffff:1.2.3.4' contains a '.', so it is misclassified as family 4, which can cause connection failures when a custom lookup returns such addresses without an explicit family.",
+          "line": "461",
+          "suggestion": "Detect ':' to mark family 6 first (address.includes(':') ? 6 : 4), or rely on a proper IP-version check rather than dot presence."
+        },
+        {
+          "severity": "low",
+          "issue": "The custom-lookup wrapper dereferences addresses[0].address / addresses[0].family unconditionally (line 574). If a user-supplied lookup invokes its callback with an empty array (no error), addresses is [] and addresses[0] is undefined, throwing a TypeError inside the DNS callback instead of surfacing a clean request error.",
+          "line": "570-574",
+          "suggestion": "Guard for an empty addresses array and call cb with an Error (e.g. ENOTFOUND-style) instead of indexing addresses[0] blindly."
+        },
+        {
+          "severity": "low",
+          "issue": "method is read and uppercased in one step: const method = own('method').toUpperCase() (line 539). If config.method is null/undefined (a caller using the adapter directly, or a polluted-prototype-stripped config), this throws a raw TypeError before any AxiosError wrapping, producing a confusing failure.",
+          "line": "539",
+          "suggestion": "Default safely, e.g. const method = String(own('method') || 'get').toUpperCase(), or validate and reject with AxiosError.ERR_BAD_OPTION_VALUE."
+        },
+        {
+          "severity": "info",
+          "issue": "http2Sessions is a module-level singleton (line 201) shared across every request and every axios instance in the process, keyed by authority + http2Options. Sessions are reused/pooled globally rather than per-adapter/per-instance, which is intentional for connection reuse but means per-instance http2Options differences and lifecycle/teardown are entirely delegated to Http2Sessions; worth confirming that bounded growth and idle-session cleanup are handled there.",
+          "line": "201, 468-514",
+          "suggestion": "No change required if Http2Sessions enforces idle eviction; otherwise document/verify session reuse semantics and cleanup to avoid long-lived session accumulation."
+        }
+      ]
+    },
+    {
+      "file": "lib/adapters/xhr.js",
+      "purpose": "Browser XMLHttpRequest adapter for axios: builds, sends, and settles an HTTP request as a Promise, wiring up progress, timeout, cancellation, and error handling.",
+      "findings": [
+        {
+          "severity": "medium",
+          "issue": "Pre-aborted signal path falls through to request.send() on a nulled request. At lines 204-207, when _config.signal.aborted is already true, onCanceled() runs synchronously; it rejects, calls request.abort(), and sets request = null (line 200). Execution then continues with no return, so line 226 `request.send(requestData || null)` dereferences the now-null `request`, throwing a TypeError inside the Promise executor.",
+          "line": "204-207, 226",
+          "suggestion": "After invoking onCanceled() for an already-aborted signal, `return` from the executor (or guard line 226 with `if (request) request.send(...)`) so a pre-aborted request never reaches send()."
+        },
+        {
+          "severity": "low",
+          "issue": "Falsy-but-valid request bodies are dropped. `request.send(requestData || null)` coerces an empty-string body ('') \u2014 and any other falsy value \u2014 to null, so an intentional empty/zero-length payload is silently discarded.",
+          "line": "226",
+          "suggestion": "Send based on definedness, e.g. `request.send(requestData == null ? null : requestData)` (or `requestData ?? null`), so '' is preserved."
+        },
+        {
+          "severity": "low",
+          "issue": "Dead/misleading error-message branch. onerror reads `event.message` to surface a custom message, but the XHR `error` event delivers a plain ProgressEvent which has no `message` property, so this branch effectively never fires and always yields 'Network Error'. The attached `err.event` is also non-standard API surface.",
+          "line": "119-126",
+          "suggestion": "Drop the `event.message` fallback (or document it as best-effort) to avoid implying custom network-error messages are supported; keep the 'Network Error' default."
+        },
+        {
+          "severity": "low",
+          "issue": "Progress/loadend listeners are never explicitly removed. Listeners added via addEventListener on `request` (line 178) and `request.upload` (lines 185, 187) are only cleaned up implicitly by setting `request = null` and relying on GC; flushUpload/flushDownload are flushed in done() but not unregistered.",
+          "line": "176-188",
+          "suggestion": "Acceptable as upstream behavior, but for robustness consider removeEventListener in done() to break listener references deterministically, especially if the XHR may be retained elsewhere."
+        },
+        {
+          "severity": "info",
+          "issue": "Overall the adapter closely tracks upstream axios and is structurally sound: done() consistently unsubscribes cancelToken and the signal abort listener, request is nulled in every terminal handler to guard re-entry, and the unsupported-protocol check correctly returns early (line 222).",
+          "line": "n/a",
+          "suggestion": "No action required; the items above are the only concrete concerns."
+        }
+      ]
+    },
+    {
+      "file": "lib/axios.js",
+      "purpose": "Entry point that builds the default axios instance, wires the Axios class/static helpers, and re-exports the public API as a single default export.",
+      "findings": [
+        {
+          "severity": "low",
+          "issue": "axios.Cancel is aliased by value from axios.CanceledError (the already-assigned property) rather than from the canonical CanceledError import. It is order-dependent on line 53 having executed first; binding the alias to the imported class directly would be clearer and decoupled from assignment order.",
+          "line": "63",
+          "suggestion": "Use axios.Cancel = CanceledError to bind the alias to the imported class directly."
+        },
+        {
+          "severity": "low",
+          "issue": "axios.all is a thin wrapper over Promise.all and axios.spread is retained. These legacy helpers add public surface with no deprecation signal, so new code may be built on deprecated APIs.",
+          "line": "66-70",
+          "suggestion": "Keep for back-compat but add a JSDoc @deprecated note steering new usage to native Promise.all/destructuring."
+        },
+        {
+          "severity": "info",
+          "issue": "Instance construction binds Axios.prototype.request and copies both the prototype (with context as the 3rd arg so prototype methods are bound) and the context's own enumerable+non-enumerable keys onto the function. This double-extend pattern is correct and matches upstream axios; axios.create propagates defaultConfig via mergeConfig as expected.",
+          "line": "28-44",
+          "suggestion": "No change needed; behavior is correct."
+        },
+        {
+          "severity": "info",
+          "issue": "formToJSON correctly wraps HTMLForm inputs in FormData before delegating to formDataToJSON, and the module honors its default-export-only contract. No correctness, security, resource-leak, or edge-case defects found in this file; the real risk surface lives in the imported modules (core/Axios, mergeConfig, adapters), not here.",
+          "line": "80,89",
+          "suggestion": "None; file is clean."
+        }
+      ]
+    },
+    {
+      "file": "lib/cancel/CancelToken.js",
+      "purpose": "Implements axios's CancelToken: a promise-based, subscribe/unsubscribe cancellation primitive that can also be bridged to a standard AbortSignal.",
+      "findings": [
+        {
+          "severity": "medium",
+          "issue": "A throwing listener aborts notification of all remaining subscribers. In the promise.then handler the loop `while (i-- > 0) token._listeners[i](cancel)` (lines 32-34) invokes listeners with no try/catch. If any single listener throws, the loop terminates, the still-pending listeners never receive the cancel signal, and `token._listeners = null` (line 35) is never reached, so the listener array leaks. Since this runs inside a Promise.then callback, the throw also surfaces as an unhandled rejection rather than reaching user code.",
+          "line": "32-35",
+          "suggestion": "Wrap each `token._listeners[i](cancel)` invocation in try/catch (or schedule each in its own microtask) so one faulty listener cannot suppress the others, and null out `_listeners` in a finally block."
+        },
+        {
+          "severity": "medium",
+          "issue": "toAbortSignal creates a subscription that is never auto-cleaned. `this.subscribe(abort)` (line 112) keeps the AbortController (and its signal) referenced by the token for the token's entire lifetime. Cleanup only happens if the caller manually invokes `signal.unsubscribe` (line 114); nothing unsubscribes when the underlying request completes normally. For a long-lived or reused token this accumulates controllers and leaks memory.",
+          "line": "105-117",
+          "suggestion": "Provide automatic teardown \u2014 e.g. unsubscribe once the signal aborts, or document that callers MUST call signal.unsubscribe, and have axios call it on request settle."
+        },
+        {
+          "severity": "medium",
+          "issue": "The overridden promise.then leaks a listener on every call. Each invocation calls `token.subscribe(resolve)` (line 43) and only removes it if the returned `promise.cancel()` is later called (lines 47-49). Because awaiting/`.then`-ing `token.promise` goes through this override, any code that awaits the token without invoking the returned cancel adds a permanent entry to `_listeners`. On a token reused across many requests this grows unbounded.",
+          "line": "39-52",
+          "suggestion": "Track and reap these per-call subscriptions automatically (e.g. unsubscribe when the inner promise settles), or document the cancel() requirement prominently."
+        },
+        {
+          "severity": "low",
+          "issue": "Cancellation notification timing is inconsistent. If a listener subscribes after cancellation, subscribe() calls it synchronously (lines 79-82); if it subscribes before, it is notified asynchronously via the promise microtask (lines 27-34). Subscribers whose correctness depends on ordering/async timing can behave differently depending on whether they registered before or after the cancel.",
+          "line": "78-89",
+          "suggestion": "Normalize timing, e.g. dispatch the already-cancelled case on a microtask (queueMicrotask) so all listeners are notified asynchronously."
+        },
+        {
+          "severity": "low",
+          "issue": "The custom then override ignores the onrejected argument and breaks full thenable semantics. `this.promise.then = (onfulfilled) => {...}` (line 39) accepts only one argument, so `token.promise.then(onFulfilled, onRejected)` and `.catch()` rejection handlers are silently dropped, and the returned promise does not behave like a standard chainable thenable beyond the single onfulfilled call.",
+          "line": "39-52",
+          "suggestion": "Accept and forward onrejected (and ideally support standard chaining) so the object remains a well-behaved thenable, or clearly document the deliberate divergence."
+        }
+      ]
+    },
+    {
+      "file": "lib/core/Axios.js",
+      "purpose": "Core Axios class: merges config, validates options, builds and runs the request/response interceptor chains, dispatches requests, and defines the HTTP method aliases.",
+      "findings": [
+        {
+          "severity": "medium",
+          "issue": "Synchronous interceptor-chain path: when a request interceptor's onFulfilled throws, onRejected is called and the loop `break`s, but execution then falls through to `dispatchRequest.call(this, newConfig)`. If the rejected handler does not itself throw, the request is still dispatched using the config from *before* the failing interceptor \u2014 silently sending a request the interceptor intended to block/transform.",
+          "line": "208-223",
+          "suggestion": "After invoking onRejected in the catch, short-circuit (e.g. return a rejected promise or rethrow) instead of continuing into dispatchRequest, so a failed sync interceptor cannot leak a partially-processed request."
+        },
+        {
+          "severity": "low",
+          "issue": "Header flattening mutates the caller-supplied headers object in place: `delete headers[method]` removes common/get/post/etc. keys directly from the object destructured from config.headers. If a caller reuses the same headers object reference across requests (or it is shared with defaults), the per-method keys are destroyed after the first request.",
+          "line": "150-157",
+          "suggestion": "Operate on a shallow copy when stripping method buckets, or document that config.headers is consumed/mutated by request()."
+        },
+        {
+          "severity": "low",
+          "issue": "`config.allowAbsoluteUrls` resolution checks `config.allowAbsoluteUrls !== undefined` then `this.defaults.allowAbsoluteUrls !== undefined`, but `config` has already been through `mergeConfig(this.defaults, config)` at line 92, so the default value may already be folded into config. The separate re-read of this.defaults is redundant/potentially inconsistent with how mergeConfig handles the key, and the empty `if {} else if` branch is awkward.",
+          "line": "128-135",
+          "suggestion": "Rely on the merged value or document why allowAbsoluteUrls is special-cased outside mergeConfig; collapse the no-op branch."
+        },
+        {
+          "severity": "low",
+          "issue": "The stack-trace augmentation in request() compares/concatenates `err.stack` strings and wraps assignment in try/catch to tolerate non-writable `stack`. This is best-effort cosmetic logic; on engines without Error.captureStackTrace it allocates a throwaway `new Error()` per failed request purely to harvest a stack, adding overhead on every error path.",
+          "line": "42-79",
+          "suggestion": "Acceptable, but consider gating the stack-merge work behind a cheap check (e.g. only when err.stack lacks the call site) to avoid per-error allocation under high failure volume."
+        },
+        {
+          "severity": "info",
+          "issue": "`query` is added to the with-data method group and intentionally skips a `queryForm` alias (comment lines 276-277). QUERY is a non-standard/draft method; ensure downstream adapters/servers actually support a request body on QUERY, otherwise this alias can produce requests that proxies strip or reject. Transitional flags (legacyInterceptorReqResOrdering, advertiseZstdAcceptEncoding, validateStatusUndefinedResolves) are validated here but their handling lives elsewhere \u2014 out of scope for this file.",
+          "line": "103-105,256-281",
+          "suggestion": "No change required; noted for awareness. Confirm the dispatch layer honors the QUERY body and the new transitional flags."
+        }
+      ]
+    },
+    {
+      "file": "lib/core/AxiosError.js",
+      "purpose": "Defines the AxiosError class (error subclass with axios metadata), a static `from` wrapper, and a `toJSON` serializer with opt-in key redaction for config snapshots.",
+      "findings": [
+        {
+          "severity": "medium",
+          "issue": "Redaction bypass for non-plain objects exposing toJSON. In redactConfig, when a value is not a plain object but has its own/prototype toJSON (lines 54-57), the object is returned verbatim (`return source`) without descending into it. Any redact-listed keys nested inside such a class instance (e.g. a custom object, or anything wrapping credentials) are therefore NOT redacted and leak into the serialized snapshot.",
+          "line": "54-57",
+          "suggestion": "Either recurse into the object's toJSON() output and apply redaction to that result, or document that toJSON-bearing objects are intentionally opaque. At minimum, ensure secrets cannot survive serialization by name match regardless of container type."
+        },
+        {
+          "severity": "medium",
+          "issue": "redactConfig returns a live reference to the original object rather than a copy for toJSON-bearing non-plain objects (line 56 `return source`). The 'snapshot' then aliases live config internals (sockets, agents, streams), defeating the snapshot intent and risking later mutation/circular issues at the actual JSON.stringify stage.",
+          "line": "56",
+          "suggestion": "Return a serialized/cloned form (e.g. the object's toJSON() result run back through visit) instead of the live object."
+        },
+        {
+          "severity": "low",
+          "issue": "AxiosHeaders instance identity is not tracked for circular detection. The circular guard checks `source` against `seen` (line 36) before the AxiosHeaders->toJSON reassignment (lines 38-40), but line 42 pushes the toJSON RESULT, not the original instance. A config whose graph routes a cycle back through the same AxiosHeaders instance would re-convert it each visit and weaken the cycle guard.",
+          "line": "36-42",
+          "suggestion": "Push the original `source` (the instance) onto `seen` before reassigning to its toJSON output, so the instance identity participates in cycle detection."
+        },
+        {
+          "severity": "low",
+          "issue": "Circular references resolve to `undefined` (line 36), which for arrays causes the element to be silently dropped (lines 49-51) instead of leaving a placeholder, and for objects drops the key. The resulting snapshot can be misleadingly incomplete (sparse arrays / missing keys) with no indication a cycle was elided.",
+          "line": "36, 47-52",
+          "suggestion": "Consider emitting a sentinel like '[Circular]' instead of undefined so the serialized output reflects that data was present but cyclic."
+        },
+        {
+          "severity": "low",
+          "issue": "Cycle tracking uses an array with linear `seen.indexOf` (line 36) inside the recursion, giving O(n^2) behavior on large/deep configs. A Set would be O(1) and matches the lowerKeys pattern already used at line 30.",
+          "line": "31, 36",
+          "suggestion": "Use a Set for `seen` (add/has/delete) instead of an array with indexOf/push/pop."
+        },
+        {
+          "severity": "info",
+          "issue": "Redaction matches only by KEY name (case-insensitive). Secret values stored under non-listed keys, or the value of `config.redact` array itself, are serialized in cleartext. This appears intentional/documented but is a real limitation worth calling out to callers relying on it for safety.",
+          "line": "30, 61",
+          "suggestion": "Document explicitly that redaction is key-name based only and does not catch value-located secrets; consider redacting the `redact` key by default."
+        }
+      ]
+    },
+    {
+      "file": "lib/core/AxiosHeaders.js",
+      "purpose": "AxiosHeaders class: case-insensitive header storage/normalization with get/set/has/delete, accessor generation, and value sanitization.",
+      "findings": [
+        {
+          "severity": "medium",
+          "issue": "static accessor() has a broken lazy-init: `this[$internals] = this[$internals] = { accessors: {} }` self-assigns instead of using the `|| { accessors: {} }` fallback. Every call to AxiosHeaders.accessor() (a public, supported API) therefore discards the existing internals object and resets `accessors` to {}. The dedup cache (`accessors[lHeader]`) never persists across calls, so previously-registered accessor names are forgotten and buildAccessors re-runs/redefines properties on every invocation.",
+          "line": "304-309",
+          "suggestion": "Restore the guard: `const internals = this[$internals] = (this[$internals] || { accessors: {} });` so the internals/accessors cache is created once and reused."
+        },
+        {
+          "severity": "low",
+          "issue": "matchHeaderValue returns undefined for non-string values (line 44). When a header holds an array value (e.g. set-cookie, or any header set to an array), has(header, matcher) and delete(header, matcher) silently treat it as non-matching, so array-valued headers can never be matched/deleted via a string/regex matcher.",
+          "line": "44, 180, 197",
+          "suggestion": "Handle array values (e.g. test each element, or join) before the isString bail-out, or document that matchers only apply to scalar string header values."
+        },
+        {
+          "severity": "low",
+          "issue": "normalize() mutates `this` while iterating it via utils.forEach: it deletes the old key and assigns a new (re-cased/merged) key inside the iteration callback (lines 238-251). Correctness depends entirely on utils.forEach snapshotting keys before iterating; if it enumerates live keys, freshly-added normalized keys could be revisited or skipped.",
+          "line": "234-252",
+          "suggestion": "Confirm utils.forEach takes a key snapshot (Object.keys up front); if not, collect changes into a temp map and apply after the loop."
+        },
+        {
+          "severity": "low",
+          "issue": "Header NAMES are not passed through sanitizeHeaderValue/CRLF filtering. normalizeHeader only trims+lowercases (line 10), and the object/single-header set path stores `_header` directly as a key without isValidHeaderName validation (only the string-header branch validates). A name containing CR/LF is preserved as a key, leaving CRLF-injection defense dependent on lower layers rather than enforced here as it is for values.",
+          "line": "9-11, 103, 135",
+          "suggestion": "Either validate header names against isValidHeaderName on the setHeader path, or strip CR/LF from names in normalizeHeader, mirroring the value sanitization."
+        },
+        {
+          "severity": "info",
+          "issue": "Value sanitization is correctly centralized: normalizeValue routes all scalar string values (including array elements) through sanitizeHeaderValue, and the null-proto descriptors in buildAccessors (line 71) defend against Object.prototype pollution turning data descriptors into accessors. These are good hardening choices.",
+          "line": "13-19, 64-77",
+          "suggestion": "No change needed; noted as positive context."
+        }
+      ]
+    },
+    {
+      "file": "lib/core/InterceptorManager.js",
+      "purpose": "Manages a stack of request/response interceptor handlers (add via use, remove via eject, clear all, iterate via forEach), used by axios to register fulfilled/rejected callbacks.",
+      "findings": [
+        {
+          "severity": "low",
+          "issue": "eject(id) replaces the slot with null rather than removing it, and use() returns the array index as the ID. Ejected slots are never reclaimed, so handlers grows unbounded for a long-lived axios instance that repeatedly uses/ejects interceptors. This is intentional (IDs must stay stable), but constitutes a slow memory accumulation of null entries.",
+          "line": "20-27, 36-40",
+          "suggestion": "Acceptable by design, but document that the array is append-only; if reclamation matters, periodically compact and remap, or use a Map keyed by a monotonically increasing counter to allow true deletion without shifting IDs."
+        },
+        {
+          "severity": "low",
+          "issue": "forEach filters with strict `h !== null` but eject only ever stores null. If a handler slot were ever undefined (e.g. a sparse array or out-of-range), it would pass the null check and be invoked, throwing. Minor robustness gap.",
+          "line": "64-68",
+          "suggestion": "Use a truthiness check (`if (h)`) to skip both null and undefined/empty slots."
+        },
+        {
+          "severity": "info",
+          "issue": "clear() guards with `if (this.handlers)`, which is always truthy since the constructor initializes it to [] and it is only ever reassigned to [] or mutated. The guard is dead code.",
+          "line": "47-51",
+          "suggestion": "Drop the redundant conditional; just assign this.handlers = []."
+        },
+        {
+          "severity": "info",
+          "issue": "eject(id) silently no-ops for an invalid or already-ejected id (the `if (this.handlers[id])` guard). Not a bug, but it gives no feedback to callers passing a stale/wrong id.",
+          "line": "37-39",
+          "suggestion": "Optional: leave as-is (matches axios), or return a boolean indicating whether an interceptor was removed."
+        },
+        {
+          "severity": "info",
+          "issue": "No correctness, security, or resource-leak defects found; logic matches the canonical axios implementation and behaves correctly.",
+          "line": "n/a",
+          "suggestion": "None required."
+        }
+      ]
+    },
+    {
+      "file": "lib/core/buildFullPath.js",
+      "purpose": "Combines a baseURL with a request URL (only for relative URLs, or to neutralize absolute URLs when allowAbsoluteUrls is false), while rejecting malformed \"http:\"/\"https:\" protocol strings that omit the \"//\".",
+      "findings": [
+        {
+          "severity": "low",
+          "issue": "Stale JSDoc: the doc block (lines 32-41) only documents `baseURL` and `requestedURL`, but the function takes four parameters. `allowAbsoluteUrls` (which gates the SSRF/absolute-URL-override mitigation) and `config` (used to attach context to the thrown AxiosError) are undocumented, so the security-relevant behavior is invisible to readers.",
+          "line": "32-42",
+          "suggestion": "Add `@param {boolean} allowAbsoluteUrls` and `@param {Object} config` to the JSDoc and note that `allowAbsoluteUrls === false` forces an absolute requestedURL to be combined onto baseURL."
+        },
+        {
+          "severity": "low",
+          "issue": "Validation and combination operate on different strings. `assertValidHttpProtocolURL` normalizes the URL (strips leading C0/space and removes tab/CR/LF) before testing, but `isAbsoluteURL` and `combineURLs` receive the original `requestedURL` with those characters intact. A value like `\"http:\\t//evil\"` passes the malformed-protocol check (normalizes to `http://evil`) yet the raw control characters survive into the returned path. Downstream URL parsers normally strip them, so this is informational rather than an exploit.",
+          "line": "19,44,47",
+          "suggestion": "If strictness matters downstream, consider returning/using the normalized form consistently, or document that normalization is for validation only."
+        },
+        {
+          "severity": "info",
+          "issue": "`requestedURL` is not guarded for non-string values here. If it is `undefined`/non-string, `assertValidHttpProtocolURL` skips (typeof guard), `isAbsoluteURL` returns false, and `combineURLs` may run `relativeURL.replace` only when truthy, so undefined falls through to `return baseURL`. Behavior is benign but relies on the helpers' defensive typeof checks rather than an explicit contract in this function.",
+          "line": "42-49",
+          "suggestion": "No change required; noting the implicit dependency on helper-level type guards."
+        },
+        {
+          "severity": "info",
+          "issue": "Protocol/absolute-URL handling is otherwise correct: the malformed-protocol regex is anchored and used with `.test()` (no global-flag lastIndex statefulness), C0/space stripping matches WHATWG leading-trim semantics, and combining an absolute requestedURL when `allowAbsoluteUrls === false` correctly neutralizes baseURL-override attempts.",
+          "line": "7-50",
+          "suggestion": "None; file is in good shape."
+        }
+      ]
+    },
+    {
+      "file": "lib/core/dispatchRequest.js",
+      "purpose": "Runs request/response transforms around the configured adapter, honoring cancellation, and dispatches the HTTP request.",
+      "findings": [
+        {
+          "severity": "medium",
+          "issue": "`config.response = response` mutates the caller-supplied config object during the request lifecycle and is not concurrency/reentrancy safe. If the same config object reference is passed to two concurrent `axios(config)` calls (or transformResponse re-enters axios), the two flows clobber each other's `config.response`, so an AxiosError thrown by transformResponse could attach the wrong response. The `delete` in `finally` also assumes config never legitimately carried a `response` property of its own (it would be destroyed rather than restored).",
+          "line": "55-60, 72-81",
+          "suggestion": "Avoid mutating the shared config. Pass the response to transformData explicitly (it already receives `response` as the 3rd arg) and have transformResponse read it from there, or stamp the response onto a per-call context object rather than `config`."
+        },
+        {
+          "severity": "low",
+          "issue": "On the success path, `response.headers = AxiosHeaders.from(response.headers)` (line 62) runs only if transformResponse does NOT throw, since it sits after the try/finally. On the error path the equivalent normalization (line 82) likewise only runs when transformResponse succeeds. So a transformResponse failure yields a response whose `.headers` is never normalized to an AxiosHeaders instance \u2014 inconsistent header typing for error consumers.",
+          "line": "56-62, 73-82",
+          "suggestion": "Normalize `response.headers` before invoking transformData, or inside the finally, so header typing is consistent regardless of transform outcome."
+        },
+        {
+          "severity": "low",
+          "issue": "`['post','put','patch'].indexOf(config.method) !== -1` assumes `config.method` is already lowercased. If an upstream change ever leaves the method uppercase (e.g. 'POST') or undefined, the default content-type is silently skipped. Relies on an invariant established elsewhere with no guard here.",
+          "line": "42",
+          "suggestion": "Lowercase defensively (`(config.method || '').toLowerCase()`) or assert the invariant, so a missed normalization upstream does not silently drop the Content-Type default."
+        },
+        {
+          "severity": "info",
+          "issue": "Logic otherwise faithfully mirrors upstream axios: cancellation is checked before dispatch and on adapter resolution, cancel errors bypass response transformation, and rejections are re-rejected preserving the original reason. No resource leaks or injected correctness bugs found beyond the config-mutation concern above.",
+          "line": "n/a",
+          "suggestion": "No action required; the added try/finally does correctly keep `config.response` available while transformResponse constructs an AxiosError (delete runs after the throw is caught by finally)."
+        }
+      ]
+    },
+    {
+      "file": "lib/core/mergeConfig.js",
+      "purpose": "Deep-merges two axios request config objects into a new, prototype-pollution-hardened config object using a per-key merge strategy map.",
+      "findings": [
+        {
+          "severity": "low",
+          "issue": "The result `config` is created with `Object.create(null)` (no prototype). This is a deliberate hardening change from upstream axios (which uses `{}`), but it means the returned config has no inherited methods. Any downstream/user code doing `config.toString()`, `config.hasOwnProperty` via prototype, `config instanceof Object`, structuredClone with prototype expectations, or util.inspect formatting can behave differently or throw.",
+          "line": "26",
+          "suggestion": "Confirm all consumers of mergeConfig's output only do own-property data access. The code mitigates the common `hasOwnProperty` case (lines 27-35) but other Object.prototype methods (toString, valueOf, isPrototypeOf) are absent. Document this contract or restore a frozen safe prototype."
+        },
+        {
+          "severity": "low",
+          "issue": "Key enumeration via `Object.keys({ ...config1, ...config2 })` invokes any getter properties on config1/config2 once during the spread, and then the values are read AGAIN via `config1[prop]`/`config2[prop]` at lines 140-141. Getters with side effects (or expensive computation) are evaluated twice, and a getter that returns different values on each call yields an inconsistent merge.",
+          "line": "137,140-141",
+          "suggestion": "Build the key set without materializing values, e.g. collect own keys directly (Object.keys(config1).concat(Object.keys(config2)) de-duplicated) rather than spreading, so getters are read only at lines 140-141."
+        },
+        {
+          "severity": "low",
+          "issue": "For the `mergeDirectKeys` strategy (validateStatus), line 143's guard `(isUndefined(configValue) && merge !== mergeDirectKeys) || (config[prop]=configValue)` intentionally assigns even an `undefined` result, planting an own `validateStatus: undefined` key. The block at 146-156 only deletes it under the transitional-false branch; otherwise an explicit `undefined` survives, which differs from the key being absent for code that distinguishes the two.",
+          "line": "143,146-156",
+          "suggestion": "This matches upstream axios intent, but verify downstream `validateStatus` checks treat an own `undefined` value identically to a missing key; otherwise the merged config can resolve all statuses unexpectedly."
+        },
+        {
+          "severity": "low",
+          "issue": "The restored `hasOwnProperty` slot is `writable: true, configurable: true`, and the merge loop assigns `config[prop]=configValue` for any user-supplied key. If config1/config2 contains an own `hasOwnProperty` data property, it overwrites the safe restored function, breaking any later `config.hasOwnProperty(...)` ergonomics this block was meant to preserve.",
+          "line": "27-35,143",
+          "suggestion": "Either skip merging a literal `hasOwnProperty` key (as is done for __proto__/constructor/prototype at line 138) or make the restored slot non-writable so user data cannot clobber it."
+        },
+        {
+          "severity": "info",
+          "issue": "Core merge semantics (per-key strategy map, prototype-pollution guard at line 138, use of utils.hasOwnProp instead of direct lookups, caseless header merge at 133-134, and the transitional validateStatus resolution at 146-156) are correct and consistent with axios behavior. No correctness, resource-leak, or injection bug found.",
+          "line": "n/a",
+          "suggestion": "No action required; remaining items are defensive/quality refinements."
+        }
+      ]
+    },
+    {
+      "file": "lib/core/settle.js",
+      "purpose": "Resolves or rejects the request promise based on the HTTP response status and the config's validateStatus predicate.",
+      "findings": [
+        {
+          "severity": "low",
+          "issue": "`!response.status` causes any falsy status (notably status 0) to resolve as success. A status of 0 typically signals an aborted/failed/opaque response with no real HTTP status, yet this path treats it as a successful resolution and skips validateStatus entirely.",
+          "line": "16",
+          "suggestion": "Confirm this is intended (it is a long-standing axios behavior for responses without a status, e.g. some protocols), and document why status 0 short-circuits to success; consider gating on response existence rather than truthiness of status if 0 should be validated."
+        },
+        {
+          "severity": "low",
+          "issue": "`!validateStatus` makes a missing/non-function validateStatus resolve every response regardless of status code. If config.validateStatus is accidentally undefined (e.g. overwritten config), all 4xx/5xx responses silently succeed instead of rejecting.",
+          "line": "16",
+          "suggestion": "This is defensive-by-design in axios, but worth noting: a defaulted validateStatus is normally supplied upstream, so reaching this branch indicates misconfiguration. Optionally treat a non-function validateStatus as an error rather than an implicit pass."
+        },
+        {
+          "severity": "low",
+          "issue": "No guard on `response.config`; line 15 dereferences `response.config.validateStatus` directly. A malformed response object lacking `config` throws a TypeError that bypasses the reject(...) path and escapes as an unhandled exception rather than a structured AxiosError.",
+          "line": "15",
+          "suggestion": "Callers always pass a config-bearing response, but a defensive `response.config && ...` or assertion would convert internal misuse into a clearer error."
+        },
+        {
+          "severity": "info",
+          "issue": "Otherwise the module is correct and idiomatic: status-class mapping (4xx -> ERR_BAD_REQUEST, else ERR_BAD_RESPONSE) is sound, the AxiosError carries config/request/response context, and there are no resource leaks or security issues. resolve/reject are each called exactly once on every path.",
+          "line": "19-25",
+          "suggestion": "No action needed."
+        }
+      ]
+    },
+    {
+      "file": "lib/core/transformData.js",
+      "purpose": "Applies an ordered chain of transformer functions to request/response data, normalizing headers and binding `this` to the resolved config.",
+      "findings": [
+        {
+          "severity": "low",
+          "issue": "`headers.normalize()` is invoked inside the forEach on every iteration (line 22) and once more after the loop (line 25). Normalization is idempotent, so the repeated calls are pure wasted work proportional to the number of transformers.",
+          "line": "22,25",
+          "suggestion": "Normalize once before the loop and pass the same headers instance into each fn; drop the post-loop call (or keep one, not N+1)."
+        },
+        {
+          "severity": "low",
+          "issue": "Mutations transformers make to `headers` are not written back to `context.headers`. The function returns only `data`; callers relying on header changes performed by a transform see them only if `context.headers` and the AxiosHeaders instance share identity. `AxiosHeaders.from` returns the same object when given an AxiosHeaders but wraps a new one for plain objects (line 18), so behavior silently differs depending on the input header type.",
+          "line": "18",
+          "suggestion": "Be explicit: either always operate on the live header object, or assign the normalized headers back to context.headers so transformer header edits propagate consistently."
+        },
+        {
+          "severity": "info",
+          "issue": "`this`-based config resolution (`const config = this || defaults`, line 16) means calling transformData as a plain function (unbound) silently falls back to library defaults rather than erroring. Intentional in axios but a footgun for refactors that destructure or re-export the function.",
+          "line": "16",
+          "suggestion": "No change required; document that the function must be called with the config as `this`."
+        },
+        {
+          "severity": "info",
+          "issue": "For request transforms `response` is undefined, so the third arg passed to each fn is `undefined` (line 22). This is the intended axios contract; noting it so the `response ? response.status : undefined` ternary is not mistaken for a bug.",
+          "line": "22",
+          "suggestion": "None; behavior is correct and matches upstream axios."
+        }
+      ]
+    },
+    {
+      "file": "lib/defaults/index.js",
+      "purpose": "Defines axios's default config: adapters, request/response transforms (form/JSON serialization & parsing), timeout, XSRF names, status validation, and default headers.",
+      "findings": [
+        {
+          "severity": "low",
+          "issue": "Line 50 uses the global `FormData` constructor (`new FormData(data)`) instead of the platform/env-provided FormData used elsewhere (line 90 reads `env.FormData`). This is inconsistent and would throw a ReferenceError in a runtime where `FormData` is not a global, even though in practice `isHTMLForm(data)` only passes when a DOM HTMLFormElement exists.",
+          "line": "49-50",
+          "suggestion": "Resolve FormData from `own(this,'env')`/platform classes for consistency, or guard that a global FormData exists before constructing."
+        },
+        {
+          "severity": "low",
+          "issue": "In transformResponse, a custom `parseReviver` (passed to JSON.parse on line 129) can throw arbitrary non-SyntaxError exceptions. When strict JSON parsing is off, ALL caught errors are silently swallowed (lines 130-137 fall through to `return data`), so a buggy/throwing reviver produces no error and silently returns the raw string instead of parsed data, masking the failure.",
+          "line": "128-138",
+          "suggestion": "Consider only swallowing SyntaxError in the non-strict branch and rethrowing other error types, mirroring the strictJSONParsing branch's intent."
+        },
+        {
+          "severity": "info",
+          "issue": "stringifySafely (line 26) calls `(parser || JSON.parse)(rawValue)` purely to validate that the already-string payload is valid JSON, discarding the result and returning the trimmed original. This double-parse is intentional (preserves caller formatting) but is a non-obvious hot-path cost for large string bodies; only SyntaxError is swallowed (line 29) which is correct.",
+          "line": "23-36",
+          "suggestion": "No change required; a brief comment noting the validation-only intent would aid maintainers."
+        },
+        {
+          "severity": "info",
+          "issue": "Default `maxContentLength`/`maxBodyLength` are -1 (unlimited) and `timeout` is 0 (no timeout). These are the documented axios defaults, but consumers relying solely on defaults have no built-in protection against oversized responses or hung connections.",
+          "line": "148,153-154",
+          "suggestion": "No code change; ensure downstream/app-level config sets sane limits where untrusted endpoints are involved."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/AxiosTransformStream.js",
+      "purpose": "A Transform stream that optionally throttles throughput to a maxRate and emits cumulative-byte 'progress' events, splitting/buffering chunks to enforce the rate limit.",
+      "findings": [
+        {
+          "severity": "low",
+          "issue": "The throttling setTimeout (line 117) is never tracked, cleared, or unref'd. If the stream is destroyed or errors while a chunk is parked waiting for the next time window, the timer still fires, invokes the pending transform callback after destruction, and keeps the event loop alive until it elapses.",
+          "line": "117-119",
+          "suggestion": "Store the timer id on internals and clear it in a _destroy override; optionally call timer.unref() so a pending throttle delay cannot hold the process open."
+        },
+        {
+          "severity": "low",
+          "issue": "Rate limiting can overshoot the configured maxRate. At line 127 a chunk is only split when the leftover remainder exceeds minChunkSize; otherwise the entire chunk is pushed even though chunkSize may exceed bytesLeft/maxChunkSize. A single large chunk can therefore transmit up to minChunkSize bytes beyond the per-window budget.",
+          "line": "127-130",
+          "suggestion": "Document this intentional slack, or always split at maxChunkSize and carry the small remainder forward rather than emitting it whole, so maxRate is a hard ceiling."
+        },
+        {
+          "severity": "low",
+          "issue": "isCaptured is a one-way latch: the 'newListener' handler sets it true the first time a 'progress' listener is added (lines 43-49) but nothing ever resets it. After all progress listeners are removed, the stream keeps doing emit('progress', ...) work on every chunk for the life of the stream.",
+          "line": "43-49, 82",
+          "suggestion": "Replace the latch with this.listenerCount('progress') > 0 at emit time, or add a removeListener handler that clears isCaptured when the count drops to zero."
+        },
+        {
+          "severity": "low",
+          "issue": "_read overrides the Transform/Duplex internal _read and calls super._read(size) (lines 52-60). Subclassing a Transform's _read is fragile across Node versions because Transform manages its own read side internally; the backpressure resume is already driven by onReadCallback, making the super._read call redundant and potentially interfering with internal state.",
+          "line": "52-60",
+          "suggestion": "Verify the super._read call is needed; if backpressure resume is fully handled by onReadCallback, consider not overriding _read or at least not delegating to super."
+        },
+        {
+          "severity": "info",
+          "issue": "Buffer.byteLength is used for chunk sizing (lines 78, 95) and subarray for splitting (lines 128-129); both assume chunk is a Buffer. This holds because decodeStrings defaults to true on the Transform, but the code would break if instantiated in a mode that passes strings or objects through.",
+          "line": "78, 95, 128",
+          "suggestion": "No change needed for current usage; just be aware the splitting logic is Buffer-specific."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/AxiosURLSearchParams.js",
+      "purpose": "Lightweight URLSearchParams polyfill used by axios to serialize request params into a query string, with axios-specific percent-encoding rules.",
+      "findings": [
+        {
+          "severity": "low",
+          "issue": "The encode charMap and its replacer regex omit the `%00` -> `\\x00` entry present in upstream axios. encodeURIComponent emits `%00` for a NUL byte, but this version leaves it percent-encoded instead of decoding it back to a literal NUL. This is a behavioral deviation from stock axios and means NUL bytes in param keys/values serialize differently.",
+          "line": "14-24",
+          "suggestion": "Add `'%00': '\\x00'` to charMap and `|%00` to the regex (i.e. /[!'()~]|%20|%00/g) to match upstream axios behavior."
+        },
+        {
+          "severity": "low",
+          "issue": "toString does not guard against null/undefined pair values. When a value is undefined or null, `_encode(pair[1])` calls encodeURIComponent(undefined)/encodeURIComponent(null), producing the literal strings `undefined`/`null` in the query (e.g. `key=undefined`). This is silent and can corrupt requests.",
+          "line": "52-56",
+          "suggestion": "This mirrors stock axios, so it may be intended, but consider documenting it or coercing null/undefined to an empty string if callers expect omission."
+        },
+        {
+          "severity": "info",
+          "issue": "`Array.prototype.map` is called with a second argument `''` (the thisArg) on line 55. The callback `each` does not use `this`, so the thisArg is dead/no-op code and is misleading (it can read as if `''` were a map default/seed value, which map has no concept of).",
+          "line": "55",
+          "suggestion": "Drop the stray `, ''` second argument to map() for clarity; it has no effect."
+        },
+        {
+          "severity": "info",
+          "issue": "Aside from the minor deviations above, the module faithfully implements axios's URLSearchParams polyfill: encode() correctly handles the RFC-3986 sub-delims that encodeURIComponent leaves unescaped, append()/toString()/_pairs are consistent, and the custom-encoder path (encoder.call(this, value, encode)) is wired correctly. No security, resource-leak, or correctness-breaking bugs found.",
+          "line": "n/a",
+          "suggestion": "No action required for the core logic."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/Http2Sessions.js",
+      "purpose": "Pools/caches reusable HTTP/2 sessions per authority, reusing matching ones and auto-closing them after an idle timeout.",
+      "findings": [
+        {
+          "severity": "high",
+          "issue": "No 'error' listener is ever attached to the http2 session. An http2 ClientHttp2Session emits 'error' on connection failures (TLS errors, GOAWAY, socket reset). An EventEmitter with no 'error' handler re-throws, which crashes the whole Node process. Pooled sessions live independently of any single request, so an async error on an idle/cached session has no consumer to catch it.",
+          "line": "41, 107",
+          "suggestion": "Attach session.once('error', removeSession) (or a handler that logs/cleans up) alongside the 'close' handler so a session error tears the entry down instead of taking down the process."
+        },
+        {
+          "severity": "medium",
+          "issue": "A session created with sessionTimeout set but on which session.request is never called is never cleaned up. The idle timer is only armed inside the wrapped request() after a stream's 'close' fires (lines 94-100). If a caller calls getSession() but never issues a request (e.g. the request is built then abandoned, or connect succeeds but the caller errors first), streamsCount stays 0, no timer is ever set, and the open session leaks until the remote or 'close' tears it down.",
+          "line": "82-105",
+          "suggestion": "Arm an initial idle timer immediately after creating the session (and clear it on first request), so sessions that are never used still get reclaimed."
+        },
+        {
+          "severity": "medium",
+          "issue": "The idle setTimeout is not unref()'d. While a session sits in its post-last-stream idle window, the pending timer keeps the Node event loop alive, delaying clean process exit by up to sessionTimeout (default 1000ms, but arbitrary if configured higher). For a library this is an observable behavior change for short-lived CLI/script usage.",
+          "line": "96-99",
+          "suggestion": "Call timer.unref() after creating it so the pending idle-close timer does not by itself keep the process running."
+        },
+        {
+          "severity": "low",
+          "issue": "TOCTOU race on reuse: getSession() can return a cached session whose idle removal timer is about to fire. Between the early return at line 36 and the caller invoking session.request(), the timer can fire -> removeSession() -> session.close(), so the caller then issues a request on a closing session and gets an error. The clearTimeout in the wrapped request() only protects requests that actually reach it before the timer fires.",
+          "line": "31-38, 96-99",
+          "suggestion": "On a cache hit, proactively clear/cancel any pending removal timer before returning the session, rather than relying on the subsequent request() call to do it."
+        },
+        {
+          "severity": "low",
+          "issue": "removeSession reads entries = authoritySessions and immediately dereferences entries.length. If the session's 'close' (or an error, if a handler were added) fired before the entry-push branch at lines 111-113 ran while authoritySessions was still undefined (no prior sessions for this authority), entries would be undefined and entries.length would throw. The window is small (connect is async) but synchronous failure paths exist.",
+          "line": "58-60",
+          "suggestion": "Guard with `if (!entries) return;` at the top of removeSession, or push the entry into this.sessions before registering the close handler."
+        },
+        {
+          "severity": "low",
+          "issue": "Session reuse keys on util.isDeepStrictEqual of the options object, including the injected sessionTimeout default. Any option that is a function (e.g. createConnection, a custom lookup) or otherwise not deep-equal-comparable will never match, silently defeating pooling and opening a fresh session every call. Also monkeypatching the instance's session.request is fragile coupling to http2 internals.",
+          "line": "34, 84-104",
+          "suggestion": "Document/normalize which options participate in the pool key (exclude non-comparable fields), and consider tracking stream lifecycle via documented session events rather than overriding session.request."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/HttpStatusCode.js",
+      "purpose": "Defines an HTTP status-code enum and augments it with a reverse (numeric-to-name) lookup so it works bidirectionally.",
+      "findings": [
+        {
+          "severity": "info",
+          "issue": "File is essentially clean. It declares a static map of HTTP status names to codes (lines 1-71), then builds a reverse lookup by iterating the original string entries and assigning name strings under the numeric keys (lines 73-75). Object.entries snapshots the entries before the loop, so mutating the object during iteration is safe, and all values are unique so no reverse-mapping collisions occur. No correctness bugs, security issues, or resource concerns.",
+          "line": "73-75",
+          "suggestion": "No change required. Optional/minor: (1) the reverse-augmented object is not frozen, so consumers can mutate the shared singleton (Object.freeze would harden it); (2) reverse keys are coerced to strings (HttpStatusCode[200] and HttpStatusCode['200'] both resolve), which is standard JS object-key behavior and matches upstream axios, so callers should not assume numeric-key identity."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/ZlibHeaderTransformStream.js",
+      "purpose": "A Transform stream that prepends default zlib (deflate) header bytes (0x78 0x9C) to a data stream when no zlib header is detected on the first non-empty chunk, then passes data through unchanged.",
+      "findings": [
+        {
+          "severity": "low",
+          "issue": "Zlib-header detection inspects only the first byte (chunk[0] !== 120 / 0x78). A real zlib stream is identified by a 2-byte CMF/FLG pair whose check value (CMF*256+FLG) is a multiple of 31; checking a single byte can both (a) misclassify non-zlib data that happens to start with 0x78 as already-headered and (b) only recognizes the 0x78 CMF, ignoring valid streams with other window sizes. This is a heuristic that can corrupt the wrapped stream for edge-case inputs.",
+          "line": "16",
+          "suggestion": "If feasible, validate the 2-byte header (CM==8, FCHECK divisible by 31) rather than a single byte, or document the assumption that input is raw deflate without a zlib wrapper."
+        },
+        {
+          "severity": "low",
+          "issue": "this.push(header, encoding) forwards the chunk's string `encoding` argument when pushing a Buffer. For Buffer pushes the encoding parameter is ignored by Node's stream internals, so this is harmless but misleading \u2014 it implies the header is encoded with the chunk's encoding when it is a fixed binary 2-byte value.",
+          "line": "21",
+          "suggestion": "Drop the second argument: this.push(header). The header is always a Buffer literal and needs no encoding."
+        },
+        {
+          "severity": "info",
+          "issue": "The _transform -> __transform self-rebind is an intentional one-time optimization: only the first non-empty chunk is inspected for a header, and subsequent chunks pass straight through. Empty leading chunks (length 0) are correctly passed through without consuming the one-time header check, so the header logic still runs on the first real data chunk. Behavior is correct.",
+          "line": "6-26",
+          "suggestion": "No change needed; a short comment explaining the rebind trick would aid maintainability."
+        },
+        {
+          "severity": "info",
+          "issue": "File is the standard axios implementation and contains no resource leaks or security issues. Errors from downstream push() are not separately handled, but callback() is always invoked so the stream will not stall.",
+          "line": "n/a",
+          "suggestion": "None."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/buildURL.js",
+      "purpose": "Builds a request URL by serializing and appending query params, with prototype-pollution-safe option reads and fragment stripping.",
+      "findings": [
+        {
+          "severity": "low",
+          "line": "32-35",
+          "issue": "Inconsistent null handling for `url`. The early `if (!params) return url;` returns `url` verbatim, so `buildURL(undefined)` / `buildURL(null)` returns `undefined`/`null`, while the `url = url || ''` normalization on line 35 only runs when params are present. Callers that assume a string is always returned can get a non-string.",
+          "suggestion": "Normalize `url` (e.g. `url = url || ''`) before the params guard, or document that the input url is returned as-is when no params are given."
+        },
+        {
+          "severity": "low",
+          "line": "16-19",
+          "issue": "Inconsistent regex flags in `encode`: `%3A` and `%2C` use case-insensitive `gi`, but `%24` and `%20` use only `g`. It happens to be safe because encodeURIComponent always emits uppercase hex, but the inconsistency is misleading and would silently miss lowercase forms if the input source ever changed.",
+          "suggestion": "Make the flags uniform (all `g` is sufficient given encodeURIComponent output, or all `gi` for defensiveness)."
+        },
+        {
+          "severity": "info",
+          "line": "7-8",
+          "issue": "Doc comment minor mismatch: it says it replaces space with its 'plain counterpart', but the replacement is `+` (form-encoding of space), not a literal space. Cosmetic only.",
+          "suggestion": "Reword the JSDoc to say space is encoded as `+`."
+        },
+        {
+          "severity": "info",
+          "line": "46-47",
+          "issue": "`getSafeProp(_options, ...)` is invoked with `_options` that may be a non-null primitive if a caller passes a primitive (e.g. a number) as `options`. Behavior depends on the unseen helper; assuming it guards typeof, this is safe. The pollution-safe read pattern itself is a positive hardening over upstream.",
+          "suggestion": "No change needed if `getSafeProp` already null/type-guards its input; otherwise confirm it tolerates primitives."
+        },
+        {
+          "severity": "info",
+          "line": "59-66",
+          "issue": "Fragment stripping and `?`/`&` join logic are correct: the `#` is removed before the `?` lookup, so params are never appended after a fragment and the separator choice is sound. No issue found.",
+          "suggestion": "None."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/composeSignals.js",
+      "purpose": "Merges N input abort signals plus an optional timeout into a single composed AbortSignal, with cleanup/unsubscribe wiring.",
+      "findings": [
+        {
+          "severity": "medium",
+          "issue": "Already-aborted input signals are not honored. Subscription happens only via addEventListener('abort', onabort) on line 48. If any input signal is already in the aborted state when composeSignals runs, addEventListener never fires its callback (the 'abort' event was dispatched before the listener attached), so the composed controller never aborts and the request proceeds as if no cancellation was requested.",
+          "line": "48 (and missing guard near 8-12)",
+          "suggestion": "Before/after subscribing, check each signal and abort immediately if already aborted, e.g. `signals.some(s => s.aborted) && onabort(...)` (or iterate and call onabort with the signal's reason) so pre-aborted signals propagate."
+        },
+        {
+          "severity": "low",
+          "issue": "Asymmetric register/unregister paths can leak a listener. Every signal is registered with addEventListener (line 48), but unsubscribe (lines 41-43) removes via signal.unsubscribe(onabort) when that method exists, falling back to removeEventListener otherwise. For a signal that exposes both a subscribe/unsubscribe API and addEventListener, the addEventListener listener added on line 48 is never removed (unsubscribe(onabort) targets a subscription that was never created via subscribe).",
+          "line": "41-44, 48",
+          "suggestion": "Register and unregister through the same mechanism: if signal.subscribe/unsubscribe is the intended API, subscribe with it on line 48; otherwise drop the unsubscribe branch and always use add/removeEventListener."
+        },
+        {
+          "severity": "low",
+          "issue": "Redundant listener-removal logic. Line 48 attaches with { once: true }, so each listener auto-detaches after the first abort; the explicit removeEventListener('abort', onabort) in unsubscribe is then a no-op in the post-abort path. This is harmless but signals confused ownership of listener lifetime and masks the mismatch in the finding above.",
+          "line": "43, 48",
+          "suggestion": "Pick one strategy: either rely on { once: true } for the abort case and only manually remove when unsubscribing before abort, or drop { once: true } and remove explicitly. Avoid mixing both."
+        },
+        {
+          "severity": "info",
+          "issue": "The reason-resolution in onabort (line 20) relies on `this` being the dispatching signal when invoked as an event listener, and on `reason` being an Error only for the timeout/internal path. This is subtle but correct for the current call sites; worth a comment since a future caller invoking onabort with a non-Error, non-event `this` would produce `undefined` reason text.",
+          "line": "16-25",
+          "suggestion": "Add a brief comment documenting the two invocation modes (event-listener vs. explicit Error reason) to prevent regressions."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/cookies.js",
+      "purpose": "Browser cookie read/write/remove helper for axios (used for XSRF token handling), with a no-op fallback in non-standard browser environments.",
+      "findings": [
+        {
+          "severity": "low",
+          "issue": "write() encodeURIComponent-encodes the value but leaves `name` raw. If a caller passes a name containing cookie-delimiter characters (`;`, `=`, whitespace, control chars), the serialized `document.cookie` string is malformed and may set an unintended/garbage cookie. read() comparison is symmetric (also raw), so it stays self-consistent, but interop with code that percent-encodes names breaks.",
+          "line": "10, 42",
+          "suggestion": "Encode the name as well (e.g. `encodeURIComponent(name)`) on write and `decodeURIComponent` the compared name on read, or document that names must be token-safe per RFC 6265."
+        },
+        {
+          "severity": "low",
+          "issue": "remove() depends on `this` resolving to the cookie object (`this.write(...)`). Because these are shorthand object methods, destructuring (`const {remove} = cookies; remove('x')`) loses the binding and throws `Cannot read properties of undefined`. The fragility is latent but real for any consumer that extracts the method.",
+          "line": "54",
+          "suggestion": "Reference the enclosing object directly or expose a module-level write function so remove() does not rely on dynamic `this`."
+        },
+        {
+          "severity": "low",
+          "issue": "A cookie serialized without a value (a bare `name` with no `=`, which browsers can produce) is silently unmatchable: `eq === -1` skips it, so read('name') returns null even when the name is present. Minor semantic gap versus treating a valueless cookie as an empty string.",
+          "line": "41-42",
+          "suggestion": "If valueless cookies should be findable, treat `eq === -1` as name===cookie with an empty-string value."
+        },
+        {
+          "severity": "info",
+          "issue": "sameSite/secure are written without coupling validation: SameSite=None without `secure` is rejected by modern browsers, so a caller can produce a cookie the browser silently drops. Not strictly the helper's responsibility (it just serializes attributes), but worth noting.",
+          "line": "21-26",
+          "suggestion": "Optionally warn or auto-set secure when sameSite==='None'; otherwise document that the caller owns attribute consistency."
+        },
+        {
+          "severity": "info",
+          "issue": "Overall the file is solid: read() correctly avoids the classic RegExp-from-cookie-name ReDoS/mismatch pitfall (good comment), does exact name matching via indexOf/slice (no prefix-collision bug), guards `typeof document === 'undefined'`, and wraps decodeURIComponent in try/catch to tolerate malformed percent-encoding. No correctness, security, or resource-leak defects found.",
+          "line": "31-51",
+          "suggestion": "No action required."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/deprecatedMethod.js",
+      "purpose": "Logs a console warning that a given method is deprecated, optionally suggesting a replacement method and a docs URL.",
+      "findings": [
+        {
+          "severity": "info",
+          "issue": "File is clean. This is a minimal, side-effect-only deprecation warning helper. String concatenation is well-formed, the optional `instead`/`docs` parameters are correctly guarded with truthy checks, and the whole body is wrapped in a try/catch that swallows any error (e.g. environments lacking `console.warn`), so it cannot throw. No correctness bugs, edge cases, security issues, or resource leaks. Minor (non-blocking) notes: the broad empty catch silently hides all failures, and non-string args would be coerced via concatenation, but both are intentional/acceptable for a dev-only warning util.",
+          "line": "15-31",
+          "suggestion": "No change required."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/estimateDataURLDecodedBytes.js",
+      "purpose": "Estimates the decoded byte length of a data: URL (base64 or percent-encoded) without allocating a decode buffer, intended as a DoS/size guard.",
+      "findings": [
+        {
+          "severity": "medium",
+          "issue": "Unpadded base64 underestimates decoded size. groups = Math.floor(effectiveLen/4) silently drops the final partial group when the base64 body length is not a multiple of 4 and has no '=' padding (common in base64url). E.g. a 4-byte payload encodes to 6 unpadded chars; atob/Buffer decode it to 4 bytes, but this returns floor(6/4)*3 = 3. For a size guard, underestimation is the unsafe direction (lets slightly-larger-than-limit payloads through). Bounded to <=2 bytes, but it diverges from how the actual decoder behaves.",
+          "line": "73-75",
+          "suggestion": "For a non-multiple-of-4 remainder r (2 or 3 chars with no padding), add the partial-group bytes: r===2 -> +1, r===3 -> +2. Or document that only canonically-padded base64 is supported."
+        },
+        {
+          "severity": "medium",
+          "issue": "Padding/effectiveLen logic assumes well-formed base64 and can drive the result negative -> clamped to 0. Because each '%3D' is also subtracted by the main loop (effectiveLen -= 2) AND counted as a pad, a crafted/mixed body (e.g. 'A%3D=') can yield groups*3 - pad < 0, returning 0. pad is also subtracted even when effectiveLen is not a multiple of 4. A maliciously malformed base64 body could under-report its size.",
+          "line": "46-74",
+          "suggestion": "Clamp/validate: only subtract padding when groups>0 and effectiveLen%4===0; treat mixed/invalid padding conservatively (round up) rather than allowing the estimate to collapse to 0."
+        },
+        {
+          "severity": "low",
+          "issue": "Docstring claims 'exact decoded size' but the base64 path counts embedded whitespace/newlines (and any non-alphabet chars) toward effectiveLen. Standard MIME base64 is line-wrapped, so this overestimates. Overestimation is safe for a guard, but contradicts the 'exact' claim and can cause spurious rejections of legitimate wrapped base64.",
+          "line": "3, 30-44",
+          "suggestion": "Either skip whitespace in the effectiveLen count, or soften the docstring from 'exact' to 'upper-bound estimate'."
+        },
+        {
+          "severity": "low",
+          "issue": "Non-base64 path's claim to match decodeURIComponent breaks on malformed percent sequences. A lone '%' or invalid '%G0' is counted as a 1-byte ASCII char, whereas decodeURIComponent(body) throws. The estimate then describes bytes for an input the real decode path would reject, so the two diverge on error inputs.",
+          "line": "78-104",
+          "suggestion": "Document that malformed percent sequences are counted literally (estimate-only), or have the caller treat a decode throw as a hard reject independent of this estimate."
+        },
+        {
+          "severity": "info",
+          "issue": "No resource leaks or allocation issues; the function is O(body.length) with no buffer allocation, matching its stated goal. It still performs a full linear scan over potentially multi-MB strings, but that work is unavoidable for an allocation-free estimate and is the intended tradeoff.",
+          "line": "n/a",
+          "suggestion": "No action needed; optionally short-circuit once a running total exceeds the caller's limit to avoid scanning the entire oversized body."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/formDataToJSON.js",
+      "purpose": "Converts a FormData object into a nested plain JS object by parsing bracket/dot path keys (e.g. `foo[x][y]`) into nested structures, with depth limiting and prototype-pollution guarding.",
+      "findings": [
+        {
+          "severity": "low",
+          "issue": "Prototype-pollution guard only blocks the literal segment `__proto__` (line 81). It does not block `constructor`/`prototype` segments. In practice the `constructor`/`prototype` vector is neutralized because line 99 (`!utils.isObject(target[name])`) overwrites the function-valued `constructor` property with a fresh own array, so Object.prototype is never reached. The protection is therefore effective today but is implicit and fragile: any future change to the line-99 overwrite logic (e.g. preserving existing object-typed values) would silently re-open a `constructor[prototype][x]` pollution path.",
+          "line": "81, 99",
+          "suggestion": "Make the intent explicit and defensive: reject any segment in a denylist {'__proto__','constructor','prototype'} in parsePropPath/buildPath rather than relying on the incidental overwrite behavior."
+        },
+        {
+          "severity": "low",
+          "issue": "Silent data loss / clobbering on mixed scalar+container keys. Line 99 unconditionally replaces any existing non-object value with `[]`, and lines 87-94 wrap an existing scalar into an array. So `foo=1&foo[bar]=2` discards the scalar `1` (replaced by `{bar:2}`), while `foo=1&foo=2` produces `[1,2]`. The asymmetry is surprising and there is no warning when an existing leaf is destroyed.",
+          "line": "87-94, 99-101",
+          "suggestion": "This mirrors upstream behavior, so likely intentional, but worth a code comment documenting that container keys win over scalar keys and clobber them, to prevent future 'bug' reports."
+        },
+        {
+          "severity": "low",
+          "issue": "Numeric-key detection via `Number.isFinite(+name)` (line 83) treats exotic numeric strings as array indices. Keys like `'1e3'`, `'0x10'`, `' 5 '` (whitespace) and `'1_000'`? \u2014 at minimum `+'1e3'===1000` and `+'0x10'===16` are finite, so such keys are flagged numeric and influence the array-vs-object conversion at lines 105-107, producing an index that does not round-trip with the original string key.",
+          "line": "83",
+          "suggestion": "If exact array-index semantics matter, gate on an integer-string regex (e.g. /^\\d+$/) instead of generic numeric coercion."
+        },
+        {
+          "severity": "info",
+          "issue": "JSDoc type errors: line 71 documents `@param {string} formData` but it is a FormData object, and the `arrayToObject` parameter doc (line 51) is fine but the `formDataToJSON` return doc says it can be `null` (correct, line 122). The `{string}` mislabel is misleading for API consumers.",
+          "line": "71",
+          "suggestion": "Change `@param {string} formData` to `@param {Object} formData` (the FormData instance)."
+        },
+        {
+          "severity": "info",
+          "issue": "Depth guard has a benign off-by-one: throwIfDepthExceeded throws only when index > MAX_DEPTH, and in parsePropPath it is checked before the push (line 41), so a path of MAX_DEPTH+1 segments is accepted before throwing on the next segment. Not a security issue (still O(n) and bounded) but the effective allowed depth is MAX_DEPTH+1, which may differ from the documented/intended limit.",
+          "line": "9-16, 40-43, 77",
+          "suggestion": "If MAX_DEPTH is meant to be the inclusive max, use `>= MAX_DEPTH` or document the +1 so the limit is unambiguous."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/formDataToStream.js",
+      "purpose": "Serializes a web FormData instance into a multipart/form-data Node Readable stream, computing the multipart boundary, per-part headers, and an overall Content-Length.",
+      "findings": [
+        {
+          "severity": "medium",
+          "issue": "Typed-array part values silently drop the Content-Length header. encode() (lines 46-47) explicitly supports a value that is a typed array by yielding it directly, but contentLength is computed as `value.size` for any non-string value (line 33). Typed arrays have no `.size` property (that is a Blob API), so contentLength becomes undefined, this.size (line 35) becomes NaN, and the whole accumulated contentLength becomes NaN. toFiniteNumber(NaN) returns null (line 95), so Number.isFinite is false and the Content-Length header is omitted (lines 101-103). Any FormData containing a raw typed array (e.g. a Buffer) therefore forces chunked transfer with no declared length.",
+          "line": "33, 35, 46-47",
+          "suggestion": "Compute contentLength as `isStringValue ? value.byteLength : (utils.isTypedArray(value) ? value.byteLength : value.size)`, mirroring the branching in encode()."
+        },
+        {
+          "severity": "low",
+          "issue": "A caller-supplied `boundary` option is validated only for length (1-70 chars, lines 79-81) but never for content. It is interpolated unsanitized into the body delimiter bytes (lines 83-84) and into the Content-Type response header (line 98). A boundary containing CR/LF or other illegal characters would corrupt the multipart framing or inject header content. Field names, filenames, and content-types are carefully escaped (lines 20-28, 55-65), so the boundary is the one un-sanitized input.",
+          "line": "79-84, 98",
+          "suggestion": "Reject boundaries that contain characters outside the RFC 2046 bcharsnospace set (or at minimum strip/forbid CR, LF, and other control characters) in addition to the length check."
+        },
+        {
+          "severity": "low",
+          "issue": "String part values are fully encoded into memory at part-construction time (line 25) for every entry up front (lines 87-91), before the stream is consumed. For large string fields this buffers the entire payload in memory, partially defeating the streaming design (Blob values, by contrast, stay lazy via readBlob at line 49).",
+          "line": "25, 87-91",
+          "suggestion": "Acceptable for small fields, but document the trade-off; consider lazily encoding string values inside encode() if large text fields are expected."
+        },
+        {
+          "severity": "low",
+          "issue": "The newline-normalization regex `/\\r?\\n|\\r\\n?/g` (line 25) is redundant and confusing: the first alternative `\\r?\\n` already matches `\\n` and `\\r\\n`, and the second `\\r\\n?` exists only to catch a lone `\\r`. It happens to produce correct CRLF normalization but the overlapping alternatives obscure intent and invite future regressions.",
+          "line": "25",
+          "suggestion": "Replace with the clearer equivalent `/\\r\\n|\\r|\\n/g` (or `/\\r?\\n|\\r/g`)."
+        },
+        {
+          "severity": "info",
+          "issue": "Positive: header-injection vectors are properly handled \u2014 field name and filename escape CR, LF, and double-quote (lines 20-22, 55-65), and Content-Type strips CR/LF (line 27). The header/body length accounting (boundaryBytes per part + footer, lines 85-93) is consistent with what the generator actually emits (lines 109-114).",
+          "line": "20-28, 85-93",
+          "suggestion": "No action needed; noted to confirm these areas were reviewed."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/fromDataURI.js",
+      "purpose": "Parses an RFC 2397 data: URI into a Node Buffer or a Blob, honoring base64/percent encoding and the optional media type + parameters.",
+      "findings": [
+        {
+          "severity": "medium",
+          "issue": "For non-base64 data URIs the body is run through decodeURIComponent(body). Malformed percent sequences (e.g. a lone '%' or '%zz', which are easy to produce in a data: URL) make decodeURIComponent throw a raw URIError. That escapes the function uncaught, violating the function's error contract (every other failure path throws an AxiosError with a typed code).",
+          "line": "54",
+          "suggestion": "Wrap the decodeURIComponent call in try/catch and rethrow as new AxiosError('Invalid URL', AxiosError.ERR_INVALID_URL), so malformed input fails consistently with the regex-mismatch path."
+        },
+        {
+          "severity": "medium",
+          "issue": "No bound on the decoded payload size. Buffer.from(body, 'base64'|...) allocates a buffer proportional to the URI length, and the regex body group ([\\s\\S]*) accepts unlimited input. A very large data: URI (e.g. from a redirect/Location or user-supplied URL) causes unbounded memory allocation \u2014 a denial-of-service / memory-exhaustion vector.",
+          "line": "52-54",
+          "suggestion": "Accept/enforce a max size (e.g. via options.maxContentLength) and reject oversized payloads before allocating, or stream/validate length first."
+        },
+        {
+          "severity": "low",
+          "issue": "Protocol comparison is case-sensitive. parseProtocol returns the scheme verbatim (no lowercasing \u2014 see parseProtocol.js line 5), so a perfectly valid 'DATA:' or 'Data:' URI fails the protocol === 'data' check and is rejected as 'Unsupported protocol'. Per RFC 3986 URI schemes are case-insensitive.",
+          "line": "29",
+          "suggestion": "Compare case-insensitively, e.g. (protocol && protocol.toLowerCase()) === 'data'."
+        },
+        {
+          "severity": "low",
+          "issue": "The media-type parameters group ((?:;[^,;=]+=[^,;]+)*) requires every parameter to have a non-empty value. A valueless parameter (';flag') or empty value (';charset=') causes the whole regex to fail and throw 'Invalid URL', even though such forms appear in real-world data URIs. This is stricter than the upstream axios pattern and silently changes accepted input.",
+          "line": "9,34-35",
+          "suggestion": "Loosen the parameter sub-pattern to tolerate empty/absent values, or document the intentional strictness; confirm against the existing axios test corpus."
+        },
+        {
+          "severity": "low",
+          "issue": "Base64 decoding via Buffer.from(body, 'base64') is lenient: invalid base64 characters are silently dropped and truncated input yields a partial buffer rather than an error. Corrupt input therefore produces wrong bytes with no signal to the caller.",
+          "line": "52-53",
+          "suggestion": "If integrity matters, validate the base64 body (e.g. round-trip re-encode and compare, or regex-validate the alphabet/padding) before trusting the decoded buffer."
+        },
+        {
+          "severity": "info",
+          "issue": "The nested-quantifier params group ((?:;[^,;=]+=[^,;]+)*) is delimiter-anchored on ';' (which is excluded from both inner classes), so backtracking is bounded and catastrophic ReDoS is unlikely. Noted only as a surface to keep an eye on if the pattern is later relaxed.",
+          "line": "9",
+          "suggestion": "No change required; avoid introducing overlapping/ambiguous character classes if the parameter pattern is broadened later."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/parseHeaders.js",
+      "purpose": "Parses a raw HTTP response-header string into a lowercased key/value object, joining duplicate headers (except an ignore-list) and collecting set-cookie into an array.",
+      "findings": [
+        {
+          "severity": "low",
+          "issue": "A header literally named `__proto__` is silently dropped instead of being captured. `parsed[key]` (line 53/64) reads through Object.prototype for key `__proto__`, which is truthy, so it falls into the concat branch and assigns a string to the `__proto__` setter \u2014 JS ignores string assignment to `__proto__`, so the value never appears in `parsed`. Not a pollution vuln (string assignment is a no-op), but it means a `__proto__` (or `constructor`/`prototype`) header is lost and the `if (parsed[key] && ...)` dedupe check misbehaves for these keys.",
+          "line": "53, 64",
+          "suggestion": "Build the result with `Object.create(null)` so bracket lookups/writes don't hit the prototype chain, making the dedupe check and storage correct for all header names."
+        },
+        {
+          "severity": "low",
+          "issue": "Lines without a colon are silently discarded. `indexOf(':')` returns -1, so `substring(0,-1)` clamps to '' and the line is dropped at the `!key` guard. This drops obsolete RFC 7230 line-folded continuation values (continuation lines start with whitespace and have no colon), so a folded multi-line header value loses its continuation.",
+          "line": "49-53",
+          "suggestion": "Acceptable since obsolete line folding is deprecated, but worth a comment documenting that continuation lines are intentionally ignored."
+        },
+        {
+          "severity": "low",
+          "issue": "No type guard on `rawHeaders` beyond truthiness. The `rawHeaders &&` short-circuit handles null/undefined/empty-string, but a non-string truthy value (number, object) would throw on `.split`. JSDoc types it as String, so this depends on every caller honoring the contract.",
+          "line": "47-48",
+          "suggestion": "Optionally coerce or guard (`typeof rawHeaders === 'string'`) for defensiveness, or rely on the documented String contract if all call sites are trusted."
+        },
+        {
+          "severity": "info",
+          "issue": "Module-scoped-looking vars `key`/`val`/`i` are actually declared inside the exported function (lines 43-45) and the forEach callback is synchronous, so there is no shared-state/re-entrancy bug across concurrent calls. The intentional type asymmetry (set-cookie -> array, others -> comma-joined string) is also by design and matches the HTTP/axios contract.",
+          "line": "43-66",
+          "suggestion": "No change needed; this is standard battle-tested axios behavior."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/progressEventReducer.js",
+      "purpose": "Builds a throttled progress-event callback (loaded/total/rate/estimated) for axios upload/download streams, plus decorator helpers.",
+      "findings": [
+        {
+          "severity": "medium",
+          "line": "13-19, 24",
+          "issue": "loaded is silently clamped to total (Math.min(rawLoaded, total)) and bytesNotified is monotonically pinned with Math.max. If the actual transferred byte count exceeds the declared total (e.g. chunked/gzip transfer or an inaccurate Content-Length), the listener never sees the true 'loaded', and once loaded hits total every later chunk yields progressBytes=0. Progress appears frozen at 100% while data is still flowing, and the speedometer is fed 0-byte samples that decay the reported rate to nothing.",
+          "suggestion": "Only clamp for the progress/estimated math; report the real rawLoaded to consumers, or at minimum document that loaded is capped so downstream UIs don't read it as ground truth."
+        },
+        {
+          "severity": "low",
+          "line": "14-15, 24, 29",
+          "issue": "Zero-length body edge case: with lengthComputable=true and e.total===0, line 15 forces loaded=0, line 24 (`total ? loaded/total : undefined`) reports progress=undefined instead of a completed 1, yet line 29 still reports lengthComputable=true. A consumer waiting for progress===1 to detect completion of an empty/zero-byte response never gets it.",
+          "suggestion": "Special-case total===0 to emit progress=1 (or document that empty bodies never reach progress 1)."
+        },
+        {
+          "severity": "low",
+          "line": "9-34, 40-48",
+          "issue": "Implicit tuple contract is fragile: progressEventReducer now returns throttle's [throttled, flush] tuple, and progressEventDecorator indexes throttled[0]/throttled[1] with no shape check. Any caller still treating the return value as a directly-callable function (the older single-function API) fails silently/obscurely rather than with a clear error.",
+          "suggestion": "Add a brief comment documenting the [invoke, flush] tuple return, or a lightweight guard so misuse fails loudly."
+        },
+        {
+          "severity": "info",
+          "line": "5-54",
+          "issue": "Aside from the items above, the module is a clean, well-guarded reducer: the `!e || typeof e.loaded !== 'number'` guard (line 10) prevents NaN math, division-by-rate at line 27 is safe because rate is truthy-checked, and there are no resource leaks introduced here (the only setTimeout lives in throttle.js).",
+          "suggestion": "No change required; treat the medium/low items as hardening opportunities."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/resolveConfig.js",
+      "purpose": "Normalizes a request config: merges defaults, builds the full URL, sets Basic-auth, FormData, and XSRF headers, with prototype-pollution and cross-origin hardening.",
+      "findings": [
+        {
+          "severity": "medium",
+          "issue": "Basic-auth username is NOT passed through encodeUTF8 like the password is (line 72). btoa() can only encode code points <=0xFF, so any username containing a non-Latin-1 character (accents, CJK, emoji) makes btoa throw InvalidCharacterError, which is rethrown as ERR_BAD_OPTION_VALUE and rejects otherwise-valid credentials. The asymmetric treatment (password encoded, username not) is inconsistent and surprising.",
+          "line": "66-73",
+          "suggestion": "Apply the same UTF-8 encoding to the username: btoa(encodeUTF8(username) + ':' + (password ? encodeUTF8(password) : '')). Encoding ':' as part of username is unnecessary but harmless; alternatively encode each component."
+        },
+        {
+          "severity": "low",
+          "issue": "`getSafeProp(auth,'password') || ''` (and the same for username) coerces any falsy-but-valid value to ''. A password supplied as the number 0 or an empty-but-intended value is silently dropped. Also the later `password ? encodeUTF8(password) : ''` re-checks truthiness, so a legitimately empty-string password and a missing password are indistinguishable. Minor, but credentials should not be silently altered.",
+          "line": "66-67",
+          "suggestion": "Prefer explicit null/undefined checks (e.g. value == null ? '' : String(value)) so only genuinely absent credentials become empty."
+        },
+        {
+          "severity": "low",
+          "issue": "In the 'content-only' FormData branch, header values from data.getHeaders() are forwarded verbatim via headers.set(key, val) without validating they are scalar strings. Node form-data normally returns single string values, but a custom object whose getHeaders() returns array/multi-line values could inject unexpected header content. Low risk since getHeaders is library-controlled, not user input.",
+          "line": "19-23",
+          "suggestion": "Document the trust assumption on data.getHeaders(), or coerce/validate val to a single-line string before set()."
+        },
+        {
+          "severity": "info",
+          "issue": "The XSRF logic (strict `withXSRFToken === true` opt-in, `== null` same-origin fallback), own-property-only reads via own()/getSafeProp to block prototype-pollution gadgets, and the modern encodeUTF8 replacement for the deprecated unescape(encodeURIComponent()) pattern are all implemented correctly. No resource leaks. The username-encoding gap aside, the security hardening is sound.",
+          "line": "n/a",
+          "suggestion": "No action required for the hardening itself; just address the username encoding noted above."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/sanitizeHeaderValue.js",
+      "purpose": "Strips disallowed control/non-token bytes from HTTP header values (Unicode and byte-string variants) and trims SP/HTAB, to prevent header injection on the wire.",
+      "findings": [
+        {
+          "severity": "low",
+          "issue": "Non-string inputs are coerced via String(value), so null/undefined/objects become the literal header values \"null\", \"undefined\", or \"[object Object]\" rather than being skipped or rejected. If a caller ever passes an unset/object value through sanitizeHeaderValue, a garbage header is silently emitted instead of the header being omitted.",
+          "line": "43",
+          "suggestion": "Decide on a contract for null/undefined: either short-circuit (return value unchanged / skip) before String() coercion, or document that callers must filter these out. Confirm toByteStringHeaderObject's source (headers.toJSON()) can never yield undefined."
+        },
+        {
+          "severity": "low",
+          "issue": "toByteStringHeaderObject hard-depends on headers.toJSON() existing. Passing a plain object or null/undefined throws a TypeError ('toJSON is not a function' / cannot read of null) rather than degrading gracefully.",
+          "line": "55",
+          "suggestion": "Guard the input (e.g. require an AxiosHeaders instance, or fall back to treating a plain object as the header map) and handle null/undefined headers explicitly."
+        },
+        {
+          "severity": "info",
+          "issue": "Sanitization strips invalid bytes in place rather than rejecting the value. This is the intended anti-CRLF-injection design (e.g. 'foo\\r\\nX-Evil: bar' collapses to 'fooX-Evil: bar', a single value) and the byte-string regex correctly removes CR/LF/C0/DEL; Object.create(null) at line 53 also avoids prototype pollution. Worth noting that silent stripping can mask caller bugs, so consider logging in development when characters are removed.",
+          "line": "34-36, 43, 53",
+          "suggestion": "Optionally surface a dev-mode warning when invalidChars actually matches, so upstream code passing malformed values can be caught."
+        },
+        {
+          "severity": "info",
+          "issue": "The Unicode variant (INVALID_UNICODE_HEADER_VALUE_CHARS) intentionally does not strip bytes >= 0x80, including Unicode newline-like code points U+0085 (NEL), U+2028, U+2029. This is safe here only because the byte-string variant is what is applied at the wire (toByteStringHeaderObject), which restricts to 0x09/0x20-0x7e/0x80-0xff. Ensure no path emits the Unicode-sanitized value directly onto the wire.",
+          "line": "34, 36",
+          "suggestion": "Document that sanitizeHeaderValue output must still pass through the byte-string sanitizer before transport; add a test asserting U+2028/U+2029 cannot reach the socket."
+        },
+        {
+          "severity": "info",
+          "issue": "Module-level global (/g) RegExp objects are shared across all calls. This is safe with String.prototype.replace (which ignores/resets lastIndex), but would silently misbehave if anyone later refactors to use .test()/.exec() on these shared instances due to lastIndex statefulness.",
+          "line": "34-36, 43",
+          "suggestion": "No change needed now; add a comment warning that these regexes are stateful-if-misused, or drop the /g + use replaceAll semantics, to prevent a future footgun."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/shouldBypassProxy.js",
+      "purpose": "Decides whether a request URL should bypass an HTTP proxy based on the NO_PROXY/no_proxy env var, with loopback/IPv6 equivalence handling.",
+      "findings": [
+        {
+          "severity": "medium",
+          "issue": "Over-broad loopback equivalence widens proxy bypass beyond what NO_PROXY lists. Line 208 returns true whenever BOTH the request host and a NO_PROXY entry are 'loopback', and isLoopback (line 72-78) folds together localhost, 127.0.0.0/8, ::1, AND the unspecified addresses 0.0.0.0 / :: (lines 16-39, 74). So a NO_PROXY value of just 'localhost' causes bypass for 127.0.0.1, [::1], 0.0.0.0 and [::] alike \u2014 including 0.0.0.0/:: which on Linux route to local services. If a security/inspection proxy is the control boundary, listing any one loopback form silently opens all of them, regardless of which form was specified.",
+          "line": "16-39, 208",
+          "suggestion": "Reconsider whether the unspecified address (0.0.0.0 / ::) should be classed as loopback for bypass, and document that ANY loopback NO_PROXY entry bypasses ALL loopback-equivalent forms. If symmetric folding is intended, make it explicit/configurable rather than implicit."
+        },
+        {
+          "severity": "medium",
+          "issue": "'*' only works as the ENTIRE NO_PROXY value, not as a list entry. The '*' fast-path is at line 174 before splitting. As a list entry (e.g. NO_PROXY=\"foo,*\" or NO_PROXY=\" * \" with whitespace), entry '*' passes the empty check (line 192), then line 201 strips the leading '*' to '' and falls through to line 208 where '' matches nothing \u2014 so it bypasses nothing. curl treats '*' anywhere as match-all.",
+          "line": "174, 200-201",
+          "suggestion": "Treat a bare '*' token within the split list as match-all, or trim NO_PROXY before the line 174 equality check."
+        },
+        {
+          "severity": "low",
+          "issue": "IPv6 loopback detection is asymmetric with the unspecified detection. isIPv6Loopback (line 41-70) only recognizes literal '::1', v4-mapped forms, and full 8-group all-zero+1; it does NOT handle compressed zero forms like '0::1' or '::0:1'. isIPv6Unspecified (line 16-39) DOES handle '::' compression. So a NO_PROXY entry written as '[0::1]' won't be recognized as loopback while '[::]' will. Request hostnames are canonicalized by the URL parser, but user-authored NO_PROXY entries are not.",
+          "line": "41-70",
+          "suggestion": "Handle '::' compression in isIPv6Loopback the same way isIPv6Unspecified does (single compression point, zero groups on both sides, trailing group matches /^0*1$/)."
+        },
+        {
+          "severity": "low",
+          "issue": "Leading-dot domain entries do not match the apex domain. With NO_PROXY='.example.com', line 205 uses hostname.endsWith('.example.com'), which is false for hostname 'example.com' itself. Many NO_PROXY implementations (and the '*.example.com' intent) treat the suffix entry as also covering the bare domain.",
+          "line": "204-205",
+          "suggestion": "If matching curl/common semantics, also match when hostname === entryHost.slice(1) (the apex), or document the intentional exclusion."
+        },
+        {
+          "severity": "low",
+          "issue": "Explicit ':0' port and unknown schemes interact oddly with the default-port fallback. Line 179 uses Number.parseInt(parsed.port,10) || DEFAULT_PORTS[scheme] || 0, so an explicit port 0 is replaced by the scheme default, and any scheme not in DEFAULT_PORTS yields port 0 \u2014 meaning a NO_PROXY entry that specifies a port can never match a request on an unknown scheme (line 196 fails since 0 !== entryPort). Edge case but can cause unexpected non-bypass.",
+          "line": "178-179, 196",
+          "suggestion": "Distinguish 'no port present' from 'port 0' (e.g. check parsed.port === '' before falling back) and decide intended behavior for schemes without a known default port."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/speedometer.js",
+      "purpose": "Factory returning a push(chunkLength) closure that estimates transfer rate (bytes/sec) over a sliding window of the last N samples, used by axios progress events.",
+      "findings": [
+        {
+          "severity": "low",
+          "line": "34-37, 49",
+          "issue": "Byte-window and time-window are misaligned by one sample. bytesCount sums bytes over [tail, head) \u2014 it INCLUDES the oldest sample's bytes (which arrived at startedAt, i.e. before the measured interval begins) and EXCLUDES the chunk just written at head (which arrived at `now`, inside the interval). Meanwhile `passed = now - timestamps[tail]` spans the full interval up to now. So numerator and denominator describe slightly different intervals, biasing the rate (it omits the newest chunk's bytes while charging the full elapsed time).",
+          "suggestion": "For steady streams the error roughly cancels, so this is acceptable for a progress estimate, but if accuracy matters, include the current chunk in the sum (loop to and including head, or sum [tail, head]) so the counted bytes match the [startedAt, now] window."
+        },
+        {
+          "severity": "low",
+          "line": "10",
+          "issue": "`samplesCount = samplesCount || 10` coerces a passed value of 0 to 10, and a negative argument flows into `new Array(samplesCount)` which throws RangeError (`Invalid array length`). No input validation on samplesCount.",
+          "suggestion": "Validate/normalize: e.g. `samplesCount = samplesCount > 0 ? Math.floor(samplesCount) : 10`. Document that 0/negative/non-integer are not accepted."
+        },
+        {
+          "severity": "low",
+          "line": "49-51",
+          "issue": "When two samples land in the same millisecond while the window is non-empty, `passed = now - startedAt` is 0, the ternary treats 0 as falsy, and the function returns `undefined` \u2014 silently dropping an otherwise-valid reading (and conflating it with the warm-up 'no data yet' case). On fast LANs/localhost sub-millisecond samples are common.",
+          "suggestion": "Acceptable as a divide-by-zero guard, but callers cannot distinguish 'too soon' from 'warming up'. Consider returning the previous/last rate or documenting that undefined means 'no estimate this tick'."
+        },
+        {
+          "severity": "info",
+          "line": "19-52",
+          "issue": "Return contract is implicit and bimodal: push() returns `undefined` during the initial `min`-ms warm-up window (line 45-46) and during the first sample, then a Number thereafter. Easy for callers to mishandle if they assume a number.",
+          "suggestion": "No code change needed; ensure callers guard for undefined. A JSDoc @returns note on the inner push() would help."
+        },
+        {
+          "severity": "info",
+          "line": "11-12, 28-37",
+          "issue": "No correctness bug, but worth noting the buffer is intentionally fixed-size (circular), so there is no unbounded growth / resource leak, and the sum loop only ever reads the filled range [tail, head), so the sparse `new Array(n)` holes are never summed (no NaN during warm-up). This part is sound.",
+          "suggestion": "None \u2014 confirming the memory/sparse-array behavior is safe."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/spread.js",
+      "purpose": "Returns a wrapper that calls a callback with an array spread into positional arguments (Function.prototype.apply sugar).",
+      "findings": [
+        {
+          "severity": "info",
+          "issue": "File is clean. spread(callback) returns wrap(arr) => callback.apply(null, arr). Correct, side-effect-free, and matches the documented contract. No correctness bugs, security issues, or resource leaks.",
+          "line": "24-28",
+          "suggestion": "No change needed. Minor optional notes: passing a non-array/array-like to wrap throws a TypeError from apply (acceptable, caller contract); callback context is hardcoded to null which is intentional for this sugar. Neither warrants a change."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/throttle.js",
+      "purpose": "Throttle decorator: wraps a function so it runs at most `freq` times/second, with a leading-edge call plus a trailing-edge call carrying the latest args.",
+      "findings": [
+        {
+          "severity": "medium",
+          "issue": "No validation of `freq`. `threshold = 1000 / freq` (line 9) silently misbehaves for invalid inputs: `freq <= 0` yields a negative/Infinity threshold so `passed >= threshold` is always true and throttling is effectively disabled (every call fires immediately); `freq = 0` or `NaN` produces Infinity/NaN, where `setTimeout(..., threshold - passed)` is coerced to 0 and the leading call is also deferred to a macrotask instead of running synchronously.",
+          "line": "9, 26, 34",
+          "suggestion": "Validate `freq` is a finite positive number at construction (throw or clamp), e.g. `if (!(freq > 0)) throw new TypeError('freq must be > 0')`."
+        },
+        {
+          "severity": "medium",
+          "issue": "No way to cancel a pending trailing call. A timer scheduled at lines 31-34 will still fire and invoke `fn` after the consumer has stopped using the throttled function (e.g. component teardown), causing a late/stale invocation and keeping a timer alive. `flush` only forces the call early; there is no `cancel` to clear `timer` and drop `lastArgs`.",
+          "line": "30-34, 39",
+          "suggestion": "Expose a `cancel`/`clear` function that does `clearTimeout(timer); timer = null; lastArgs = null;` and document that the caller must clean up on teardown."
+        },
+        {
+          "severity": "low",
+          "issue": "Exceptions thrown by `fn` are handled inconsistently. On the leading path `fn(...args)` (line 20) propagates synchronously to the caller, but on the trailing path it runs inside the setTimeout callback (line 33), so a throw becomes an unhandled exception detached from the call site, and any subsequent trailing logic state is left as-is.",
+          "line": "20, 33",
+          "suggestion": "Wrap `fn(...args)` in try/finally inside `invoke` so timer/lastArgs bookkeeping and error surfacing are consistent across leading and trailing paths."
+        },
+        {
+          "severity": "low",
+          "issue": "`flush` semantics are weak: `lastArgs && invoke(lastArgs)` returns the falsy `lastArgs` (e.g. `null`) when nothing is pending and otherwise returns `invoke`'s `undefined`, so the return value is not meaningful. It also silently no-ops when a trailing call is already pending-but-not-yet-due is fine, but the truthiness guard would skip a legitimately-empty args array only if `lastArgs` were ever set to a falsy value (not currently possible, but fragile).",
+          "line": "39",
+          "suggestion": "Make the intent explicit: `if (timer || lastArgs) { invoke(lastArgs || []); }` and return nothing, or return a boolean indicating whether a flush occurred."
+        },
+        {
+          "severity": "info",
+          "issue": "The function returns a positional tuple `[throttled, flush]` (line 41). This is an unusual, easy-to-misuse API (callers must remember order and cannot discover names); a named object `{ throttled, flush }` would be clearer and extensible (e.g. adding `cancel`).",
+          "line": "41",
+          "suggestion": "Return `{ throttled, flush }` (and a future `cancel`) instead of a bare array, or at minimum document the tuple order in the JSDoc."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/toFormData.js",
+      "purpose": "Serializes a JS object/array tree into a (platform) FormData instance, with depth limiting, circular-reference detection, and configurable key rendering (brackets/dots/indexes).",
+      "findings": [
+        {
+          "severity": "low",
+          "issue": "Inconsistent error contract: the Blob-unsupported throw omits the AxiosError code, unlike the structurally identical throw at line 153 which passes AxiosError.ERR_NOT_SUPPORT. Callers inspecting err.code get undefined for this path, and the message is also missing the usual code/config/request args.",
+          "line": "143",
+          "suggestion": "Throw `new AxiosError('Blob is not supported. Use a Buffer instead.', AxiosError.ERR_NOT_SUPPORT)` to match line 153."
+        },
+        {
+          "severity": "low",
+          "issue": "Circular-reference detection throws a plain Error rather than an AxiosError, so it lacks a .code (e.g. ERR_*) and breaks the consistent error typing used everywhere else in this file. Code that does `instanceof AxiosError` / `err.code` checks will not catch it.",
+          "line": "258-259",
+          "suggestion": "Throw an AxiosError with a dedicated code, e.g. `new AxiosError('Circular reference detected in ' + path.join('.'), AxiosError.ERR_...)`."
+        },
+        {
+          "severity": "low",
+          "issue": "Dead / unreachable code: this second `!utils.isObject(obj)` guard can never fire because the identical check at line 95 already threw before `formData`/`options` were even built. The two guards also use different messages ('target must be an object' vs 'data must be an object'), which is confusing.",
+          "line": "277-279",
+          "suggestion": "Remove the redundant block (or consolidate into the single guard at line 95)."
+        },
+        {
+          "severity": "low",
+          "issue": "Module-level `predicates` (built once at line 67) is mutated on every toFormData() call via Object.assign, permanently grafting per-call closures (defaultVisitor/convertValue) onto the shared object and aliasing exposedHelpers === predicates. It works only because JS is single-threaded and each call overwrites synchronously before use, but it leaks per-invocation closures into shared module state and is a fragile pattern.",
+          "line": "247-251",
+          "suggestion": "Build exposedHelpers as a fresh object per call: `const exposedHelpers = {...predicates, defaultVisitor, convertValue, isVisitable};`"
+        },
+        {
+          "severity": "low",
+          "issue": "Fallback `new (PlatformFormData || FormData)()` references the bare global `FormData`; if PlatformFormData were ever falsy in an environment without a global FormData, this throws a ReferenceError rather than a clear error. (In practice PlatformFormData is always imported here, so this is latent.)",
+          "line": "100",
+          "suggestion": "Guard with `typeof FormData !== 'undefined'` or throw a descriptive AxiosError when no FormData implementation is available."
+        },
+        {
+          "severity": "info",
+          "issue": "Core logic (depth limiting via throwIfMaxDepthExceeded, circular detection via the shared stack with push/pop balanced around recursion, convertValue type handling, and key rendering) is correct and consistent with axios behavior; no correctness or resource-leak bugs found beyond the minor consistency items above.",
+          "line": "n/a",
+          "suggestion": "No action required."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/trackStream.js",
+      "purpose": "Wraps a readable stream/async-iterable to re-chunk it to a target size and report byte-progress, exposing it as a Web ReadableStream with finish/cancel callbacks.",
+      "findings": [
+        {
+          "severity": "low",
+          "issue": "streamChunk can infinite-loop on a non-positive chunkSize. A negative chunkSize passes the `!chunkSize || len < chunkSize` guard (line 4) when len>0, then in the loop `end = pos + chunkSize` (line 13) is <= pos, so `pos = end` never advances toward len, yielding empty/zero-length slices forever.",
+          "line": "4,12-16",
+          "suggestion": "Guard against chunkSize <= 0 explicitly (e.g. treat chunkSize<=0 as 'no chunking') instead of relying on falsy-check, so only 0/undefined/null bypass chunking and negatives don't reach the loop."
+        },
+        {
+          "severity": "low",
+          "issue": "Shadowing of `done` hurts readability and is fragile. The outer finish-guard `done` (line 49) is shadowed by the destructured stream-`done` (line 61). _onFinish relies on the closure's outer `done`, which works, but reusing the identical name for two distinct booleans invites a future edit to break the single-call guarantee.",
+          "line": "49,61",
+          "suggestion": "Rename one of them (e.g. outer `finished`, or destructure as `{ done: streamDone, value }`)."
+        },
+        {
+          "severity": "low",
+          "issue": "Unnecessary copy when len === chunkSize. With len equal to chunkSize, the fast-path `len < chunkSize` is false, so execution enters the while loop and produces a single `chunk.slice(...)` copy of the entire chunk instead of yielding the original buffer.",
+          "line": "4,14",
+          "suggestion": "Use `len <= chunkSize` in the fast-path guard to yield the chunk directly when it already fits."
+        },
+        {
+          "severity": "low",
+          "issue": "A non-done chunk whose value is null/undefined throws. pull() reads `value.byteLength` (line 69) without verifying value is defined; readStream yields raw reader values, so a stream delivering `{done:false, value:undefined}` would throw a TypeError that is then surfaced via _onFinish/throw. Rare for spec-compliant streams but unguarded.",
+          "line": "34,38,69",
+          "suggestion": "Skip/continue on nullish chunk values, or assert value before measuring byteLength."
+        },
+        {
+          "severity": "info",
+          "issue": "Resource cleanup is correct: cancel() and the generator finally chain (reader.cancel in readStream) release the reader on early termination and errors, and _onFinish is idempotent via the `done` guard. No leak found.",
+          "line": "40-42,50-55,80-83",
+          "suggestion": "No change needed."
+        }
+      ]
+    },
+    {
+      "file": "lib/helpers/validator.js",
+      "purpose": "Builds type validators and an assertOptions() helper that axios uses to validate config option shapes, including transitional/deprecated option handling.",
+      "findings": [
+        {
+          "severity": "low",
+          "line": "94",
+          "issue": "`value === undefined || validator(...)` short-circuits ALL validation when an option value is undefined, including the `transitional(false)` removed-option guard (lines 41-46). A caller that explicitly passes a removed option with value `undefined` (e.g. `{ removedOpt: undefined }`) silently skips the intended ERR_DEPRECATED throw instead of being warned/rejected.",
+          "suggestion": "For transitional removed options the presence of the key matters, not its value. Consider letting the validator decide on undefined (run the validator regardless and let it opt to ignore undefined), or special-case the `validator === false` removal path so it fires whenever the key is present."
+        },
+        {
+          "severity": "low",
+          "line": "48-57",
+          "issue": "Deprecation/removal notices rely on module-level mutable maps (`deprecatedWarnings`, line 15) and `console.warn`. `deprecatedWarnings[opt]` is keyed only by the option name, so two different options or two transitional validators that share a name would suppress each other's warning, and there is no way to reset it for testing.",
+          "suggestion": "Acceptable as a once-per-process dedupe, but key by something more specific (opt+version) if distinct deprecations can share an option name, and consider routing through a pluggable warning sink instead of console directly."
+        },
+        {
+          "severity": "info",
+          "line": "11",
+          "issue": "`'a' + (i < 1 ? 'n ' : ' ') + type` hardcodes that only index 0 ('object') needs the article 'an'. It happens to be correct for this fixed list (object is the only vowel-initial type), but the article logic is positional rather than based on the word, so adding/reordering types later could produce 'a object' / 'an number'.",
+          "suggestion": "Minor; if the type list ever changes, derive the article from the first letter of `type` rather than the index."
+        },
+        {
+          "severity": "info",
+          "line": "89-107",
+          "issue": "No real defect: assertOptions correctly guards prototype pollution by using `Object.prototype.hasOwnProperty.call(schema, opt)` (lines 89-91) and null-checks `options` (line 82). Iterating keys via `while (i-- > 0)` and the `value === undefined` skip are intentional. The module is otherwise clean and well-hardened.",
+          "suggestion": "No action needed."
+        }
+      ]
+    },
+    {
+      "file": "lib/platform/common/utils.js",
+      "purpose": "Detects the JS runtime environment (browser, web worker, react-native) and exposes capability flags plus the request origin, used by axios to pick platform-appropriate behavior.",
+      "findings": [
+        {
+          "severity": "info",
+          "issue": "File is clean. This is a small, well-scoped feature-detection module with no correctness bugs, leaks, or security issues. All checks guard against undefined globals (window, document, navigator, WorkerGlobalScope) before dereferencing them, so it is safe to evaluate in any runtime.",
+          "line": "1-52",
+          "suggestion": "No changes required. Minor optional notes below."
+        },
+        {
+          "severity": "low",
+          "issue": "`origin` is computed once at module load from window.location.href. If a host environment mutates location after import (e.g. SPA navigation via history API), the cached value can go stale. For axios's same-origin checks this is fine because origin (scheme+host+port) does not change on in-app navigation, but a reader might assume it tracks the current URL.",
+          "line": "44",
+          "suggestion": "If a live value is ever needed, expose a getter instead of a frozen constant; otherwise leave as-is and document that it captures the load-time origin.",
+          "suggestion_note": "non-blocking"
+        },
+        {
+          "severity": "info",
+          "issue": "hasStandardBrowserEnv treats absence of navigator (`!_navigator`) as 'standard browser'. This is intentional (some browsers lacked navigator.product historically) but means an exotic non-browser env that sets window+document without navigator would be classified as a standard browser.",
+          "line": "22-24",
+          "suggestion": "Acceptable given the hasBrowserEnv gate already requires window and document; no action needed."
+        }
+      ]
+    },
+    {
+      "file": "lib/platform/node/index.js",
+      "purpose": "Node.js platform shim for axios: exposes platform classes (URLSearchParams, FormData, Blob), supported protocols, and a CSPRNG-backed random string generator used for multipart boundaries.",
+      "findings": [
+        {
+          "severity": "low",
+          "issue": "Modulo bias in generateString: `randomValues[i] % length` maps a uniform 32-bit value onto an alphabet whose size (e.g. 62 or 26) does not evenly divide 2^32, so lower-indexed characters are very slightly more probable. The bias is negligible (~2^-32 relative) and the function is only used for multipart boundaries, not secrets, so impact is minimal.",
+          "line": "21",
+          "suggestion": "For full uniformity use rejection sampling (discard values >= floor(2^32/length)*length). Acceptable to leave as-is given the non-security usage, but worth a comment noting boundaries are not security-sensitive."
+        },
+        {
+          "severity": "info",
+          "issue": "generateString does not validate `alphabet.length > 0`. Calling with an empty alphabet yields `randomValues[i] % 0` = NaN, and `''[NaN]` = undefined, producing the literal string 'undefined' repeated rather than an error. Only reachable via misuse of an internal helper.",
+          "line": "15-22",
+          "suggestion": "Optionally guard against empty/zero-length alphabet, or rely on the internal-only contract; document that callers must pass a non-empty alphabet."
+        },
+        {
+          "severity": "info",
+          "issue": "Uint32Array(size) allocates one 32-bit word per output character (4x the bytes strictly needed for a <256-symbol alphabet). Trivial cost at size=16, but slightly wasteful if generateString were ever called with large sizes.",
+          "line": "18",
+          "suggestion": "A Uint8Array with rejection sampling would suffice for these alphabets; not worth changing for current call sites."
+        },
+        {
+          "severity": "info",
+          "issue": "No correctness, resource-leak, or security defects found. crypto.randomFillSync is the correct CSPRNG source, the Blob feature-detection (line 32) is sound, and exports are well-formed.",
+          "line": "n/a",
+          "suggestion": "No action required."
+        }
+      ]
+    },
+    {
+      "file": "lib/utils.js",
+      "purpose": "Generic type-checking and object/collection helper utilities used throughout axios, hardened against prototype pollution.",
+      "findings": [
+        {
+          "severity": "medium",
+          "issue": "forEachEntry: the `obj && obj[iterator]` guard is ineffective. If `obj` is null/undefined or simply has no `Symbol.iterator`, `generator` is falsy, and the very next line `generator.call(obj)` throws `TypeError: Cannot read properties of undefined (reading 'call')`. The short-circuit only avoids the property read, not the unconditional invocation.",
+          "line": "686-697",
+          "suggestion": "Return early when `generator` is not a function, e.g. `if (!isFunction(generator)) return;` before calling `generator.call(obj)`."
+        },
+        {
+          "severity": "medium",
+          "issue": "matchAll relies on the caller passing a regex with the global (`g`) flag. If a non-global RegExp is passed, `regExp.exec(str)` keeps matching from index 0 and `lastIndex` never advances, producing an infinite loop that hangs the process. There is no flag check or guard.",
+          "line": "707-716",
+          "suggestion": "Either assert/normalize the regex to include the `g` flag, or use the native `String.prototype.matchAll`, or break when `matches.index` does not advance."
+        },
+        {
+          "severity": "low",
+          "issue": "isEmptyObject requires `Object.getPrototypeOf(val) === Object.prototype`, so a genuinely empty object with a null prototype (`Object.create(null)`) or a class instance with no own enumerable keys returns false. The name/JSDoc ('empty object') does not convey this plain-object-only restriction, which can surprise callers.",
+          "line": "211-223",
+          "suggestion": "Document that only plain Object.prototype-backed objects qualify, or relax the prototype check if null-proto empty objects should count."
+        },
+        {
+          "severity": "low",
+          "issue": "Global resolution is duplicated: getGlobal()/G (302-311) and the _global IIFE (434-438) implement the same lookup with slightly different ordering (getGlobal prefers self over window; _global also differs and lacks the `{}` fallback). Maintaining two near-identical resolvers risks divergence and one (`_global`) can throw a ReferenceError for `global` in a bare browser without the try/empty-object fallback that getGlobal has.",
+          "line": "302-311, 434-438",
+          "suggestion": "Consolidate to a single global resolver (reuse getGlobal/G) and derive _global from it."
+        },
+        {
+          "severity": "low",
+          "issue": "freezeMethods reads `const value = obj[name];` for every descriptor. For properties defined as getters this invokes the accessor purely to type-check it, which can trigger unintended side effects or throw, aborting the freeze of all remaining methods.",
+          "line": "757-781",
+          "suggestion": "Inspect `descriptor.value`/`descriptor.get` directly instead of evaluating `obj[name]`, so getters are not invoked during freezing."
+        }
+      ]
+    }
+  ]
+}

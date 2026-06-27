@@ -31,3 +31,7 @@ tmp/
 # Eval harness (promptfoo): raw run output + local cache. RESULTS.md is committed.
 evals/results/*.json
 .promptfoo/
+
+# Loop-demo: raw interactive /loop session transcripts (verbose conversation exports);
+# the synthesized analysis is committed instead.
+evals/loop-demo/transcripts/
