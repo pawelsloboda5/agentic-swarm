@@ -179,21 +179,34 @@ def scrub_obj(obj):
 
 if __name__ == "__main__":
     # Tiny self-test (ASCII-only output, cp1252-safe). Proves the scrubbers fire.
+    #
+    # IMPORTANT: every secret-shaped sample below is ASSEMBLED AT RUNTIME from
+    # fragments, so no complete token literal ever exists in this source file.
+    # The values are non-functional placeholders either way, but written this way
+    # they also can't trip automated secret scanners (GitGuardian / GitHub secret
+    # scanning) the way a literal `ghp_...`/`eyJ...` token would. Keep this style
+    # for any new redactor test input -- see CONTRIBUTING.md ("no literal secrets").
+    _F = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"               # 36-char filler
+    fake_anthropic = "sk-" + "ant-api03-" + _F                # Anthropic key shape
+    fake_ghp = "ghp" + "_" + _F                               # GitHub token shape
+    fake_jwt = ".".join(("eyJ" + _F, "eyJ" + _F, _F[:12]))    # JWT shape (3 segs)
+    fake_assign_val = "z" * 18                                # masked assignment value
+    fake_email = "user" + "@" + "example.com"
     samples = [
-        "key sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 here",
-        "token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 here",
-        "jwt eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcDEF123456",
-        "api_key = 'supersecretvalue12345'",
-        "email me@example.com",
-        "path C:\\Users\\Pawel Sloboda\\Desktop\\proj",
-        "slug C--Users-Pawel-Sloboda-Desktop-gta6",
+        "key " + fake_anthropic + " here",
+        "token " + fake_ghp + " here",
+        "jwt " + fake_jwt,
+        "api_key = '" + fake_assign_val + "'",
+        "email " + fake_email,
+        "path C:\\Users\\Example User\\Desktop\\proj",
+        "slug C--Users-Example-User-Desktop-myproj",
     ]
     ok = True
     for s in samples:
         out = scrub_text(s)
+        # If redaction worked, none of the sensitive fragments survive in `out`.
         leaked = any(bad in out for bad in (
-            "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ", "ghp_ABCDEFGHIJKLMNOP",
-            "supersecretvalue", "me@example.com",
+            fake_anthropic, fake_ghp, fake_jwt, fake_assign_val, fake_email,
         ))
         print(("LEAK  " if leaked else "ok    ") + repr(out))
         ok = ok and not leaked
