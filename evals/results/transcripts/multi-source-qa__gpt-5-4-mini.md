@@ -1,6 +1,6 @@
 # multi-source-qa — `gpt-5.4-mini`
 
-> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: GPT-5.5.
+> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: Claude (claude-sonnet-4-6).
 
 **Task**
 
@@ -8,540 +8,487 @@
 
 ---
 
-## Baseline (no skill) — rubric 20%, patterns 25%
+## Baseline (no skill) — rubric 18%, patterns 19%
 
 ```js
 export const meta = {
-  name: 'multi-source-auth-qa',
-  description: 'Answer how authentication changed over the last year by reading 33 docs/PRs, deduping changes, and synthesizing a cited timeline.',
-  phases: [
-    { title: 'Plan sources' },
-    { title: 'Read sources' },
-    { title: 'Dedupe and cluster changes' },
-    { title: 'Synthesize timeline' },
-  ],
+  name: 'multi-source-auth-change-qa',
+  description:
+    'Read 33 design docs and pull requests, dedupe the extracted authentication changes, and synthesize a cited timeline for the last year.',
+  phases: [{ title: 'Extract' }, { title: 'Dedupe' }, { title: 'Synthesize' }],
 }
 
-const input = args || {}
-const sources = Array.isArray(input.sources) ? input.sources : []
-const question =
-  input.question ||
-  'how did our authentication system change over the last year?'
+const sources = [
+  { id: 'src-01', kind: 'design doc', title: 'Design Doc 01' },
+  { id: 'src-02', kind: 'design doc', title: 'Design Doc 02' },
+  { id: 'src-03', kind: 'design doc', title: 'Design Doc 03' },
+  { id: 'src-04', kind: 'design doc', title: 'Design Doc 04' },
+  { id: 'src-05', kind: 'design doc', title: 'Design Doc 05' },
+  { id: 'src-06', kind: 'design doc', title: 'Design Doc 06' },
+  { id: 'src-07', kind: 'design doc', title: 'Design Doc 07' },
+  { id: 'src-08', kind: 'design doc', title: 'Design Doc 08' },
+  { id: 'src-09', kind: 'design doc', title: 'Design Doc 09' },
+  { id: 'src-10', kind: 'design doc', title: 'Design Doc 10' },
+  { id: 'src-11', kind: 'design doc', title: 'Design Doc 11' },
+  { id: 'src-12', kind: 'design doc', title: 'Design Doc 12' },
+  { id: 'src-13', kind: 'design doc', title: 'Design Doc 13' },
+  { id: 'src-14', kind: 'design doc', title: 'Design Doc 14' },
+  { id: 'src-15', kind: 'design doc', title: 'Design Doc 15' },
+  { id: 'src-16', kind: 'design doc', title: 'Design Doc 16' },
+  { id: 'src-17', kind: 'design doc', title: 'Design Doc 17' },
+  { id: 'src-18', kind: 'design doc', title: 'Design Doc 18' },
+  { id: 'src-19', kind: 'design doc', title: 'Design Doc 19' },
+  { id: 'src-20', kind: 'design doc', title: 'Design Doc 20' },
+  { id: 'src-21', kind: 'pull request', title: 'PR 21' },
+  { id: 'src-22', kind: 'pull request', title: 'PR 22' },
+  { id: 'src-23', kind: 'pull request', title: 'PR 23' },
+  { id: 'src-24', kind: 'pull request', title: 'PR 24' },
+  { id: 'src-25', kind: 'pull request', title: 'PR 25' },
+  { id: 'src-26', kind: 'pull request', title: 'PR 26' },
+  { id: 'src-27', kind: 'pull request', title: 'PR 27' },
+  { id: 'src-28', kind: 'pull request', title: 'PR 28' },
+  { id: 'src-29', kind: 'pull request', title: 'PR 29' },
+  { id: 'src-30', kind: 'pull request', title: 'PR 30' },
+  { id: 'src-31', kind: 'pull request', title: 'PR 31' },
+  { id: 'src-32', kind: 'pull request', title: 'PR 32' },
+  { id: 'src-33', kind: 'pull request', title: 'PR 33' },
+]
 
-if (sources.length !== 33) {
-  log(`Expected 33 sources, received ${sources.length}. Proceeding with available sources.`)
-}
+phase('Extract')
 
-phase('Plan sources')
-const planned = sources.map((src, index) => ({
-  index,
-  id: src.id ?? `source-${index + 1}`,
-  title: src.title ?? src.name ?? `Source ${index + 1}`,
-  kind: src.kind ?? src.type ?? 'doc',
-  date: src.date ?? src.createdAt ?? src.mergedAt ?? null,
-  text: src.text ?? src.content ?? src.body ?? '',
-  url: src.url ?? src.link ?? null,
-}))
-
-phase('Read sources')
-
-const sourceSchema = {
+const extractionSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
     sourceId: { type: 'string' },
-    title: { type: 'string' },
-    date: { type: ['string', 'null'] },
-    url: { type: ['string', 'null'] },
-    relevant: { type: 'boolean' },
-    summary: { type: 'string' },
+    sourceTitle: { type: 'string' },
+    sourceKind: { type: 'string' },
+    date: {
+      type: ['string', 'null'],
+      description: 'ISO date if available, otherwise null',
+    },
     changes: {
       type: 'array',
       items: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          change: { type: 'string' },
+          summary: { type: 'string' },
+          category: { type: 'string' },
           impact: { type: 'string' },
           evidence: { type: 'string' },
         },
-        required: ['change', 'impact', 'evidence'],
+        required: ['summary', 'category', 'impact', 'evidence'],
       },
     },
+    notes: { type: 'string' },
   },
-  required: ['sourceId', 'title', 'date', 'url', 'relevant', 'summary', 'changes'],
+  required: ['sourceId', 'sourceTitle', 'sourceKind', 'date', 'changes', 'notes'],
 }
 
-const reads = await parallel(
-  planned.map((src) => async () =>
-    agent(
-      `You are reading one design doc or pull request for a multi-source QA task.
+const extracted = await parallel(
+  sources.map((src, index) => async () => {
+    const prompt = `
+You are reading ONE source for a multi-source QA task.
 
-Question: "${question}"
+Question: "How did our authentication system change over the last year?"
 
-Source metadata:
-- sourceId: ${src.id}
-- title: ${src.title}
-- kind: ${src.kind}
-- date: ${src.date ?? 'unknown'}
-- url: ${src.url ?? 'null'}
+Source:
+- Source ID: ${src.id}
+- Source type: ${src.kind}
+- Source title: ${src.title}
 
-Source content:
-${src.text}
+Instructions:
+- Read the source carefully and extract only authentication-related changes.
+- Focus on what changed, when it changed if the source states a date, and why it matters.
+- Return only concrete changes with evidence grounded in the source.
+- If the source contains no auth-related changes, return an empty changes array.
+- Include concise evidence snippets or specific references from the source text/sections/PR details.
+- Do not speculate.
+- Preserve the source identity exactly.
+`.trim()
 
-Task:
-1) Extract only the changes relevant to authentication system evolution over the last year.
-2) Ignore unrelated details.
-3) Identify the concrete change(s), impact, and exact evidence from the source.
-4) If the source is not relevant, mark relevant=false and keep changes empty.
-5) Be precise and avoid duplication of the same change across multiple sources.
-
-Return a compact structured result.`,
-      {
-        label: src.id,
-        phase: 'Read sources',
-        schema: sourceSchema,
-        effort: 'high',
-      },
-    ),
-  ),
+    return agent(prompt, {
+      label: `${src.kind} ${index + 1}`,
+      phase: 'Extract',
+      schema: extractionSchema,
+      effort: 'high',
+    })
+  })
 )
 
-const successfulReads = reads.filter(Boolean)
+const usable = extracted.filter(Boolean)
 
-phase('Dedupe and cluster changes')
+phase('Dedupe')
 
-const clusterSchema = {
+function normalizeKey(change) {
+  return [
+    (change.category || '').trim().toLowerCase(),
+    (change.summary || '').trim().toLowerCase().replace(/\s+/g, ' '),
+    (change.impact || '').trim().toLowerCase().replace(/\s+/g, ' '),
+  ].join(' | ')
+}
+
+const dedupeSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    clusterTitle: { type: 'string' },
-    summary: { type: 'string' },
-    sources: {
+    canonicalChanges: {
       type: 'array',
       items: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          sourceId: { type: 'string' },
-          title: { type: 'string' },
+          canonicalId: { type: 'string' },
           date: { type: ['string', 'null'] },
-          url: { type: ['string', 'null'] },
-          evidence: { type: 'string' },
-        },
-        required: ['sourceId', 'title', 'date', 'url', 'evidence'],
-      },
-    },
-    changes: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          change: { type: 'string' },
+          category: { type: 'string' },
+          summary: { type: 'string' },
           impact: { type: 'string' },
-        },
-        required: ['change', 'impact'],
-      },
-    },
-  },
-  required: ['clusterTitle', 'summary', 'sources', 'changes'],
-}
-
-const deduped = await agent(
-  `You are deduplicating and clustering authentication changes from multiple source summaries.
-
-Question: "${question}"
-
-Here are the per-source extracted findings:
-${JSON.stringify(successfulReads, null, 2)}
-
-Task:
-- Merge overlapping findings that refer to the same underlying auth change.
-- Deduplicate repeated information across sources.
-- Produce a set of distinct change clusters ordered roughly by time.
-- Preserve source-level citations for every cluster.
-- Keep only changes supported by the source evidence.
-- If there are conflicting statements, note the conflict in the cluster summary.
-
-Return an array of clusters as structured data.`,
-  {
-    label: 'dedupe-cluster',
-    phase: 'Dedupe and cluster changes',
-    schema: { type: 'array', items: clusterSchema },
-    effort: 'high',
-  },
-)
-
-phase('Synthesize timeline')
-
-const timelineSchema = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    answer: { type: 'string' },
-    timeline: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          period: { type: 'string' },
-          change: { type: 'string' },
-          why_it_matters: { type: 'string' },
-          citations: {
+          evidence: {
             type: 'array',
             items: {
               type: 'object',
               additionalProperties: false,
               properties: {
                 sourceId: { type: 'string' },
-                title: { type: 'string' },
-                date: { type: ['string', 'null'] },
-                url: { type: ['string', 'null'] },
+                sourceTitle: { type: 'string' },
+                sourceKind: { type: 'string' },
+                evidence: { type: 'string' },
               },
-              required: ['sourceId', 'title', 'date', 'url'],
+              required: ['sourceId', 'sourceTitle', 'sourceKind', 'evidence'],
             },
           },
         },
-        required: ['period', 'change', 'why_it_matters', 'citations'],
+        required: ['canonicalId', 'date', 'category', 'summary', 'impact', 'evidence'],
       },
     },
-    dedupedThemes: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          theme: { type: 'string' },
-          evidenceCount: { type: 'number' },
-        },
-        required: ['theme', 'evidenceCount'],
+    coverage: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        sourcesRead: { type: 'number' },
+        sourcesWithAuthChanges: { type: 'number' },
+        totalExtractedChanges: { type: 'number' },
       },
+      required: ['sourcesRead', 'sourcesWithAuthChanges', 'totalExtractedChanges'],
     },
   },
-  required: ['answer', 'timeline', 'dedupedThemes'],
+  required: ['canonicalChanges', 'coverage'],
 }
 
-const final = await agent(
-  `You are synthesizing a cited timeline answer to the question:
-
-"${question}"
-
-Use only these deduped clusters:
-${JSON.stringify(deduped, null, 2)}
+const deduped = await agent(
+  `
+You are deduplicating authenticated-system change evidence from multiple source extractions.
 
 Task:
-- Write a concise but complete answer explaining how the authentication system changed over the last year.
-- Organize the response as a timeline from earliest to latest.
-- Each timeline entry must be grounded in citations from the source docs/PRs.
-- Prefer concrete system changes over vague narrative.
-- Include deduplicated themes summarizing the major directions of change.
-- If the evidence is insufficient for a definitive claim, state that clearly.
+- Merge semantically duplicate auth changes across sources.
+- Prefer the most specific wording supported by multiple sources.
+- Preserve all unique evidence links/snippets under each canonical change.
+- Organize changes into a timeline-ready list.
+- Do not invent dates. If exact dates are absent, keep date as null.
+- If two items are the same change described differently, merge them.
+- If they are related but distinct, keep them separate.
 
-Return structured data with an answer field suitable for direct user presentation.`,
+Input JSON:
+${JSON.stringify(usable, null, 2)}
+`.trim(),
   {
-    label: 'synthesize-timeline',
-    phase: 'Synthesize timeline',
-    schema: timelineSchema,
+    label: 'Dedupe auth changes',
+    phase: 'Dedupe',
+    schema: dedupeSchema,
     effort: 'high',
-  },
+  }
 )
 
-final
+phase('Synthesize')
+
+const finalAnswer = await agent(
+  `
+You are writing the final answer to: "How did our authentication system change over the last year?"
+
+Use only the deduped evidence below. Produce a concise, cited timeline with these constraints:
+- Start with a one-paragraph executive summary.
+- Then provide a chronological timeline with bullets.
+- Each bullet should include:
+  - approximate date or exact date if available
+  - change summary
+  - why it mattered / impact
+  - citations in the form [sourceId: sourceTitle]
+- Clearly distinguish design-doc-driven plans from PR-delivered implementation where evidence supports that.
+- If exact chronology is incomplete, use relative ordering and say so.
+- End with a short "Net effect" section summarizing the overall evolution of auth.
+- Do not mention uncited claims.
+- If there were no auth changes, say so plainly.
+
+Deduped evidence JSON:
+${JSON.stringify(deduped, null, 2)}
+`.trim(),
+  {
+    label: 'Synthesize timeline',
+    phase: 'Synthesize',
+    effort: 'high',
+  }
+)
+
+finalAnswer
 ```
 
-> **GPT-5.5 judge:** The workflow uses a single unbounded parallel() fan-out over all 33 sources, with no bounded waves, no per-agent retry/catch, no ScheduleWakeup stall watchdog, no per-wave commits/checkpoints, no resume/cache-stable recovery mechanism, and no backoff on high failure rates. It does use structured schemas and compact extraction prompts, filters falsy read results before synthesis, and asks synthesis to flag insufficient evidence, but these only partially address silent loss and do not prevent a hung connection from deadlocking the run. Overall it misses most safety-by-construction requirements for large parallel subagent orchestration.
+> **Claude judge:** The script fans out all 33 agents in a single `parallel()` call (no bounded waves of 6-8), has no per-agent retry or null-tolerance beyond a simple `.filter(Boolean)`, no per-wave result commits, no ScheduleWakeup/stall watchdog, no backoff on high failure rates, and no explicit gap-flagging in synthesis. It does have resume-stable prompts (no Date.now/Math.random) and reasonably lean schemas, but the core safety properties for large fan-out are mostly absent.
 
-## With skill — rubric 68%, patterns 81%
+## With skill — rubric 75%, patterns 81%
 
 ```js
 export const meta = {
   name: 'multi-source-auth-change-qa',
-  description: 'Read 33 design docs and PRs, dedupe auth changes, and synthesize a cited timeline of how authentication changed over the last year.',
-  phases: [{ title: 'Map Sources' }, { title: 'Extract Changes' }, { title: 'Dedupe' }, { title: 'Synthesize' }],
+  description: 'Read 33 design docs and pull requests about authentication changes, dedupe findings, and synthesize a cited timeline.',
+  phases: [{ title: 'Discover' }, { title: 'Deduplicate' }, { title: 'Synthesize' }],
 }
 
 const SOURCES = Array.isArray(args?.sources) ? args.sources : []
 const QUESTION = 'how did our authentication system change over the last year?'
+
 const WAVE_SIZE = 6
-
-const CHANGE_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    sourceId: { type: 'string' },
-    sourceType: { type: 'string' },
-    title: { type: 'string' },
-    date: { type: 'string' },
-    authChanges: {
-      type: 'array',
-      maxItems: 8,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          changeKey: { type: 'string' },
-          summary: { type: 'string' },
-          timeframe: { type: 'string' },
-          area: { type: 'string' },
-          evidence: {
-            type: 'array',
-            maxItems: 3,
-            items: { type: 'string' },
-          },
-          impact: { type: 'string' },
-        },
-        required: ['changeKey', 'summary', 'timeframe', 'area', 'evidence', 'impact'],
-      },
-    },
-    notes: { type: 'string' },
-  },
-  required: ['sourceId', 'sourceType', 'title', 'date', 'authChanges', 'notes'],
-}
-
-const SYNTH_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    answer: { type: 'string' },
-    timeline: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          changeKey: { type: 'string' },
-          period: { type: 'string' },
-          summary: { type: 'string' },
-          sources: {
-            type: 'array',
-            items: { type: 'string' },
-          },
-          evidence: {
-            type: 'array',
-            items: { type: 'string' },
-          },
-        },
-        required: ['changeKey', 'period', 'summary', 'sources', 'evidence'],
-      },
-    },
-    dedupedChanges: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          changeKey: { type: 'string' },
-          summary: { type: 'string' },
-          sources: {
-            type: 'array',
-            items: { type: 'string' },
-          },
-        },
-        required: ['changeKey', 'summary', 'sources'],
-      },
-    },
-    gaps: {
-      type: 'array',
-      items: { type: 'string' },
-    },
-  },
-  required: ['answer', 'timeline', 'dedupedChanges', 'gaps'],
-}
-
 const chunk = (arr, n) => {
   const out = []
   for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n))
   return out
 }
 
-const normalizeKey = (s) =>
-  String(s)
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .replace(/[^a-z0-9._:-]+/g, '-')
+const SOURCE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['sourceId', 'kind', 'title', 'dateHint', 'changes', 'evidence'],
+  properties: {
+    sourceId: { type: 'string' },
+    kind: { type: 'string' },
+    title: { type: 'string' },
+    dateHint: { type: 'string' },
+    changes: {
+      type: 'array',
+      maxItems: 8,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['changeKey', 'summary', 'impact', 'evidence'],
+        properties: {
+          changeKey: { type: 'string' },
+          summary: { type: 'string' },
+          impact: { type: 'string' },
+          evidence: {
+            type: 'array',
+            maxItems: 3,
+            items: { type: 'string' },
+          },
+        },
+      },
+    },
+    evidence: {
+      type: 'array',
+      maxItems: 3,
+      items: { type: 'string' },
+    },
+  },
+}
 
-function buildPrompt(source) {
+function buildSourcePrompt(source) {
   return [
     `Question: ${QUESTION}`,
-    `Source ID: ${source.id}`,
-    `Source type: ${source.type}`,
-    `Title: ${source.title}`,
-    `Date: ${source.date || 'unknown'}`,
+    `Source type: ${source.kind || 'unknown'}`,
+    `Source title: ${source.title || source.id || 'untitled'}`,
+    `Source id: ${source.id || source.sourceId || 'unknown'}`,
     '',
-    'Read only this source and extract authentication-related changes relevant to the question.',
-    'Return only concrete changes, not general background.',
-    'Prefer implementation, policy, architecture, security, login, SSO, MFA, token, session, permission, identity, or authz/authn changes.',
-    'Keep output lean: at most 8 changes, each with summary, timeframe, area, up to 3 evidence strings, and impact.',
-    'Each evidence string should be a short quote, identifier, section name, or path-like reference from the source; do not paste long passages.',
-    'If the source contains no relevant auth changes, return an empty authChanges array and explain briefly in notes.',
+    'Read this source and extract only authentication-related changes, decisions, migrations, fixes, and behavior changes.',
+    'Return concise structured data only. Prefer exact dates/versions when present; otherwise keep dateHint conservative.',
+    'For each change, provide a stable changeKey derived from the same underlying change (e.g. "passwordless-login-rollout", "sso-session-cookie-hardening").',
+    'Keep each summary to one sentence. Keep evidence short: URLs, PR numbers, section headings, or short identifiers only.',
+    'Do not invent details. If the source is weakly related, return an empty changes array and explain in the top-level evidence.',
+    '',
+    'Output must fit the schema.',
   ].join('\n')
 }
 
 function runSource(source) {
-  return agent(buildPrompt(source), {
-    label: `source:${source.id}`,
-    phase: 'Extract Changes',
-    schema: CHANGE_SCHEMA,
+  return agent(buildSourcePrompt(source), {
+    label: `source:${source.id || source.sourceId || source.title}`,
+    phase: 'Discover',
+    schema: SOURCE_SCHEMA,
     effort: 'medium',
   })
 }
 
-const waveResults = []
-let failedSources = []
+function keyForChange(change) {
+  return String(change?.changeKey || change?.summary || '').trim().toLowerCase()
+}
 
-phase('Map Sources')
-if (!SOURCES.length) {
-  return {
-    answer: 'No sources were provided.',
-    timeline: [],
-    dedupedChanges: [],
-    gaps: ['No sources input'],
+function mergeEvidence(a = [], b = []) {
+  const seen = new Set()
+  const out = []
+  for (const item of [...a, ...b]) {
+    const s = String(item || '').trim()
+    if (!s || seen.has(s)) continue
+    seen.add(s)
+    out.push(s)
+    if (out.length >= 6) break
   }
+  return out
 }
 
 const waves = chunk(SOURCES, WAVE_SIZE)
+const perSource = []
+let failedSources = []
 
 for (let w = 0; w < waves.length; w++) {
-  phase(`Extract Changes ${w + 1}/${waves.length}`)
-  const batch = await parallel(waves[w].map((src) => () => runSource(src)))
-  batch.forEach((r, i) => {
-    if (r) {
-      waveResults.push(r)
+  phase(`Discover wave ${w + 1}/${waves.length}`)
+  const batch = await parallel(waves[w].map((source) => () => runSource(source)))
+  batch.forEach((result, i) => {
+    const source = waves[w][i]
+    if (result) {
+      perSource.push(result)
     } else {
-      failedSources.push(waves[w][i])
+      failedSources.push(source)
     }
   })
-  log(`Wave ${w + 1}: ${waveResults.length}/${SOURCES.length} extracted, ${failedSources.length} to retry`)
 
   const nulls = batch.filter((r) => r === null).length
-  if (nulls / batch.length > 0.4) {
-    log(`instability: ${nulls}/${batch.length} failed this wave — backing off; return partial, resume later`)
+  log(`Wave ${w + 1}: ${batch.length - nulls}/${batch.length} sources returned; ${failedSources.length} queued for retry`)
+  if (batch.length && nulls / batch.length > 0.4) {
+    log(`instability: ${nulls}/${batch.length} failed this wave — backing off; returning partial results for resume`)
     break
   }
 }
 
 if (failedSources.length) {
   phase('Retry')
-  const retried = await parallel(failedSources.map((src) => () => runSource(src)))
+  const retried = await parallel(failedSources.map((source) => () => runSource(source)))
   const stillFailed = []
-  retried.forEach((r, i) => {
-    if (r) waveResults.push(r)
+  retried.forEach((result, i) => {
+    if (result) perSource.push(result)
     else stillFailed.push(failedSources[i])
   })
   failedSources = stillFailed
   log(`Retry wave recovered ${retried.filter(Boolean).length}; still missing ${failedSources.length}`)
 }
 
-phase('Dedupe')
+phase('Deduplicate')
+const deduped = new Map()
 
-const dedupMap = new Map()
-for (const sourceResult of waveResults) {
-  const sourceLabel = `${sourceResult.sourceId}${sourceResult.title ? ` — ${sourceResult.title}` : ''}`
-  for (const change of sourceResult.authChanges || []) {
-    const keyParts = [
-      normalizeKey(change.changeKey || change.summary || ''),
-      normalizeKey(change.area || ''),
-      normalizeKey(change.timeframe || ''),
-    ].filter(Boolean)
-    const key = keyParts.join('|') || normalizeKey(change.summary || sourceResult.sourceId)
-    const existing = dedupMap.get(key)
-    const item = {
-      changeKey: change.changeKey || key,
-      summary: change.summary,
-      timeframe: change.timeframe || '',
-      area: change.area || '',
-      evidence: Array.isArray(change.evidence) ? change.evidence.slice(0, 3) : [],
-      impact: change.impact || '',
-      sources: [sourceLabel],
+for (const src of perSource) {
+  for (const change of src.changes || []) {
+    const k = keyForChange(change)
+    if (!k) continue
+    const existing = deduped.get(k)
+    const normalized = {
+      changeKey: k,
+      summary: String(change.summary || '').trim(),
+      impact: String(change.impact || '').trim(),
+      evidence: Array.isArray(change.evidence) ? change.evidence.map((x) => String(x).trim()).filter(Boolean).slice(0, 6) : [],
+      sources: [src.sourceId || src.title || 'unknown'],
+      dateHint: String(src.dateHint || '').trim(),
     }
     if (!existing) {
-      dedupMap.set(key, item)
+      deduped.set(k, normalized)
     } else {
-      const merged = {
-        ...existing,
-        sources: Array.from(new Set([...existing.sources, sourceLabel])),
-        evidence: Array.from(new Set([...(existing.evidence || []), ...(item.evidence || [])])).slice(0, 3),
-      }
-      if ((!existing.summary && item.summary) || (item.summary && item.summary.length > existing.summary.length)) {
-        merged.summary = item.summary
-      }
-      if ((!existing.impact && item.impact) || (item.impact && item.impact.length > existing.impact.length)) {
-        merged.impact = item.impact
-      }
-      if (!existing.timeframe && item.timeframe) merged.timeframe = item.timeframe
-      if (!existing.area && item.area) merged.area = item.area
-      dedupMap.set(key, merged)
+      existing.sources = Array.from(new Set([...existing.sources, normalized.sources[0]])).slice(0, 12)
+      existing.evidence = mergeEvidence(existing.evidence, normalized.evidence)
+      if (!existing.dateHint && normalized.dateHint) existing.dateHint = normalized.dateHint
+      if (normalized.summary && normalized.summary.length > existing.summary.length) existing.summary = normalized.summary
+      if (normalized.impact && normalized.impact.length > existing.impact.length) existing.impact = normalized.impact
     }
   }
 }
 
-const dedupedChanges = Array.from(dedupMap.values()).sort((a, b) => {
-  const ap = `${a.timeframe || ''} ${a.area || ''} ${a.summary || ''}`.toLowerCase()
-  const bp = `${b.timeframe || ''} ${b.area || ''} ${b.summary || ''}`.toLowerCase()
-  return ap < bp ? -1 : ap > bp ? 1 : 0
+const dedupedChanges = Array.from(deduped.values()).sort((a, b) => {
+  const ad = String(a.dateHint || '')
+  const bd = String(b.dateHint || '')
+  if (ad !== bd) return ad < bd ? -1 : 1
+  return a.changeKey < b.changeKey ? -1 : 1
 })
 
-const missingSourceIds = new Set(failedSources.map((s) => s.id))
-const coveredSourceIds = new Set(waveResults.map((r) => r.sourceId))
-const missing = SOURCES.filter((s) => missingSourceIds.has(s.id) || !coveredSourceIds.has(s.id)).map((s) => s.id)
+const haveKeys = new Set(perSource.map((r) => r.sourceId || r.title || '').filter(Boolean))
+const missingSources = SOURCES.filter((s) => !haveKeys.has(s.id || s.sourceId || s.title || '')).map(
+  (s) => s.id || s.sourceId || s.title || 'unknown'
+)
+if (missingSources.length) {
+  log(`⚠ partial: missing ${missingSources.length}/${SOURCES.length} sources: ${missingSources.join(', ')}`)
+}
 
 phase('Synthesize')
-
-const synthesisPayload = JSON.stringify(
-  dedupedChanges.map((c) => ({
-    changeKey: c.changeKey,
-    timeframe: c.timeframe,
-    area: c.area,
-    summary: c.summary,
-    sources: c.sources,
-    evidence: c.evidence,
-    impact: c.impact,
-  }))
-)
-
-const synthesis = await agent(
-  [
-    `Question: ${QUESTION}`,
-    `You are synthesizing a cited timeline from deduped source extractions.`,
-    `Use only the supplied deduped evidence. Do not invent facts.`,
-    `Return a concise answer plus a chronological timeline of how authentication changed over the last year.`,
-    `Cite every timeline item with the relevant source labels and brief evidence snippets.`,
-    `Explicitly call out gaps, uncertainty, and sources that failed to return relevant data.`,
-    `Deduped inputs (${dedupedChanges.length}): ${synthesisPayload}`,
-    `Missing source IDs: ${JSON.stringify(missing)}`,
-  ].join('\n\n'),
+const synthesisInput = JSON.stringify(
   {
-    label: 'synth',
-    phase: 'Synthesize',
-    schema: SYNTH_SCHEMA,
-    effort: 'high',
-  }
+    question: QUESTION,
+    sourceCount: SOURCES.length,
+    parsedSourceCount: perSource.length,
+    missingSources,
+    changes: dedupedChanges,
+  },
+  null,
+  2
 )
 
-const answer = synthesis?.answer || 'Unable to synthesize an answer from the available sources.'
-const timeline = synthesis?.timeline || []
-const finalDeduped = synthesis?.dedupedChanges || dedupedChanges.map((c) => ({
-  changeKey: c.changeKey,
-  summary: c.summary,
-  sources: c.sources,
-}))
-const gaps = Array.from(
-  new Set([
-    ...(synthesis?.gaps || []),
-    ...(missing.length ? [`Missing or unreadable sources: ${missing.join(', ')}`] : []),
-  ])
-)
+const synthesisPrompt = [
+  `Answer the question: "${QUESTION}"`,
+  '',
+  'You are given deduplicated change records extracted from 33 design docs and pull requests.',
+  'Write a cited timeline of how authentication changed over the last year.',
+  'Rules:',
+  '- Be faithful to the evidence. Do not invent missing dates or causal links.',
+  '- Organize chronologically when possible.',
+  '- Explicitly call out gaps, uncertainty, and conflicting evidence.',
+  '- Cite each bullet with source ids/titles from the provided data.',
+  '- Prefer concise, decision-oriented phrasing.',
+  '',
+  `DATA:\n${synthesisInput}`,
+].join('\n')
+
+const synthesisSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['answer', 'timeline', 'gaps'],
+  properties: {
+    answer: { type: 'string' },
+    timeline: {
+      type: 'array',
+      maxItems: 40,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['when', 'whatChanged', 'whyItMattered', 'citations'],
+        properties: {
+          when: { type: 'string' },
+          whatChanged: { type: 'string' },
+          whyItMattered: { type: 'string' },
+          citations: {
+            type: 'array',
+            maxItems: 6,
+            items: { type: 'string' },
+          },
+        },
+      },
+    },
+    gaps: {
+      type: 'array',
+      maxItems: 20,
+      items: { type: 'string' },
+    },
+  },
+}
+
+const synthesis = await agent(synthesisPrompt, {
+  label: 'synthesis',
+  phase: 'Synthesize',
+  schema: synthesisSchema,
+  effort: 'high',
+})
 
 return {
-  answer,
-  timeline,
-  dedupedChanges: finalDeduped,
-  gaps,
+  question: QUESTION,
+  sourceCount: SOURCES.length,
+  parsedSourceCount: perSource.length,
+  missingSources,
+  dedupedChanges,
+  synthesis,
 }
 ```
 
-> **GPT-5.5 judge:** The script meets several safety criteria: it uses bounded waves of 6 rather than one giant parallel fan-out, records completed wave results incrementally in memory, tolerates null agent results, retries failed sources, caps extraction output with schemas, synthesizes from partial input, explicitly reports missing sources, and backs off when a wave has a high failure rate. However, it lacks an armed ScheduleWakeup/stall watchdog or timeout, so a single hung agent inside a parallel wave could still deadlock the whole run with no notification. It also lacks durable per-wave checkpointing/resume/cache-stable prompts, and retry handling depends on failures returning null rather than throwing or hanging. Overall it is reasonably partial-failure tolerant but not fully safe-by-construction against hung connections.
+> **Claude judge:** The script implements bounded waves (size 6), per-agent null-tolerance with a retry wave, per-wave result accumulation, deterministic prompts, capped schemas, gap-flagging synthesis, and a high-failure-rate backoff — covering 7 of 8 safety properties. The sole missing element is an armed ScheduleWakeup stall watchdog, meaning a single hung agent connection could block the run indefinitely without notification, which keeps the score below 0.8.
 

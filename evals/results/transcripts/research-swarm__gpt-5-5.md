@@ -1,6 +1,6 @@
 # research-swarm — `gpt-5.5`
 
-> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: GPT-5.5.
+> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: Claude (claude-sonnet-4-6).
 
 **Task**
 
@@ -8,62 +8,286 @@
 
 ---
 
-## Baseline (no skill) — rubric 25%, patterns 38%
+## Baseline (no skill) — rubric 35%, patterns 50%
 
 ```js
 export const meta = {
   name: 'research-swarm-distributed-consensus-history',
-  description: 'Research 42 distinct subtopics in the history of distributed consensus algorithms and synthesize a cited report.',
+  description:
+    'Researches 42 distinct subtopics in the history of distributed consensus algorithms and synthesizes a cited report.',
   phases: [
-    { title: 'Research' },
-    { title: 'Recovery' },
-    { title: 'Synthesis' },
+    { title: 'Research swarm' },
+    { title: 'Retry missing or uncited findings' },
+    { title: 'Synthesize cited report' },
   ],
 }
 
+const config = args && typeof args === 'object' ? args : {}
+
+const allowedEfforts = new Set(['low', 'medium', 'high', 'xhigh', 'max'])
+const researchEffort = allowedEfforts.has(config.researchEffort)
+  ? config.researchEffort
+  : 'medium'
+const synthesisEffort = allowedEfforts.has(config.synthesisEffort)
+  ? config.synthesisEffort
+  : 'high'
+
+const researchModel = typeof config.researchModel === 'string' ? config.researchModel : null
+const synthesisModel = typeof config.synthesisModel === 'string' ? config.synthesisModel : null
+
 const subtopics = [
-  { id: 1, title: 'The Byzantine Generals problem and early Byzantine agreement' },
-  { id: 2, title: 'Two-phase commit and the origins of atomic commit protocols' },
-  { id: 3, title: 'Three-phase commit and non-blocking atomic commitment' },
-  { id: 4, title: 'The FLP impossibility result and its impact on consensus research' },
-  { id: 5, title: 'Dwork-Lynch-Stockmeyer partial synchrony model' },
-  { id: 6, title: 'Failure detectors and the Chandra-Toueg framework' },
-  { id: 7, title: 'Atomic broadcast and its equivalence to consensus' },
-  { id: 8, title: 'Quorum systems, majority voting, and replicated data consistency' },
-  { id: 9, title: 'Virtual synchrony and group communication systems such as ISIS' },
-  { id: 10, title: 'Viewstamped Replication from the 1980s to Viewstamped Replication Revisited' },
-  { id: 11, title: 'Paxos origins and Lamport’s Part-Time Parliament' },
-  { id: 12, title: 'Multi-Paxos and state machine replication' },
-  { id: 13, title: 'Cheap Paxos and reducing the cost of fault tolerance' },
-  { id: 14, title: 'Fast Paxos and lower-latency consensus paths' },
-  { id: 15, title: 'Generalized Paxos and exploiting operation commutativity' },
-  { id: 16, title: 'Disk Paxos and alternative failure assumptions' },
-  { id: 17, title: 'Vertical Paxos and reconfiguration of consensus groups' },
-  { id: 18, title: 'Flexible Paxos and quorum-intersection generalizations' },
-  { id: 19, title: 'EPaxos and leaderless consensus for geo-distributed systems' },
-  { id: 20, title: 'Mencius and rotating-leader wide-area consensus' },
-  { id: 21, title: 'Chain Replication and primary-backup lineage' },
-  { id: 22, title: 'Zab: ZooKeeper Atomic Broadcast' },
-  { id: 23, title: 'Chubby and industrial Paxos deployment at Google' },
-  { id: 24, title: 'Raft and consensus algorithm understandability' },
-  { id: 25, title: 'etcd, Consul, and the operational ecosystem around Raft' },
-  { id: 26, title: 'Spanner, TrueTime, and Paxos in globally distributed databases' },
-  { id: 27, title: 'Practical Byzantine Fault Tolerance and the revival of BFT' },
-  { id: 28, title: 'BFT-SMaRt and practical Byzantine fault-tolerant replication libraries' },
-  { id: 29, title: 'Tendermint and BFT consensus for proof-of-stake blockchains' },
-  { id: 30, title: 'HotStuff and linear-view-change BFT consensus' },
-  { id: 31, title: 'HoneyBadgerBFT and asynchronous Byzantine consensus' },
-  { id: 32, title: 'Algorand BA* and cryptographic sortition' },
-  { id: 33, title: 'Stellar Consensus Protocol and federated Byzantine agreement' },
-  { id: 34, title: 'Ripple Protocol Consensus Algorithm' },
-  { id: 35, title: 'Nakamoto consensus and Bitcoin proof of work' },
-  { id: 36, title: 'Ethereum Casper, Gasper, and LMD-GHOST finality/choice rules' },
-  { id: 37, title: 'Ouroboros and provably secure proof-of-stake consensus' },
-  { id: 38, title: 'Avalanche consensus and metastable repeated subsampling' },
-  { id: 39, title: 'Proof-of-Elapsed-Time and permissioned blockchain consensus experiments' },
-  { id: 40, title: 'Leader election algorithms as predecessors and components of consensus' },
-  { id: 41, title: 'Consensus number, wait-free hierarchy, and shared-memory consensus theory' },
-  { id: 42, title: 'Consensus avoidance, CALM, and CRDTs as a historical counterpoint' },
+  {
+    id: 1,
+    name: 'SIFT and early fault-tolerant distributed systems',
+    focus:
+      'How early aerospace and fault-tolerant computing projects framed agreement, replication, and voting before modern consensus terminology matured.',
+  },
+  {
+    id: 2,
+    name: 'Two-Phase Commit (2PC)',
+    focus:
+      'The history of atomic commit protocols in databases and their relationship to consensus under coordinator failures.',
+  },
+  {
+    id: 3,
+    name: 'Three-Phase Commit (3PC)',
+    focus:
+      'The attempt to make atomic commit non-blocking under stronger timing assumptions and why it mattered historically.',
+  },
+  {
+    id: 4,
+    name: 'State Machine Replication foundations',
+    focus:
+      'The emergence of replicated deterministic state machines as the central abstraction for consensus-based fault tolerance.',
+  },
+  {
+    id: 5,
+    name: 'The Byzantine Generals Problem',
+    focus:
+      'The 1982 formulation by Lamport, Shostak, and Pease and its role in defining Byzantine agreement.',
+  },
+  {
+    id: 6,
+    name: 'Signed and oral-message Byzantine agreement algorithms',
+    focus:
+      'Early synchronous Byzantine agreement algorithms, including authenticated versus unauthenticated message assumptions.',
+  },
+  {
+    id: 7,
+    name: 'The FLP impossibility result',
+    focus:
+      'The Fischer-Lynch-Paterson impossibility theorem and its impact on asynchronous consensus research.',
+  },
+  {
+    id: 8,
+    name: 'Partial synchrony and the DLS model',
+    focus:
+      'Dwork, Lynch, and Stockmeyer’s partial synchrony model as a bridge between impossibility and practical consensus.',
+  },
+  {
+    id: 9,
+    name: 'Unreliable failure detectors',
+    focus:
+      'Chandra and Toueg’s failure-detector framework and its historical importance for solving consensus in asynchronous systems with extra assumptions.',
+  },
+  {
+    id: 10,
+    name: 'Atomic broadcast and consensus equivalence',
+    focus:
+      'The historical development of total-order broadcast and its formal equivalence to consensus.',
+  },
+  {
+    id: 11,
+    name: 'Quorum systems and weighted voting',
+    focus:
+      'The evolution of quorum-based replication and voting schemes that influenced Paxos and later consensus protocols.',
+  },
+  {
+    id: 12,
+    name: 'Viewstamped Replication',
+    focus:
+      'The original Oki-Liskov Viewstamped Replication protocol and its place alongside Paxos in crash-fault-tolerant replication.',
+  },
+  {
+    id: 13,
+    name: 'Paxos origins and The Part-Time Parliament',
+    focus:
+      'Lamport’s Paxos algorithm, its delayed publication history, and the consensus ideas behind the fictional parliament presentation.',
+  },
+  {
+    id: 14,
+    name: 'Multi-Paxos',
+    focus:
+      'How Paxos was adapted from single-decree consensus into efficient replicated-log consensus for long-running systems.',
+  },
+  {
+    id: 15,
+    name: 'Disk Paxos',
+    focus:
+      'Lamport and Gafni’s disk-based Paxos variant and what it reveals about processors, disks, and failure models.',
+  },
+  {
+    id: 16,
+    name: 'Cheap Paxos',
+    focus:
+      'Lamport and Massa’s work on reducing the cost of Paxos by using auxiliary acceptors and cheaper fault tolerance.',
+  },
+  {
+    id: 17,
+    name: 'Fast Paxos',
+    focus:
+      'The Fast Paxos variant and its historical attempt to reduce message delays in consensus decisions.',
+  },
+  {
+    id: 18,
+    name: 'Generalized Paxos',
+    focus:
+      'Lamport’s Generalized Paxos and the move from totally ordered commands to partially ordered compatible commands.',
+  },
+  {
+    id: 19,
+    name: 'Vertical Paxos and reconfiguration',
+    focus:
+      'Vertical Paxos, master-managed configuration changes, and the history of dynamic membership in Paxos systems.',
+  },
+  {
+    id: 20,
+    name: 'Flexible Paxos',
+    focus:
+      'The quorum-intersection insight behind Flexible Paxos and its place in later Paxos optimization history.',
+  },
+  {
+    id: 21,
+    name: 'Paxos Made Simple and Paxos pedagogy',
+    focus:
+      'How simplified presentations, explanations, and engineering papers changed Paxos adoption and understanding.',
+  },
+  {
+    id: 22,
+    name: 'Chubby and production Paxos at Google',
+    focus:
+      'The Chubby lock service as a landmark production use of Paxos and its influence on distributed systems engineering.',
+  },
+  {
+    id: 23,
+    name: 'Spanner, TrueTime, and Paxos',
+    focus:
+      'How Google Spanner combined Paxos replication with TrueTime to support externally consistent distributed transactions.',
+  },
+  {
+    id: 24,
+    name: 'Virtual synchrony and ISIS',
+    focus:
+      'Birman’s ISIS system, virtual synchrony, group membership, and their historical relationship to agreement and atomic multicast.',
+  },
+  {
+    id: 25,
+    name: 'Primary-backup replication and chain replication',
+    focus:
+      'The historical role of primary-backup protocols and chain replication as practical replication approaches adjacent to consensus.',
+  },
+  {
+    id: 26,
+    name: 'ZooKeeper Atomic Broadcast (Zab)',
+    focus:
+      'Zab as the consensus/atomic-broadcast protocol behind ZooKeeper and its historical relationship to Paxos-style replicated logs.',
+  },
+  {
+    id: 27,
+    name: 'Raft',
+    focus:
+      'Raft’s design for understandability, leader election, log replication, and its historical impact on consensus adoption.',
+  },
+  {
+    id: 28,
+    name: 'Viewstamped Replication Revisited',
+    focus:
+      'The 2012 revisiting of Viewstamped Replication and how it clarified the family resemblance among VR, Paxos, and Raft.',
+  },
+  {
+    id: 29,
+    name: 'EPaxos',
+    focus:
+      'Egalitarian Paxos as a leaderless/low-latency consensus protocol exploiting command commutativity.',
+  },
+  {
+    id: 30,
+    name: 'Mencius and rotating-leader Paxos',
+    focus:
+      'Mencius and related efforts to distribute Paxos leadership to improve wide-area throughput and fairness.',
+  },
+  {
+    id: 31,
+    name: 'Practical Byzantine Fault Tolerance (PBFT)',
+    focus:
+      'Castro and Liskov’s PBFT and its importance in making Byzantine fault-tolerant state machine replication practical.',
+  },
+  {
+    id: 32,
+    name: 'Byzantine quorum systems',
+    focus:
+      'The development of Byzantine quorum ideas and their influence on BFT storage and consensus protocols.',
+  },
+  {
+    id: 33,
+    name: 'Tendermint',
+    focus:
+      'Tendermint’s BFT consensus design for blockchains and its combination of validators, rounds, locking, and finality.',
+  },
+  {
+    id: 34,
+    name: 'HotStuff',
+    focus:
+      'HotStuff’s linear-view-change BFT protocol and its influence on modern blockchain consensus systems.',
+  },
+  {
+    id: 35,
+    name: 'HoneyBadgerBFT',
+    focus:
+      'HoneyBadgerBFT and the resurgence of practical asynchronous Byzantine consensus using threshold cryptography and batching.',
+  },
+  {
+    id: 36,
+    name: 'Algorand BA*',
+    focus:
+      'Algorand’s cryptographic sortition and Byzantine agreement approach for public blockchain consensus.',
+  },
+  {
+    id: 37,
+    name: 'Stellar Federated Byzantine Agreement',
+    focus:
+      'Stellar’s federated Byzantine agreement model and quorum-slice approach to open-membership consensus.',
+  },
+  {
+    id: 38,
+    name: 'Ripple Protocol Consensus Algorithm',
+    focus:
+      'Ripple’s unique-node-list model and its historical role among federated and payment-network consensus protocols.',
+  },
+  {
+    id: 39,
+    name: 'Nakamoto consensus and Proof of Work',
+    focus:
+      'Bitcoin’s probabilistic consensus, longest-chain rule, and proof-of-work as a major historical shift in open-membership consensus.',
+  },
+  {
+    id: 40,
+    name: 'Proof-of-Stake consensus and finality gadgets',
+    focus:
+      'The historical evolution from proof-of-work to proof-of-stake protocols, including BFT-style finality mechanisms such as Casper FFG.',
+  },
+  {
+    id: 41,
+    name: 'Avalanche, Snowball, and metastable consensus',
+    focus:
+      'Avalanche-family protocols and their randomized sampling/metastability approach to blockchain consensus.',
+  },
+  {
+    id: 42,
+    name: 'Formal specification and verification of consensus algorithms',
+    focus:
+      'How TLA+, model checking, mechanized proofs, and verified implementations influenced the maturation of Paxos, Raft, and BFT protocols.',
+  },
 ]
 
 const findingSchema = {
@@ -74,7 +298,7 @@ const findingSchema = {
     name: {
       type: 'string',
       minLength: 3,
-      description: 'Short canonical name of the researched subtopic.',
+      description: 'Canonical name of the researched subtopic.',
     },
     keyPoints: {
       type: 'array',
@@ -84,494 +308,544 @@ const findingSchema = {
         type: 'string',
         minLength: 20,
       },
-      description: 'Exactly three historically important findings.',
+      description:
+        'Exactly three historically grounded key points about this subtopic.',
     },
     sourceUrls: {
       type: 'array',
-      minItems: 0,
       maxItems: 3,
       items: {
         type: 'string',
         minLength: 8,
-        pattern: '^https?://',
       },
-      description: 'Up to three reliable source URLs, preferring primary papers, official docs, or reputable institutional pages.',
+      description:
+        'Up to three source URLs. Prefer primary papers, stable project pages, publisher pages, or reputable technical sources.',
     },
   },
 }
 
-const synthesisSchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['title', 'reportMarkdown', 'coveredSubtopicIds'],
-  properties: {
-    title: {
-      type: 'string',
-      minLength: 10,
-    },
-    reportMarkdown: {
-      type: 'string',
-      minLength: 3000,
-      description: 'A synthesized, cited Markdown report covering all 42 subtopics.',
-    },
-    coveredSubtopicIds: {
-      type: 'array',
-      minItems: 42,
-      maxItems: 42,
-      items: { type: 'number' },
-      description: 'The 42 subtopic IDs covered in the report, in order.',
-    },
-  },
+function agentOptions(label, effort, model, schema) {
+  const opts = { label, effort }
+  if (model) opts.model = model
+  if (schema) opts.schema = schema
+  return opts
 }
 
-function researchPrompt(topic) {
+function makeResearchPrompt(subtopic, retryContext) {
   return `
-You are one researcher in a coordinated research swarm studying the history of distributed consensus algorithms.
+You are one researcher in a distributed research swarm.
 
-Your assigned subtopic is:
+Research this assigned subtopic in the history of distributed consensus algorithms:
 
-ID: ${topic.id}
-Subtopic: ${topic.title}
+Subtopic ${subtopic.id}: ${subtopic.name}
+Focus: ${subtopic.focus}
 
-Research this subtopic historically. Return a structured finding with:
-- name: a concise canonical name for the subtopic.
-- keyPoints: exactly 3 historically important points. Each point should include dates, people/systems/papers where relevant, and why the subtopic mattered to the evolution of distributed consensus.
-- sourceUrls: up to 3 reliable URLs. Prefer primary papers, official project documentation, university pages, ACM/USENIX/IEEE pages, arXiv papers, RFCs, or well-known technical reports. Do not include more than 3 URLs.
+Return a structured finding matching the provided schema:
+- name: the canonical name of the subtopic.
+- keyPoints: exactly 3 concise but information-dense historical points.
+- sourceUrls: up to 3 source URLs.
 
-Be precise and avoid unsupported claims. If multiple dates or attributions are disputed, state the nuance in the key points.
+Requirements:
+1. Emphasize historical development: dates, authors, papers/systems, influence, and relationship to other consensus work.
+2. Prefer primary or stable sources: original papers, author pages, ACM/IEEE/USENIX/Springer pages, arXiv, official project docs, or reputable institutional pages.
+3. Do not invent URLs. If you are uncertain about a URL, omit it rather than guessing.
+4. Keep each key point self-contained; the synthesis agent will combine it with 41 other findings.
+5. Avoid generic explanations unless they explain historical significance.
+
+${retryContext ? `Retry context: ${retryContext}` : ''}
 `.trim()
 }
 
-function normalizeFinding(raw, topic) {
-  if (!raw || typeof raw !== 'object') {
-    return {
-      id: topic.id,
-      subtopic: topic.title,
-      name: topic.title,
-      keyPoints: [
-        `No validated subagent result was available for ${topic.title}; the final report should mark this as a research gap rather than inventing details.`,
-        `This placeholder exists only to preserve coverage of subtopic ${topic.id} in the 42-topic research plan.`,
-        `No source URLs were returned for this subtopic, so any synthesis should avoid uncited claims about it.`,
-      ],
-      sourceUrls: [],
-      missing: true,
-    }
-  }
+function normalizeFinding(finding, subtopic) {
+  if (!finding || typeof finding !== 'object') return null
+  if (!Array.isArray(finding.keyPoints) || finding.keyPoints.length !== 3) return null
 
-  const rawPoints = Array.isArray(raw.keyPoints) ? raw.keyPoints : []
-  const keyPoints = rawPoints
-    .filter((point) => typeof point === 'string' && point.trim())
-    .slice(0, 3)
+  const keyPoints = finding.keyPoints
+    .map((point) => String(point || '').trim())
+    .filter((point) => point.length > 0)
 
-  while (keyPoints.length < 3) {
-    keyPoints.push(`Additional validated detail for ${topic.title} was not returned by the subagent.`)
-  }
+  if (keyPoints.length !== 3) return null
 
-  const sourceUrls = (Array.isArray(raw.sourceUrls) ? raw.sourceUrls : [])
-    .filter((url) => typeof url === 'string' && /^https?:\/\//.test(url))
-    .slice(0, 3)
+  const sourceUrls = Array.isArray(finding.sourceUrls)
+    ? finding.sourceUrls
+        .map((url) => String(url || '').trim())
+        .filter((url) => url.length > 0)
+        .slice(0, 3)
+    : []
 
   return {
-    id: topic.id,
-    subtopic: topic.title,
-    name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : topic.title,
+    subtopicId: subtopic.id,
+    assignedSubtopic: subtopic.name,
+    name: String(finding.name || subtopic.name).trim() || subtopic.name,
     keyPoints,
     sourceUrls,
-    missing: false,
   }
 }
 
-function markdownEscape(value) {
-  return String(value == null ? '' : value)
-    .replace(/\|/g, '\\|')
-    .replace(/\n/g, ' ')
-}
+phase('Research swarm')
+log(`Launching ${subtopics.length} research subagents, one per consensus-history subtopic.`)
 
-function buildSourceIndex(findings) {
-  const urlToRef = Object.create(null)
-  const bibliography = []
-
-  for (const finding of findings) {
-    for (const url of finding.sourceUrls) {
-      if (!urlToRef[url]) {
-        const ref = `S${bibliography.length + 1}`
-        urlToRef[url] = ref
-        bibliography.push({ ref, url })
-      }
-    }
-  }
-
-  const enrichedFindings = findings.map((finding) => ({
-    ...finding,
-    sourceRefs: finding.sourceUrls.map((url) => ({
-      ref: urlToRef[url],
-      url,
-    })),
-  }))
-
-  return { enrichedFindings, bibliography }
-}
-
-function buildFallbackReport(enrichedFindings, bibliography) {
-  const rows = enrichedFindings.map((finding) => {
-    const points = finding.keyPoints.map((point) => `• ${markdownEscape(point)}`).join('<br>')
-    const citations = finding.sourceRefs.length
-      ? finding.sourceRefs.map((source) => `[${source.ref}](${source.url})`).join(', ')
-      : 'No validated source URL returned'
-    return `| ${finding.id} | ${markdownEscape(finding.name)} | ${points} | ${citations} |`
-  }).join('\n')
-
-  const bibliographyLines = bibliography.length
-    ? bibliography.map((source) => `- [${source.ref}] ${source.url}`).join('\n')
-    : '- No validated source URLs were returned.'
-
-  return `
-# History of Distributed Consensus Algorithms: Research Swarm Report
-
-## Executive Summary
-
-This report synthesizes the 42-subtopic research swarm output on the history of distributed consensus algorithms. The trajectory runs from early atomic commit and Byzantine agreement work, through impossibility results and synchrony models, into Paxos-family crash-fault-tolerant replication, practical industrial systems, Byzantine fault-tolerant replication, and modern blockchain consensus. The field repeatedly alternated between theory and deployment: impossibility results clarified assumptions, quorum and broadcast abstractions unified designs, production services forced operational simplification, and blockchain systems revived Byzantine and probabilistic consensus at global scale.
-
-## Coverage Table
-
-| ID | Subtopic | Key historical points | Sources |
-|---:|---|---|---|
-${rows}
-
-## Synthesis
-
-The early history of distributed consensus was shaped by two related but distinct problems: agreeing on transaction outcomes and agreeing despite faulty or malicious participants. Atomic commit protocols such as two-phase commit established a practical coordination pattern for databases, while three-phase commit explored how stronger timing assumptions could avoid blocking. In parallel, the Byzantine Generals formulation gave the field a durable model for adversarial faults and demonstrated that the nature of communication, authentication, and synchrony assumptions is central to what can be achieved.
-
-The mid-1980s supplied the theoretical vocabulary that still structures consensus research. FLP showed that deterministic consensus is impossible in a fully asynchronous system with even one crash failure, forcing algorithm designers to surface hidden timing assumptions or introduce randomness and failure detectors. Partial synchrony and failure-detector frameworks then provided disciplined ways to recover solvability under realistic assumptions. Atomic broadcast, quorum systems, and virtual synchrony helped turn agreement from a single abstract problem into reusable infrastructure for replicated services.
-
-The Paxos lineage became the dominant crash-fault-tolerant thread. Lamport’s Paxos, Multi-Paxos, and later variants such as Cheap Paxos, Fast Paxos, Generalized Paxos, Disk Paxos, Vertical Paxos, Flexible Paxos, EPaxos, and Mencius explored trade-offs among latency, leader dependence, reconfiguration, quorum geometry, commutativity, and wide-area deployment. Viewstamped Replication, Chain Replication, Zab, Raft, Chubby, Spanner, etcd, and Consul show how the same underlying state-machine replication agenda moved from papers into operational systems.
-
-Byzantine fault tolerance followed a different arc. PBFT made Byzantine replication practical under partial synchrony, and later systems such as BFT-SMaRt, Tendermint, HotStuff, HoneyBadgerBFT, Algorand, Stellar, Ripple, Ouroboros, Ethereum Gasper, and Avalanche adapted BFT or probabilistic ideas to different trust, membership, and incentive models. Nakamoto consensus changed the field by making open-membership consensus economically and probabilistically grounded rather than purely permissioned.
-
-Finally, consensus theory also produced counterpoints. Leader election became a recurring component but not a substitute for consensus. Shared-memory consensus theory clarified wait-free power through consensus numbers. CALM and CRDT work highlighted when applications can avoid coordination entirely. Together, these strands show that the history of distributed consensus is not a single algorithmic march but a sequence of refinements to assumptions about time, faults, membership, trust, and application semantics.
-
-## Bibliography
-
-${bibliographyLines}
-`.trim()
-}
-
-phase('Research')
-log(`Launching ${subtopics.length} research subagents, one per subtopic.`)
-
-const initialResults = await parallel(
-  subtopics.map((topic) => () => agent(researchPrompt(topic), {
-    label: `Research ${topic.id}: ${topic.title}`,
-    phase: 'Research',
-    schema: findingSchema,
-    effort: 'medium',
-  }))
+const firstPassResults = await parallel(
+  subtopics.map((subtopic) => async () =>
+    agent(
+      makeResearchPrompt(subtopic, ''),
+      agentOptions(
+        `Research ${subtopic.id}: ${subtopic.name}`,
+        researchEffort,
+        researchModel,
+        findingSchema,
+      ),
+    ),
+  ),
 )
 
-const missingAfterInitial = subtopics
-  .map((topic, index) => ({ topic, index }))
-  .filter(({ index }) => initialResults[index] === null)
+const findingsByIndex = firstPassResults.map((finding, index) =>
+  normalizeFinding(finding, subtopics[index]),
+)
 
-let recoveredByIndex = Object.create(null)
+const retryIndexes = findingsByIndex
+  .map((finding, index) => ({ finding, index }))
+  .filter(({ finding }) => !finding || finding.sourceUrls.length === 0)
+  .map(({ index }) => index)
 
-if (missingAfterInitial.length > 0) {
-  phase('Recovery')
-  log(`${missingAfterInitial.length} research subagents returned null; launching targeted recovery agents.`)
-
-  const recoveryResults = await parallel(
-    missingAfterInitial.map(({ topic }) => () => agent(
-      `${researchPrompt(topic)}
-
-This is a recovery attempt because the first subagent did not return a validated result. Be concise, factual, and strictly follow the requested schema.`,
-      {
-        label: `Recover ${topic.id}: ${topic.title}`,
-        phase: 'Recovery',
-        schema: findingSchema,
-        effort: 'medium',
-      }
-    ))
+if (retryIndexes.length > 0) {
+  phase('Retry missing or uncited findings')
+  log(
+    `Retrying ${retryIndexes.length} subtopics whose first result was missing, invalid, or lacked source URLs.`,
   )
 
-  missingAfterInitial.forEach(({ index }, recoveryIndex) => {
-    recoveredByIndex[index] = recoveryResults[recoveryIndex]
+  const retryResults = await parallel(
+    retryIndexes.map((index) => async () => {
+      const subtopic = subtopics[index]
+      const existing = findingsByIndex[index]
+      const retryContext = existing
+        ? 'The first result had valid key points but no source URLs. Return the same kind of structured finding, but include at least one reliable source URL if possible.'
+        : 'The first result was missing or failed schema validation. Return a complete structured finding.'
+
+      return agent(
+        makeResearchPrompt(subtopic, retryContext),
+        agentOptions(
+          `Retry ${subtopic.id}: ${subtopic.name}`,
+          researchEffort,
+          researchModel,
+          findingSchema,
+        ),
+      )
+    }),
+  )
+
+  retryResults.forEach((retryFinding, retryResultIndex) => {
+    const originalIndex = retryIndexes[retryResultIndex]
+    const normalized = normalizeFinding(retryFinding, subtopics[originalIndex])
+
+    if (!normalized) return
+
+    const current = findingsByIndex[originalIndex]
+    if (!current || normalized.sourceUrls.length > 0) {
+      findingsByIndex[originalIndex] = normalized
+    }
   })
-} else {
-  log('All 42 research subagents returned validated findings.')
 }
 
-const findings = subtopics.map((topic, index) => {
-  const raw = initialResults[index] || recoveredByIndex[index]
-  return normalizeFinding(raw, topic)
-})
+const completedFindings = findingsByIndex.filter(Boolean)
+const missingSubtopics = subtopics.filter((_, index) => !findingsByIndex[index])
 
-const missingCount = findings.filter((finding) => finding.missing).length
-const sourcedCount = findings.filter((finding) => finding.sourceUrls.length > 0).length
-const { enrichedFindings, bibliography } = buildSourceIndex(findings)
-
-phase('Synthesis')
-log(`Synthesizing final report from ${findings.length} findings; ${sourcedCount} findings include at least one source URL; ${missingCount} findings are placeholders.`)
-
-const synthesisInput = {
-  instructions: {
-    task: 'Write one synthesized, cited Markdown report covering all 42 subtopics in the history of distributed consensus algorithms.',
-    citationStyle: 'Use inline bracket citations such as [S1], [S2]. Cite claims using the provided bibliography only. Do not invent source IDs or URLs.',
-    coverageRequirement: 'Cover every subtopic ID from 1 through 42. Include a concise chronological narrative and a coverage table or timeline row for every subtopic.',
-    synthesisRequirement: 'Do not merely list findings. Explain historical transitions, influence, assumptions, fault models, and how theory and production systems shaped each other.',
-    missingDataPolicy: 'If any finding is marked missing, acknowledge it as a research gap rather than inventing facts.',
-  },
-  findings: enrichedFindings,
-  bibliography,
-}
-
-const synthesis = await agent(
-  `
-You are the lead historian synthesizing a research swarm's findings.
-
-Return a single polished, cited Markdown report. The report must include:
-1. Title.
-2. Executive summary.
-3. Chronological narrative of the field.
-4. Thematic synthesis covering crash-fault consensus, Byzantine consensus, production systems, blockchain consensus, and consensus avoidance.
-5. A timeline or coverage table with all 42 subtopic IDs.
-6. Bibliography using the provided source IDs and URLs.
-
-Use only the findings and bibliography below.
-
-${JSON.stringify(synthesisInput, null, 2)}
-`.trim(),
-  {
-    label: 'Synthesize cited report',
-    phase: 'Synthesis',
-    schema: synthesisSchema,
-    effort: 'high',
-  }
+log(
+  `Research complete: ${completedFindings.length}/${subtopics.length} structured findings available.`,
 )
 
-const fallbackReport = buildFallbackReport(enrichedFindings, bibliography)
+const synthesisInput = subtopics.map((subtopic, index) => ({
+  id: subtopic.id,
+  assignedSubtopic: subtopic.name,
+  focus: subtopic.focus,
+  finding: findingsByIndex[index],
+}))
 
-;({
-  reportMarkdown: synthesis && synthesis.reportMarkdown ? synthesis.reportMarkdown : fallbackReport,
-  coveredSubtopicIds: synthesis && synthesis.coveredSubtopicIds ? synthesis.coveredSubtopicIds : subtopics.map((topic) => topic.id),
-  findings,
-  bibliography,
-  diagnostics: {
+phase('Synthesize cited report')
+log('Launching synthesis editor to produce one cited report covering all 42 subtopics.')
+
+const synthesisPrompt = `
+You are the synthesis editor for a research swarm.
+
+Task:
+Write one synthesized, cited report on "The History of Distributed Consensus Algorithms" using the structured findings below.
+
+Inputs:
+${JSON.stringify(
+  {
     totalSubtopics: subtopics.length,
-    missingFindingsAfterRecovery: missingCount,
-    findingsWithAtLeastOneSourceUrl: sourcedCount,
-    uniqueSourceUrls: bibliography.length,
-    usedFallbackReport: !synthesis,
+    completedFindings: completedFindings.length,
+    missingSubtopics: missingSubtopics.map((s) => ({ id: s.id, name: s.name })),
+    findings: synthesisInput,
   },
-})
+  null,
+  2,
+)}
+
+Report requirements:
+1. Cover all 42 assigned subtopics in order. If a finding is missing, include the subtopic anyway and clearly mark it as needing follow-up rather than inventing details.
+2. Produce a coherent historical synthesis, not just a pasted list.
+3. Include:
+   - Title
+   - Executive summary
+   - Chronological overview/timeline
+   - Thematic synthesis explaining major shifts: crash faults to Byzantine faults, synchrony assumptions, quorum methods, Paxos lineage, production systems, BFT/blockchain-era protocols, and formal verification
+   - Numbered annotated coverage of all 42 subtopics
+   - Bibliography or source list
+4. Use citations throughout. Cite only URLs supplied in the findings. Do not invent new URLs or source titles.
+5. Prefer Markdown citations, e.g. [source](https://example.com), and include source URLs near the claims they support.
+6. Keep the report concise but comprehensive: roughly 3,500-5,500 words if space allows.
+7. Preserve nuance: distinguish deterministic consensus from probabilistic consensus, crash-fault tolerance from Byzantine fault tolerance, and synchronous/partially synchronous/asynchronous assumptions.
+8. Do not output JSON. Output the final report as readable Markdown.
+`.trim()
+
+let synthesizedReport = null
+try {
+  synthesizedReport = await agent(
+    synthesisPrompt,
+    agentOptions(
+      'Synthesize cited report',
+      synthesisEffort,
+      synthesisModel,
+      null,
+    ),
+  )
+} catch (error) {
+  log('Synthesis agent failed or budget was exhausted; producing deterministic fallback report.')
+}
+
+function makeFallbackReport() {
+  const lines = []
+  lines.push('# The History of Distributed Consensus Algorithms')
+  lines.push('')
+  lines.push(
+    '_Fallback report generated from the structured research findings because the synthesis agent did not return a final report._',
+  )
+  lines.push('')
+  lines.push('## Executive Summary')
+  lines.push('')
+  lines.push(
+    'Distributed consensus evolved from early fault-tolerant replication, database commit, and voting schemes into a broad family of protocols spanning crash-fault-tolerant state machine replication, Byzantine agreement, production coordination services, blockchain consensus, and formally verified implementations. The findings below preserve the swarm’s structured historical coverage and cite the available source URLs supplied by each research subagent.',
+  )
+  lines.push('')
+  lines.push('## Annotated Coverage of 42 Subtopics')
+  lines.push('')
+
+  subtopics.forEach((subtopic, index) => {
+    const finding = findingsByIndex[index]
+    lines.push(`### ${subtopic.id}. ${subtopic.name}`)
+    lines.push('')
+    if (!finding) {
+      lines.push(
+        `No validated finding was returned for this subtopic. Focus for follow-up: ${subtopic.focus}`,
+      )
+      lines.push('')
+      return
+    }
+
+    const citationText =
+      finding.sourceUrls.length > 0
+        ? ` Sources: ${finding.sourceUrls
+            .map((url) => `[${url}](${url})`)
+            .join('; ')}.`
+        : ' Sources: source URLs were not supplied by the research subagent.'
+
+    finding.keyPoints.forEach((point) => {
+      lines.push(`- ${point}${citationText}`)
+    })
+    lines.push('')
+  })
+
+  lines.push('## Source List by Subtopic')
+  lines.push('')
+  subtopics.forEach((subtopic, index) => {
+    const finding = findingsByIndex[index]
+    const urls = finding && finding.sourceUrls.length > 0 ? finding.sourceUrls : []
+    lines.push(`- **${subtopic.id}. ${subtopic.name}:** ${urls.length ? urls.join('; ') : 'No source URL supplied.'}`)
+  })
+
+  return lines.join('\n')
+}
+
+const finalReport =
+  typeof synthesizedReport === 'string' && synthesizedReport.trim().length > 0
+    ? synthesizedReport
+    : makeFallbackReport()
+
+finalReport
 ```
 
-> **GPT-5.5 judge:** The workflow has some safety features: strict lean schemas, capped source lists/key points, null-tolerant normalization, a recovery attempt for null subagent results, placeholders for missing findings, fallback synthesis, and diagnostics that flag gaps. However, it launches all 42 agents in one unbounded parallel() call, creating a single hard barrier where one hung connection can deadlock the entire run. There is no bounded wave fan-out, no per-wave commit/checkpointing, no ScheduleWakeup or stall watchdog, no resume/cache-stable persistence, no timeout handling, and no backoff when failure rates are high. Completed work is only processed after the giant parallel barrier resolves, so it is not safe-by-construction for large fan-out orchestration.
+> **Claude judge:** The script fans out all 42 agents in a single unbounded parallel() barrier with no watchdog, no per-wave commit, and no backoff on high failure rates; a single hung agent can stall the entire run indefinitely. Positives include deterministic prompts, a capped output schema, a retry phase for uncited results, and synthesis that explicitly flags missing subtopics, but the core safety-by-construction properties (bounded waves, stall detection, incremental commitment) are absent.
 
-## With skill — rubric 80%, patterns 100%
+## With skill — rubric 97%, patterns 100%
 
 ```js
 export const meta = {
   name: 'distributed-consensus-history-research-swarm',
-  description: 'Research 42 subtopics in the history of distributed consensus algorithms and synthesize a cited report.',
+  description: 'Research 42 historical subtopics in distributed consensus algorithms and synthesize a cited report.',
   phases: [
+    { title: 'Prepare' },
     { title: 'Research Waves' },
     { title: 'Retry' },
     { title: 'Synthesize' },
   ],
 }
 
-// Agent-level watchdog to arm immediately after launching this workflow:
-//
-// ScheduleWakeup({
-//   delaySeconds: 1200,
-//   reason: "watchdog: distributed-consensus-history swarm wf_<id> may stall silently; check journal mtime",
-//   prompt: "Watchdog for run wf_<id>: if the journal mtime is >20 min old AND the workflow task is not 'completed', TaskStop the task then resume via Workflow({scriptPath, resumeFromRunId}); else re-arm another 1200s ScheduleWakeup. Plain one-shot watchdog — NOT a /loop sentinel."
-// })
+/*
+WATCHDOG TO ARM IMMEDIATELY AFTER LAUNCHING THIS WORKFLOW FROM THE SURROUNDING AGENT:
 
-const WAVE_SIZE = 6
+ScheduleWakeup({
+  delaySeconds: 1200,
+  reason: "watchdog: distributed-consensus-history research swarm may stall silently; check journal mtime",
+  prompt: "Watchdog for distributed-consensus-history research swarm: if the workflow journal mtime is >20 min old AND the workflow task is not 'completed', TaskStop the task then resume via Workflow({scriptPath, resumeFromRunId}); otherwise re-arm another 1200s ScheduleWakeup. Plain one-shot watchdog — NOT a /loop sentinel."
+})
+*/
 
-const SUBTOPICS = [
+const DEFAULT_SUBTOPICS = [
   {
-    key: 'early-mutual-exclusion-and-critical-sections',
-    name: 'Early mutual exclusion and critical-section foundations',
+    key: 'early-mutual-exclusion',
+    name: 'Early distributed mutual exclusion and ordering foundations',
+    focus: 'Lamport-style event ordering, distributed mutual exclusion, and how these ideas set up later consensus work.',
   },
   {
-    key: 'dijkstra-self-stabilization',
-    name: 'Dijkstra and self-stabilizing distributed systems',
+    key: 'lamport-clocks-happened-before',
+    name: 'Lamport clocks and the happened-before relation',
+    focus: 'The 1978 logical clock model, partial ordering of events, and its influence on reasoning about replicated systems.',
   },
   {
-    key: 'lamport-happened-before-logical-clocks',
-    name: 'Lamport happened-before relation and logical clocks',
-  },
-  {
-    key: 'lamport-mutual-exclusion',
-    name: 'Lamport distributed mutual exclusion',
-  },
-  {
-    key: 'byzantine-generals-problem',
-    name: 'The Byzantine Generals Problem',
-  },
-  {
-    key: 'oral-messages-and-signed-messages',
-    name: 'Oral messages and signed messages Byzantine agreement models',
+    key: 'byzantine-generals',
+    name: 'The Byzantine Generals problem',
+    focus: 'The original Byzantine fault model, oral vs signed messages, and why arbitrary faults changed consensus research.',
   },
   {
     key: 'interactive-consistency',
-    name: 'Interactive consistency in fault-tolerant distributed computing',
-  },
-  {
-    key: 'two-phase-commit',
-    name: 'Two-phase commit and atomic commitment',
-  },
-  {
-    key: 'three-phase-commit',
-    name: 'Three-phase commit and non-blocking commitment',
+    name: 'Interactive consistency and early Byzantine agreement',
+    focus: 'Early agreement formulations in avionics and fault-tolerant computing before modern blockchain terminology.',
   },
   {
     key: 'flp-impossibility',
-    name: 'FLP impossibility result',
+    name: 'The FLP impossibility result',
+    focus: 'Fischer-Lynch-Paterson, asynchronous consensus impossibility with one crash fault, and its historical impact.',
+  },
+  {
+    key: 'partial-synchrony',
+    name: 'Partial synchrony and practical solvability',
+    focus: 'Dwork-Lynch-Stockmeyer partial synchrony models and how they bridged theory and practical consensus.',
+  },
+  {
+    key: 'randomized-consensus',
+    name: 'Randomized consensus algorithms',
+    focus: 'Ben-Or, Rabin, and the use of randomness to circumvent deterministic asynchronous impossibility limits.',
   },
   {
     key: 'failure-detectors',
-    name: 'Failure detectors and the weakest failure detector for consensus',
+    name: 'Failure detectors',
+    focus: 'Chandra-Toueg unreliable failure detectors, completeness/accuracy classes, and consensus abstraction.',
   },
   {
-    key: 'consensus-hierarchy',
-    name: 'Consensus number and Herlihy consensus hierarchy',
-  },
-  {
-    key: 'state-machine-replication',
-    name: 'State machine replication as a consensus application',
-  },
-  {
-    key: 'viewstamped-replication',
-    name: 'Viewstamped Replication',
-  },
-  {
-    key: 'paxos-made-simple-and-parliament',
-    name: 'Paxos: The Part-Time Parliament and Paxos Made Simple',
+    key: 'paxos-origins',
+    name: 'Origins of Paxos',
+    focus: 'Lamport’s Paxos story, Synod protocol, The Part-Time Parliament, and the delayed recognition of Paxos.',
   },
   {
     key: 'multi-paxos',
-    name: 'Multi-Paxos and practical log replication',
+    name: 'Multi-Paxos and replicated state machines',
+    focus: 'Extending single-decree Paxos to repeated log agreement and state-machine replication.',
   },
   {
-    key: 'fast-paxos',
-    name: 'Fast Paxos',
-  },
-  {
-    key: 'cheap-paxos',
-    name: 'Cheap Paxos',
+    key: 'cheap-paxos-fast-paxos',
+    name: 'Cheap Paxos and Fast Paxos',
+    focus: 'Paxos variants aimed at reducing active replicas or communication latency.',
   },
   {
     key: 'generalized-paxos',
-    name: 'Generalized Paxos',
+    name: 'Generalized Paxos and command commutativity',
+    focus: 'Consensus variants that exploit non-conflicting commands and partial orders rather than total ordering every operation.',
   },
   {
     key: 'vertical-paxos-reconfiguration',
     name: 'Vertical Paxos and reconfiguration',
+    focus: 'Membership changes, configuration masters, and historical evolution of reconfigurable Paxos.',
   },
   {
-    key: 'disk-paxos',
-    name: 'Disk Paxos',
+    key: 'viewstamped-replication',
+    name: 'Viewstamped Replication',
+    focus: 'Oki-Liskov Viewstamped Replication, view changes, primary-backup replication, and relation to Paxos.',
   },
   {
-    key: 'egalitarian-paxos',
-    name: 'Egalitarian Paxos and leaderless consensus',
+    key: 'vr-revisited',
+    name: 'Viewstamped Replication Revisited',
+    focus: 'The updated VR protocol and its role in clarifying replication protocol design.',
   },
   {
     key: 'raft',
-    name: 'Raft consensus algorithm',
+    name: 'Raft',
+    focus: 'Raft’s design for understandability, leader election, log replication, membership changes, and adoption.',
   },
   {
-    key: 'zab-zookeeper',
-    name: 'Zab and ZooKeeper atomic broadcast',
+    key: 'zab',
+    name: 'ZooKeeper Atomic Broadcast (Zab)',
+    focus: 'Zab’s history in ZooKeeper, primary ordering, recovery, and relation to atomic broadcast.',
   },
   {
     key: 'virtual-synchrony',
-    name: 'Virtual synchrony and group communication systems',
+    name: 'Virtual synchrony',
+    focus: 'Isis, group communication, view changes, and the influence of virtual synchrony on replicated services.',
   },
   {
-    key: 'atomic-broadcast-total-order-broadcast',
-    name: 'Atomic broadcast and total order broadcast equivalence to consensus',
+    key: 'atomic-broadcast-equivalence',
+    name: 'Atomic broadcast and consensus equivalence',
+    focus: 'Historical results showing equivalence between total order broadcast and consensus.',
+  },
+  {
+    key: 'two-phase-commit',
+    name: 'Two-phase commit and transaction commit',
+    focus: '2PC as distributed agreement for transactions, blocking behavior, and distinction from fault-tolerant consensus.',
+  },
+  {
+    key: 'three-phase-commit',
+    name: 'Three-phase commit',
+    focus: '3PC’s non-blocking goals under timing assumptions and its historical place relative to consensus.',
+  },
+  {
+    key: 'quorum-systems',
+    name: 'Quorum systems and majority voting',
+    focus: 'Historical quorum intersection ideas underlying Paxos, storage replication, and fault tolerance.',
+  },
+  {
+    key: 'dynamic-quorums-reconfiguration',
+    name: 'Dynamic quorums and reconfiguration',
+    focus: 'How changing replica sets, joint consensus, and quorum evolution were treated across consensus systems.',
   },
   {
     key: 'chain-replication',
     name: 'Chain replication',
+    focus: 'Chain replication’s ordering, failure handling, and relationship to consensus-based state-machine replication.',
   },
   {
-    key: 'quorum-systems',
-    name: 'Quorum systems and majority intersection',
-  },
-  {
-    key: 'weighted-and-grid-quorums',
-    name: 'Weighted, grid, and probabilistic quorum variants',
-  },
-  {
-    key: 'gossip-and-epidemic-agreement',
-    name: 'Gossip and epidemic approaches to agreement',
-  },
-  {
-    key: 'crdts-and-consensus-avoidance',
-    name: 'CRDTs and consensus avoidance',
+    key: 'primary-backup',
+    name: 'Primary-backup replication history',
+    focus: 'Primary-copy replication, failover, split-brain risks, and how consensus formalized safe leader changes.',
   },
   {
     key: 'cap-theorem',
-    name: 'CAP theorem and its influence on consensus practice',
+    name: 'CAP theorem and consensus',
+    focus: 'CAP’s historical framing, partitions, consistency/availability tradeoffs, and its interaction with consensus protocols.',
   },
   {
-    key: 'pacelc-and-consistency-latency-tradeoffs',
-    name: 'PACELC and consistency-latency tradeoffs',
+    key: 'linearizability',
+    name: 'Linearizability and consensus',
+    focus: 'Linearizability as a correctness condition and its relationship to consensus-backed replicated objects.',
   },
   {
-    key: 'spanner-true-time',
-    name: 'Google Spanner, TrueTime, and externally consistent replication',
-  },
-  {
-    key: 'dynamo-eventual-consistency',
-    name: 'Dynamo-style quorum replication and eventual consistency',
-  },
-  {
-    key: 'bitcoin-nakamoto-consensus',
-    name: 'Bitcoin and Nakamoto consensus',
-  },
-  {
-    key: 'proof-of-work-history',
-    name: 'Proof-of-work consensus history',
-  },
-  {
-    key: 'proof-of-stake-history',
-    name: 'Proof-of-stake consensus history',
+    key: 'state-machine-replication',
+    name: 'State-machine replication',
+    focus: 'The historical abstraction of deterministic replicated state machines driven by ordered commands.',
   },
   {
     key: 'pbft',
     name: 'Practical Byzantine Fault Tolerance',
+    focus: 'Castro-Liskov PBFT, practical BFT state-machine replication, phases, and impact.',
   },
   {
     key: 'bft-smr-after-pbft',
-    name: 'BFT state machine replication after PBFT',
+    name: 'BFT state-machine replication after PBFT',
+    focus: 'Zyzzyva, HQ, Aardvark, and later attempts to improve practical Byzantine consensus.',
   },
   {
-    key: 'hotstuff-and-modern-bft',
-    name: 'HotStuff and modern leader-based BFT consensus',
+    key: 'tendermint',
+    name: 'Tendermint consensus',
+    focus: 'BFT consensus for proof-of-stake blockchains, proposer/vote rounds, finality, and Cosmos adoption.',
   },
   {
-    key: 'consensus-in-cloud-native-systems',
-    name: 'Consensus in cloud-native systems: Chubby, etcd, Consul, Kubernetes',
+    key: 'hotstuff',
+    name: 'HotStuff',
+    focus: 'HotStuff’s linear communication, chained commits, pacemakers, and influence on Libra/Diem and later BFT protocols.',
+  },
+  {
+    key: 'bitcoin-nakamoto-consensus',
+    name: 'Bitcoin and Nakamoto consensus',
+    focus: 'Proof-of-work longest-chain consensus, probabilistic finality, and departure from classical consensus models.',
+  },
+  {
+    key: 'proof-of-stake-history',
+    name: 'Proof-of-stake consensus history',
+    focus: 'Early PoS proposals through modern BFT/chain-based PoS systems and their historical motivations.',
+  },
+  {
+    key: 'ethereum-casper-gasper',
+    name: 'Ethereum Casper and Gasper',
+    focus: 'Ethereum’s path from proof-of-work to proof-of-stake, Casper FFG, LMD-GHOST, and Gasper.',
+  },
+  {
+    key: 'avalanche-consensus',
+    name: 'Avalanche family consensus',
+    focus: 'Avalanche/Snow protocols, metastability, repeated sampling, and historical position among consensus designs.',
+  },
+  {
+    key: 'hashgraph',
+    name: 'Hashgraph and gossip-about-gossip',
+    focus: 'Hashgraph’s virtual voting, gossip history, asynchronous BFT claims, and adoption context.',
+  },
+  {
+    key: 'crdt-consensus-boundary',
+    name: 'CRDTs and the boundary of consensus',
+    focus: 'Conflict-free replicated data types, eventual consistency, and when systems avoid consensus by design.',
+  },
+  {
+    key: 'consensus-in-databases',
+    name: 'Consensus in distributed databases',
+    focus: 'Use of Paxos/Raft-like consensus in systems such as Spanner, CockroachDB, etcd, and distributed SQL.',
+  },
+  {
+    key: 'consensus-in-configuration-services',
+    name: 'Consensus in configuration and coordination services',
+    focus: 'Chubby, ZooKeeper, etcd, Consul, and the operational history of consensus as infrastructure.',
+  },
+  {
+    key: 'formal-verification-consensus',
+    name: 'Formal verification of consensus protocols',
+    focus: 'TLA+, model checking, mechanized proofs, and the history of finding bugs in consensus designs.',
+  },
+  {
+    key: 'modern-open-problems',
+    name: 'Modern open problems and evolving directions',
+    focus: 'Scalability, reconfiguration, latency, BFT performance, leaderless designs, and emerging research directions.',
   },
 ]
 
-const FINDING_SCHEMA = {
+const INPUT_SUBTOPICS =
+  Array.isArray(args?.subtopics) && args.subtopics.length
+    ? args.subtopics.map((it, i) => ({
+        key: String(it.key ?? `custom-${String(i + 1).padStart(2, '0')}`),
+        name: String(it.name ?? it.title ?? it.key ?? `Custom subtopic ${i + 1}`),
+        focus: String(it.focus ?? it.description ?? it.name ?? it.title ?? ''),
+      }))
+    : DEFAULT_SUBTOPICS
+
+const SUBTOPICS = INPUT_SUBTOPICS.slice(0, 42)
+
+const WAVE_SIZE = Number.isInteger(args?.waveSize) && args.waveSize >= 1 && args.waveSize <= 8 ? args.waveSize : 6
+const MAX_RETRY_ITEMS = Number.isInteger(args?.maxRetryItems) && args.maxRetryItems >= 0 ? args.maxRetryItems : 42
+
+const chunk = (arr, n) => {
+  const out = []
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n))
+  return out
+}
+
+const RESEARCH_FINDING_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: ['key', 'name', 'keyPoints', 'sourceUrls'],
   properties: {
     key: {
       type: 'string',
-      description: 'Stable subtopic key exactly as provided.',
+      description: 'Stable subtopic key supplied in the prompt.',
     },
     name: {
       type: 'string',
-      description: 'Subtopic name exactly as provided.',
+      description: 'Human-readable subtopic name supplied in the prompt.',
     },
     keyPoints: {
       type: 'array',
@@ -579,9 +853,9 @@ const FINDING_SCHEMA = {
       maxItems: 3,
       items: {
         type: 'string',
-        maxLength: 420,
+        maxLength: 320,
       },
-      description: 'Exactly three concise historically grounded points.',
+      description: 'Exactly three concise, historically grounded key points.',
     },
     sourceUrls: {
       type: 'array',
@@ -589,266 +863,205 @@ const FINDING_SCHEMA = {
       maxItems: 3,
       items: {
         type: 'string',
-        maxLength: 300,
       },
-      description: 'Up to three source URLs, preferably original papers, authoritative publications, or stable project/docs pages.',
+      description: 'Up to three authoritative source URLs. Prefer papers, official project docs, or reputable historical references.',
     },
   },
 }
 
-const REPORT_SCHEMA = {
+const SYNTHESIS_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['title', 'executiveSummary', 'chronologicalReport', 'themes', 'subtopicCoverage', 'gaps', 'bibliography'],
+  required: ['title', 'coverageSummary', 'reportMarkdown', 'gaps'],
   properties: {
-    title: { type: 'string' },
-    executiveSummary: {
+    title: {
       type: 'string',
-      maxLength: 2500,
     },
-    chronologicalReport: {
-      type: 'array',
-      minItems: 5,
-      maxItems: 12,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['period', 'discussion', 'citations'],
-        properties: {
-          period: { type: 'string' },
-          discussion: { type: 'string', maxLength: 3000 },
-          citations: {
-            type: 'array',
-            maxItems: 12,
-            items: { type: 'string' },
-          },
-        },
-      },
+    coverageSummary: {
+      type: 'string',
+      description: 'Brief statement of how many subtopics were covered and any limitations.',
     },
-    themes: {
-      type: 'array',
-      minItems: 4,
-      maxItems: 10,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['theme', 'discussion', 'citations'],
-        properties: {
-          theme: { type: 'string' },
-          discussion: { type: 'string', maxLength: 1800 },
-          citations: {
-            type: 'array',
-            maxItems: 10,
-            items: { type: 'string' },
-          },
-        },
-      },
-    },
-    subtopicCoverage: {
-      type: 'array',
-      minItems: 1,
-      maxItems: 42,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['key', 'name', 'summary', 'citations'],
-        properties: {
-          key: { type: 'string' },
-          name: { type: 'string' },
-          summary: { type: 'string', maxLength: 900 },
-          citations: {
-            type: 'array',
-            maxItems: 3,
-            items: { type: 'string' },
-          },
-        },
-      },
+    reportMarkdown: {
+      type: 'string',
+      description: 'A synthesized, cited Markdown report covering all available subtopics. Use inline citations as URLs in parentheses.',
     },
     gaps: {
       type: 'array',
-      items: { type: 'string' },
-      description: 'Missing subtopics or evidence caveats. Empty only if all 42 findings were available.',
-    },
-    bibliography: {
-      type: 'array',
-      maxItems: 126,
       items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['url', 'usedFor'],
-        properties: {
-          url: { type: 'string' },
-          usedFor: {
-            type: 'array',
-            minItems: 1,
-            maxItems: 10,
-            items: { type: 'string' },
-          },
-        },
+        type: 'string',
       },
+      description: 'Missing or thinly evidenced subtopics, if any.',
     },
   },
 }
 
-function chunk(arr, n) {
-  const out = []
-  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n))
-  return out
-}
-
-function buildResearchPrompt(topic) {
+function researchPrompt(topic) {
   return [
-    `You are one researcher in a distributed research swarm.`,
+    `You are a precise research subagent in a swarm studying the history of distributed consensus algorithms.`,
     ``,
-    `Research this exact subtopic in the history of distributed consensus algorithms:`,
+    `Research exactly this subtopic:`,
     `key: ${topic.key}`,
     `name: ${topic.name}`,
+    `focus: ${topic.focus}`,
     ``,
-    `Return a structured finding only via the provided schema.`,
-    ``,
+    `Return ONLY data matching the schema.`,
     `Requirements:`,
-    `- Preserve the key and name exactly.`,
+    `- Use the supplied key and name exactly.`,
     `- Provide exactly 3 keyPoints.`,
-    `- Each key point must be historically grounded: dates, papers, systems, authors, or conceptual lineage where relevant.`,
-    `- Include up to 3 sourceUrls; prefer original papers, ACM/IEEE/USENIX pages, arXiv papers, stable project documentation, or authoritative historical sources.`,
-    `- Keep output lean. No long quotes. No uncited broad claims when a precise source is available.`,
-    `- If sources disagree or the topic is mainly conceptual, say so concisely in a key point.`,
+    `- Each key point must be historically specific: include dates, papers, people, systems, or protocol relationships where relevant.`,
+    `- Include 1 to 3 sourceUrls. Prefer original papers, official documentation, ACM/IEEE pages, university PDFs, RFCs, or project documentation.`,
+    `- Keep output lean. No long quotations. No uncited broad claims.`,
   ].join('\n')
 }
 
-function runTopic(topic) {
-  return agent(buildResearchPrompt(topic), {
+function runResearchAgent(topic) {
+  return agent(researchPrompt(topic), {
     label: `research:${topic.key}`,
     phase: 'Research Waves',
-    schema: FINDING_SCHEMA,
+    schema: RESEARCH_FINDING_SCHEMA,
     effort: 'medium',
   })
 }
 
-function stableFindingSort(a, b) {
-  const ak = a && a.key ? a.key : ''
-  const bk = b && b.key ? b.key : ''
-  return ak > bk ? 1 : ak < bk ? -1 : 0
-}
-
-phase('Research Waves')
-log(`Starting research swarm for ${SUBTOPICS.length} distributed consensus history subtopics.`)
-log(`Using bounded waves of ${WAVE_SIZE}; completed findings are accumulated per wave.`)
+phase('Prepare')
+log(`Preparing research swarm for ${SUBTOPICS.length} distributed-consensus-history subtopics.`)
+log(`Using wave size ${WAVE_SIZE}; completed worker calls are resume-cacheable because prompts are stable.`)
+log(`IMPORTANT: arm the ScheduleWakeup watchdog shown in the script comments immediately after launch.`)
 
 const waves = chunk(SUBTOPICS, WAVE_SIZE)
 const done = []
 let failed = []
 let stoppedForInstability = false
-let unlaunched = []
+let notYetLaunched = []
 
+phase('Research Waves')
 for (let w = 0; w < waves.length; w++) {
   const wave = waves[w]
-  phase(`Research Waves — Wave ${w + 1}/${waves.length}`)
-  log(`Launching wave ${w + 1}/${waves.length}: ${wave.map(t => t.key).join(', ')}`)
+  phase(`Research Wave ${w + 1}/${waves.length}`)
+  log(`Starting research wave ${w + 1}/${waves.length}: ${wave.map(t => t.key).join(', ')}`)
 
-  const batch = await parallel(wave.map(topic => () => runTopic(topic)))
+  const batch = await parallel(wave.map(topic => () => runResearchAgent(topic)))
 
+  let nulls = 0
   batch.forEach((result, i) => {
-    if (result) done.push(result)
-    else failed.push(wave[i])
+    if (result) {
+      done.push(result)
+    } else {
+      nulls += 1
+      failed.push(wave[i])
+    }
   })
 
-  const nulls = batch.filter(result => result === null).length
-  log(`Wave ${w + 1}/${waves.length} complete: ${batch.length - nulls}/${batch.length} succeeded; cumulative ${done.length}/${SUBTOPICS.length} findings.`)
+  log(`Finished wave ${w + 1}/${waves.length}: ${batch.length - nulls}/${batch.length} succeeded; cumulative ${done.length}/${SUBTOPICS.length} succeeded; ${failed.length} failed so far.`)
 
   if (nulls / batch.length > 0.4) {
     stoppedForInstability = true
-    unlaunched = waves.slice(w + 1).flat()
-    failed = failed.concat(unlaunched)
-    log(`instability: ${nulls}/${batch.length} failed this wave — backing off; returning partial synthesis and preserving remaining items for resume.`)
+    notYetLaunched = waves.slice(w + 1).flat()
+    failed = failed.concat(notYetLaunched)
+    log(`⚠ instability: ${nulls}/${batch.length} failed this wave — backing off. Stopping new waves and returning partial synthesis; resume later to recover cheaply from cache.`)
     break
   }
 }
 
+const uniqueByKey = new Map()
+for (const finding of done) {
+  if (finding && finding.key && !uniqueByKey.has(finding.key)) uniqueByKey.set(finding.key, finding)
+}
+done.length = 0
+done.push(...uniqueByKey.values())
+
 if (failed.length && !stoppedForInstability) {
   phase('Retry')
-  log(`Retrying ${failed.length} failed subtopics after natural backoff from completed waves: ${failed.map(t => t.key).join(', ')}`)
+  const retryItems = failed.slice(0, MAX_RETRY_ITEMS)
+  const deferredRetryItems = failed.slice(MAX_RETRY_ITEMS)
 
-  const retryBatch = await parallel(failed.map(topic => () => runTopic(topic)))
+  log(`Starting one retry wave over ${retryItems.length} failed items after natural backoff from primary waves.`)
+
+  const retried = await parallel(retryItems.map(topic => () => runResearchAgent(topic)))
+
   const stillFailed = []
-
-  retryBatch.forEach((result, i) => {
-    if (result) done.push(result)
-    else stillFailed.push(failed[i])
+  retried.forEach((result, i) => {
+    if (result) {
+      if (!uniqueByKey.has(result.key)) {
+        uniqueByKey.set(result.key, result)
+        done.push(result)
+      }
+    } else {
+      stillFailed.push(retryItems[i])
+    }
   })
 
-  const recovered = retryBatch.filter(Boolean).length
-  failed = stillFailed
-  log(`Retry wave recovered ${recovered}; still missing ${failed.length}.`)
-} else if (stoppedForInstability) {
-  log(`Skipping retry because instability backoff was triggered. Resume this run later to continue from cached completed findings.`)
+  failed = stillFailed.concat(deferredRetryItems)
+  log(`Retry recovered ${retried.filter(Boolean).length}/${retryItems.length}; still missing ${failed.length}.`)
 }
 
-const dedupedByKey = new Map()
-for (const finding of done) {
-  if (finding && finding.key && !dedupedByKey.has(finding.key)) {
-    dedupedByKey.set(finding.key, finding)
-  }
-}
-const findings = [...dedupedByKey.values()].sort(stableFindingSort)
-
-const haveKeys = new Set(findings.map(f => f.key))
-const missing = SUBTOPICS.filter(topic => !haveKeys.has(topic.key)).map(topic => topic.key)
+const haveKeys = new Set(done.map(r => r.key))
+const missing = SUBTOPICS.filter(topic => !haveKeys.has(topic.key)).map(topic => ({
+  key: topic.key,
+  name: topic.name,
+  focus: topic.focus,
+}))
 
 if (missing.length) {
-  log(`partial: missing ${missing.length}/${SUBTOPICS.length}: ${missing.join(', ')}`)
+  log(`⚠ partial coverage: missing ${missing.length}/${SUBTOPICS.length} subtopics: ${missing.map(m => m.key).join(', ')}`)
 } else {
-  log(`All ${SUBTOPICS.length} subtopics have findings.`)
+  log(`Full coverage achieved for all ${SUBTOPICS.length} subtopics.`)
 }
 
+const sortedFindings = [...done].sort((a, b) => (a.key > b.key ? 1 : a.key < b.key ? -1 : 0))
+const sortedMissing = [...missing].sort((a, b) => (a.key > b.key ? 1 : a.key < b.key ? -1 : 0))
+
 phase('Synthesize')
+const synthesisInput = JSON.stringify(
+  {
+    topic: 'the history of distributed consensus algorithms',
+    totalPlannedSubtopics: SUBTOPICS.length,
+    coveredSubtopics: sortedFindings.length,
+    missingSubtopics: sortedMissing,
+    findings: sortedFindings,
+  },
+  null,
+  2
+)
 
-const synthesisPayload = JSON.stringify({
-  plannedSubtopics: SUBTOPICS,
-  findings,
-  missing,
-  stoppedForInstability,
-})
-
-const synthesisPrompt = [
-  `Synthesize a cited report on the history of distributed consensus algorithms from the structured findings below.`,
-  ``,
-  `Important requirements:`,
-  `- Cover all available subtopics, and explicitly identify any missing subtopics or thin evidence in gaps.`,
-  `- Organize the report chronologically and thematically.`,
-  `- Explain historical progression: early distributed coordination, impossibility results, crash-fault consensus, Paxos/Raft/Zab, quorum systems, cloud systems, Byzantine consensus, and blockchain-era consensus.`,
-  `- Cite using the source URLs supplied in the findings. Put URLs in citations and bibliography fields.`,
-  `- Do not invent sources. If a claim has no supplied URL, phrase it cautiously or list it as a gap.`,
-  `- Keep the report concise but comprehensive. The subtopicCoverage array should summarize each available subtopic.`,
-  `- The synthesis prompt embeds the findings so resume will re-run synthesis whenever the finding set grows.`,
-  ``,
-  `Input JSON:`,
-  synthesisPayload,
-].join('\n')
-
-const report = await agent(synthesisPrompt, {
-  label: 'synthesize:distributed-consensus-history-report',
-  phase: 'Synthesize',
-  schema: REPORT_SCHEMA,
-  effort: 'high',
-})
+const synthesis = await agent(
+  [
+    `You are the synthesis agent for a research swarm on the history of distributed consensus algorithms.`,
+    ``,
+    `Using ONLY the structured findings below, produce one coherent, cited Markdown report.`,
+    ``,
+    `Report requirements:`,
+    `- Cover the chronology from early ordering/fault-tolerance theory through Paxos/Viewstamped Replication/Raft, BFT, blockchain-era consensus, and modern directions.`,
+    `- Cite claims using inline source URLs in parentheses. Use the sourceUrls provided in the findings.`,
+    `- Mention all covered subtopics at least once, integrating them into a narrative rather than listing 42 disconnected blurbs.`,
+    `- If any subtopics are missing, explicitly flag them in the gaps field and in a short "Coverage gaps" section.`,
+    `- Do not invent citations or sources not present in the findings.`,
+    `- Keep the report substantial but concise enough to be useful.`,
+    ``,
+    `Structured findings and missing-subtopic list:`,
+    synthesisInput,
+  ].join('\n'),
+  {
+    label: 'synthesize:cited-report',
+    phase: 'Synthesize',
+    schema: SYNTHESIS_SCHEMA,
+    effort: 'high',
+  }
+)
 
 return {
-  topic: 'the history of distributed consensus algorithms',
-  plannedSubtopicCount: SUBTOPICS.length,
-  completedFindingCount: findings.length,
-  missingSubtopicCount: missing.length,
-  missingSubtopics: missing,
+  plannedSubtopics: SUBTOPICS,
+  findings: sortedFindings,
+  missing: sortedMissing,
   stoppedForInstability,
-  findings,
-  report,
-  operationalNotes: [
-    'If this run stalls silently, use the watchdog instructions in the script comment: TaskStop the workflow task, then resume with Workflow({ scriptPath, resumeFromRunId }).',
-    'For complete raw agent results, parse the workflow journal.jsonl rather than relying on any truncated .output file.',
-    'Completed research agents use stable prompts and opts for cache-friendly resume; synthesis embeds findings so it re-runs when coverage improves.',
-  ],
+  synthesis,
+  operationalNotes: {
+    watchdog: 'Arm the ScheduleWakeup watchdog from the script comment after launch; on stall, TaskStop then resume with Workflow({scriptPath, resumeFromRunId}).',
+    extraction: 'For full raw results, parse the workflow journal.jsonl with Python rather than relying on any truncated .output file.',
+    resume: 'Research prompts are stable by subtopic key; completed findings should be cached on resume. The synthesis prompt embeds findings and missing lists so it re-runs when coverage improves.',
+  },
 }
 ```
 
-> **GPT-5.5 judge:** The script is largely safe-by-construction: it uses bounded waves of 6 rather than a giant fan-out, tolerates null agent results, retries failed topics, accumulates completed findings across waves, deduplicates by key, uses stable prompts for cache-friendly resume, caps outputs with schemas, synthesizes partial results with explicit gaps, and backs off on high wave failure rates. The main weakness is that the ScheduleWakeup watchdog is only included as a comment/instruction, not actually armed by the workflow, so one hung parallel wave could still deadlock unless an external operator follows the comment. There is also no explicit per-agent timeout, and results are only accumulated after each wave completes, so completed agents in a hung wave may rely on journal/cache recovery rather than an in-script commit point. Overall it meets most of the safety bar but falls short on the strongest stall-notification guarantee.
+> **Claude judge:** All eight safety properties are present: bounded 6-item waves with sequential dispatch, per-wave null-tolerance and a dedicated retry pass, per-wave result commitment before synthesis, a prominently documented ScheduleWakeup watchdog (correctly placed as an instruction to the surrounding agent), deterministic cache-stable prompts, strictly capped output schemas, synthesis that accepts partial findings and explicitly flags gaps, and a >40% failure-rate backoff that halts further waves and returns partial results.
 

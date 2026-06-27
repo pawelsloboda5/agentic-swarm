@@ -1,6 +1,6 @@
 # code-review-swarm — `gpt-5.4-mini`
 
-> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: GPT-5.5.
+> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: Claude (claude-sonnet-4-6).
 
 **Task**
 
@@ -8,455 +8,299 @@
 
 ---
 
-## Baseline (no skill) — rubric 30%, patterns 56%
+## Baseline (no skill) — rubric 25%, patterns 50%
 
 ```js
 export const meta = {
   name: 'code-review-swarm',
   description:
-    'Review up to 28 changed files across correctness, security, performance, style, and missing tests, then verify and synthesize prioritized findings.',
+    'Review 28 changed files across correctness, security, performance, style, and missing tests; verify findings and synthesize a prioritized review.',
   phases: [
-    { title: 'Inventory' },
-    { title: 'Findings Sweep' },
-    { title: 'Verification' },
-    { title: 'Synthesis' },
+    { title: 'Ingest' },
+    { title: 'Find Candidates' },
+    { title: 'Verify Findings' },
+    { title: 'Synthesize Review' },
   ],
 }
 
-// ------------------------------
-// Helpers
-// ------------------------------
+const input = args ?? {}
+const changedFiles = Array.isArray(input.changedFiles) ? input.changedFiles : []
+const diffContext = input.diffContext ?? ''
+const repoContext = input.repoContext ?? ''
+const reviewScope = input.reviewScope ?? 'changed files only'
 
-const DIMENSIONS = [
-  'correctness bugs',
-  'security',
-  'performance',
-  'style',
-  'missing tests',
-]
-
-const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info']
-
-function normalizeSeverity(s) {
-  const v = String(s || '').trim().toLowerCase()
-  if (['critical', 'blocker', 'sev0'].includes(v)) return 'critical'
-  if (['high', 'sev1'].includes(v)) return 'high'
-  if (['medium', 'moderate', 'sev2'].includes(v)) return 'medium'
-  if (['low', 'minor', 'sev3'].includes(v)) return 'low'
-  return 'info'
-}
-
-function severityRank(s) {
-  return SEVERITY_ORDER.indexOf(normalizeSeverity(s))
-}
-
-function safeArray(x) {
-  return Array.isArray(x) ? x : []
-}
-
-function dedupeFindings(findings) {
-  const seen = new Set()
+function chunk(array, size) {
   const out = []
-  for (const f of safeArray(findings)) {
-    if (!f || typeof f !== 'object') continue
-    const key = [
-      String(f.filePath || f.file || '').toLowerCase(),
-      String(f.issue || f.title || f.summary || '').toLowerCase(),
-      String(f.dimension || '').toLowerCase(),
-      String(f.location || '').toLowerCase(),
-    ].join('|')
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(f)
+  for (let i = 0; i < array.length; i += size) out.push(array.slice(i, i + size))
+  return out
+}
+
+function normalizeFinding(f) {
+  if (!f) return null
+  const severity = String(f.severity ?? 'medium').toLowerCase()
+  return {
+    file: f.file ?? f.path ?? null,
+    title: f.title ?? f.summary ?? null,
+    description: f.description ?? f.details ?? null,
+    dimension: f.dimension ?? f.category ?? null,
+    severity,
+    rationale: f.rationale ?? null,
+    evidence: f.evidence ?? null,
+    recommendation: f.recommendation ?? null,
   }
-  return out
 }
 
-function pickFiles(args) {
-  const raw =
-    args?.changedFiles ||
-    args?.files ||
-    args?.diffFiles ||
-    args?.paths ||
-    args?.inputFiles ||
-    []
-  const arr = safeArray(raw)
-    .map((x) => {
-      if (typeof x === 'string') return { path: x }
-      if (x && typeof x === 'object') return { ...x, path: x.path || x.filePath || x.name }
-      return null
-    })
-    .filter((x) => x && x.path)
-    .slice(0, 28)
-  return arr
+function severityRank(sev) {
+  const s = String(sev ?? '').toLowerCase()
+  if (s === 'critical') return 0
+  if (s === 'high') return 1
+  if (s === 'medium') return 2
+  if (s === 'low') return 3
+  return 4
 }
 
-function summarizeFiles(files) {
-  return files.map((f, i) => `${i + 1}. ${f.path}`).join('\n')
-}
+phase('Ingest')
+log(`Reviewing ${changedFiles.length} changed files with scope: ${reviewScope}`)
 
-function chunk(items, size) {
-  const out = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
-  return out
-}
+const fileBatches = chunk(changedFiles.length ? changedFiles : ['<no files provided>'], 7)
 
-function reviewPromptForChunk(chunkFiles, dimensions) {
-  return `
-You are one reviewer in a code-review swarm.
-
-Goal:
-Review the following changed files for the dimensions listed below, and propose only candidate findings that are plausibly real and actionable.
-
-Dimensions:
-${dimensions.map((d) => `- ${d}`).join('\n')}
+phase('Find Candidates')
+const candidateBatches = await parallel(
+  fileBatches.map((batch, batchIndex) => async () => {
+    const prompt = `
+You are a code-review specialist in a swarm. Review the following changed files and identify ONLY candidate issues.
+Focus on five dimensions:
+1) correctness bugs
+2) security vulnerabilities
+3) performance regressions
+4) style / maintainability problems
+5) missing tests / weak test coverage
 
 Instructions:
-- Focus on concrete issues introduced or exposed by these changes.
-- Prefer precise findings over broad commentary.
-- For each candidate finding, include:
-  - filePath
-  - line or region if known
-  - dimension
-  - severity (critical/high/medium/low/info)
-  - concise issue summary
-  - why it matters
-  - suggested fix
-  - confidence from 0 to 1
-- Include missing tests where a specific test is warranted.
-- Avoid duplicate or near-duplicate findings.
-- If a file looks clean, do not force a finding.
+- Be concrete and file-specific.
+- Prefer fewer, high-signal findings over many speculative ones.
+- For each candidate, include: file, dimension, severity, title, description, rationale, and evidence from the diff/context.
+- Severity should be one of: critical, high, medium, low.
+- Do not include duplicates.
+- Do not invent issues without support from the provided context.
+- If a file is clearly fine, say nothing about it.
 
-Changed files:
-${chunkFiles.map((f) => `- ${f.path}`).join('\n')}
+Repository context:
+${repoContext}
 
-Return structured JSON with shape:
-{
-  "findings": [
-    {
-      "filePath": "string",
-      "line": "string|number|null",
-      "dimension": "string",
-      "severity": "critical|high|medium|low|info",
-      "issue": "string",
-      "whyItMatters": "string",
-      "suggestedFix": "string",
-      "confidence": 0.0
-    }
-  ]
-}
+Diff/context:
+${diffContext}
+
+Files in this batch:
+${batch.map((f, i) => `${batchIndex * 7 + i + 1}. ${typeof f === 'string' ? f : JSON.stringify(f)}`).join('\n')}
+
+Return a JSON array of candidate findings.
 `
-}
+    const res = await agent(prompt, {
+      label: `candidate-batch-${batchIndex + 1}`,
+      phase: 'Find Candidates',
+      schema: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            file: { type: 'string' },
+            dimension: { type: 'string' },
+            severity: { type: 'string' },
+            title: { type: 'string' },
+            description: { type: 'string' },
+            rationale: { type: 'string' },
+            evidence: { type: 'string' },
+            recommendation: { type: 'string' },
+          },
+          required: ['title', 'dimension', 'severity'],
+        },
+      },
+      effort: 'high',
+    })
+    return Array.isArray(res) ? res.map(normalizeFinding).filter(Boolean) : []
+  })
+)
 
-function verificationPrompt(finding, surroundingContext) {
-  return `
+const candidates = candidateBatches.flat()
+
+phase('Verify Findings')
+const verified = await parallel(
+  candidates.map((finding, idx) => async () => {
+    const prompt = `
 You are a strict verifier for code-review findings.
 
-Task:
-Verify whether the candidate finding is supported by the provided evidence.
-Do not be generous: reject anything speculative, vague, or ungrounded.
+Goal:
+Determine whether the candidate finding is supported by the provided repository context and diff, and whether it should be included in the final review.
+
+Rules:
+- Verify conservatively: if evidence is weak, mark as rejected.
+- Require direct support in the diff/context for the claimed issue.
+- Reject duplicates or overly vague findings.
+- If the issue depends on unseen code, reject unless the provided context is enough to confirm.
+- If accepted, preserve file, dimension, severity, title, description, evidence, and recommendation.
+- If rejected, return accepted=false and a brief reason.
 
 Candidate finding:
 ${JSON.stringify(finding, null, 2)}
 
-Available context:
-${surroundingContext || '(none provided)'}
+Repository context:
+${repoContext}
 
-Return structured JSON:
+Diff/context:
+${diffContext}
+
+Return JSON with:
 {
-  "verdict": "accept" | "reject" | "uncertain",
-  "severity": "critical|high|medium|low|info",
-  "reason": "short explanation",
-  "refinedFinding": {
-    "filePath": "string",
-    "line": "string|number|null",
-    "dimension": "string",
-    "severity": "critical|high|medium|low|info",
-    "issue": "string",
-    "whyItMatters": "string",
-    "suggestedFix": "string",
-    "confidence": 0.0
-  }
+  "accepted": boolean,
+  "reason": string,
+  "finding"?: { ...approved finding fields... }
 }
 `
-}
-
-function synthesisPrompt(verifiedFindings, files) {
-  return `
-You are synthesizing a final code review from verified findings only.
-
-Requirements:
-- Produce a single prioritized review.
-- Group findings by severity from critical to info.
-- Keep the review concise but actionable.
-- Exclude rejected or uncertain items unless they are clearly framed as lower-confidence notes; default to excluding them.
-- If there are no verified findings, say so plainly and mention that no material issues were confirmed.
-- Include file paths and brief rationale for each finding.
-
-Changed files reviewed:
-${files.map((f) => `- ${f.path}`).join('\n')}
-
-Verified findings:
-${JSON.stringify(verifiedFindings, null, 2)}
-
-Return a polished markdown review with sections:
-1. Summary
-2. Prioritized Findings
-3. Test Gaps
-4. Notes
-`
-}
-
-// ------------------------------
-// Workflow
-// ------------------------------
-
-phase('Inventory')
-
-const files = pickFiles(args)
-log(`Reviewing ${files.length} changed file(s) across ${DIMENSIONS.length} dimensions.`)
-
-if (files.length === 0) {
-  const emptyReview = `## Summary
-
-No changed files were provided, so no review could be performed.
-
-## Prioritized Findings
-
-None.
-
-## Test Gaps
-
-None identified.
-
-## Notes
-
-Provide the list of changed files or a diff for analysis.
-`
-  export default emptyReview
-}
-
-log(`Files:\n${summarizeFiles(files)}`)
-
-phase('Findings Sweep')
-
-const fileChunks = chunk(files, 7)
-
-const candidateGroups = await parallel(
-  fileChunks.map((fileChunk, idx) => async () => {
-    const prompt = reviewPromptForChunk(fileChunk, DIMENSIONS)
-    const result = await agent(prompt, {
-      label: `sweep-${idx + 1}`,
-      phase: 'Findings Sweep',
-      effort: 'high',
-      schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          findings: {
-            type: 'array',
-            items: {
-              type: 'object',
-              additionalProperties: true,
-              properties: {
-                filePath: { type: 'string' },
-                line: {},
-                dimension: { type: 'string' },
-                severity: { type: 'string' },
-                issue: { type: 'string' },
-                whyItMatters: { type: 'string' },
-                suggestedFix: { type: 'string' },
-                confidence: { type: 'number' },
-              },
-              required: ['filePath', 'dimension', 'severity', 'issue'],
-            },
-          },
-        },
-        required: ['findings'],
-      },
-    })
-    return safeArray(result?.findings)
-  })
-)
-
-let candidates = dedupeFindings(candidateGroups.flat())
-candidates = candidates
-  .map((f) => ({
-    ...f,
-    severity: normalizeSeverity(f.severity),
-    confidence: typeof f.confidence === 'number' ? f.confidence : 0.5,
-  }))
-  .filter((f) => f.filePath && f.issue)
-
-log(`Candidate findings identified: ${candidates.length}`)
-
-phase('Verification')
-
-const verified = await parallel(
-  candidates.map((finding, idx) => async () => {
-    const context = files.find((f) => f.path === finding.filePath)?.content || files.find((f) => f.path === finding.filePath)?.diff || ''
-    const result = await agent(verificationPrompt(finding, context), {
+    const res = await agent(prompt, {
       label: `verify-${idx + 1}`,
-      phase: 'Verification',
-      effort: 'high',
+      phase: 'Verify Findings',
       schema: {
         type: 'object',
-        additionalProperties: false,
+        additionalProperties: true,
         properties: {
-          verdict: { type: 'string' },
-          severity: { type: 'string' },
+          accepted: { type: 'boolean' },
           reason: { type: 'string' },
-          refinedFinding: {
+          finding: {
             type: 'object',
             additionalProperties: true,
-            properties: {
-              filePath: { type: 'string' },
-              line: {},
-              dimension: { type: 'string' },
-              severity: { type: 'string' },
-              issue: { type: 'string' },
-              whyItMatters: { type: 'string' },
-              suggestedFix: { type: 'string' },
-              confidence: { type: 'number' },
-            },
-            required: ['filePath', 'dimension', 'severity', 'issue'],
           },
         },
-        required: ['verdict', 'severity', 'reason'],
+        required: ['accepted', 'reason'],
       },
+      effort: 'high',
     })
 
-    if (!result) return null
-    const verdict = String(result.verdict || '').toLowerCase()
-    if (verdict !== 'accept') return null
-
-    const refined = result.refinedFinding || finding
-    return {
-      ...refined,
-      severity: normalizeSeverity(result.severity || refined.severity || finding.severity),
-      confidence:
-        typeof refined.confidence === 'number'
-          ? refined.confidence
-          : typeof finding.confidence === 'number'
-            ? finding.confidence
-            : 0.5,
-      verificationReason: result.reason || '',
-    }
+    if (!res || !res.accepted || !res.finding) return null
+    return normalizeFinding(res.finding)
   })
 )
 
-const accepted = verified
-  .filter(Boolean)
-  .map((f) => ({
-    ...f,
-    severity: normalizeSeverity(f.severity),
-  }))
-  .sort((a, b) => severityRank(a.severity) - severityRank(b.severity) || (b.confidence || 0) - (a.confidence || 0))
+const approved = verified.filter(Boolean)
+approved.sort((a, b) => severityRank(a.severity) - severityRank(b.severity))
 
-phase('Synthesis')
+phase('Synthesize Review')
+const synthesis = await agent(
+  `
+You are the final code-review synthesizer for a swarm review.
 
-const finalReview = await agent(synthesisPrompt(accepted, files), {
-  label: 'final-synthesis',
-  phase: 'Synthesis',
-  effort: 'high',
-})
+Task:
+Produce a single prioritized review from the verified findings below.
+Requirements:
+- Group findings by severity: critical, high, medium, low.
+- Prioritize by severity, then by user impact and confidence.
+- Keep the review concise but actionable.
+- Mention the affected file for each finding.
+- Include a short overall assessment at the top.
+- If there are no verified findings, say so clearly and note that no blocking issues were found.
+- Do not add new findings.
+- Include missing tests as findings if verified.
+- Output in Markdown.
 
-export default finalReview || `## Summary
+Verified findings:
+${JSON.stringify(approved, null, 2)}
+`,
+  {
+    label: 'final-synthesis',
+    phase: 'Synthesize Review',
+    effort: 'high',
+  }
+)
 
-No material issues were confirmed after verification.
-
-## Prioritized Findings
-
-None.
-
-## Test Gaps
-
-No specific gaps were confirmed.
-
-## Notes
-
-All candidate findings were reviewed and either rejected or not substantiated with sufficient confidence.
-`
+return {
+  summary: {
+    changedFiles: changedFiles.length,
+    candidateCount: candidates.length,
+    verifiedCount: approved.length,
+  },
+  findings: approved,
+  review: synthesis,
+}
 ```
 
-> **GPT-5.5 judge:** The workflow has some safety-conscious elements: it caps changed files at 28, chunks the initial findings sweep into groups of 7, uses structured schemas, normalizes/null-filters some results, and has a fallback final review. However, it still awaits hard parallel barriers, has no per-agent retry/catch handling, no per-wave committed results, no ScheduleWakeup or stall watchdog, no resume/cache-stable persistence, no high-failure-rate backoff, and verification runs a parallel() over all candidates without bounding. A hung agent call in either sweep or verification can deadlock the run with no notification, and failures can prevent completed work from being synthesized. Partial input is not explicitly flagged as partial.
+> **Claude judge:** The script has deterministic prompts and basic null-tolerance, but the verification phase fans out over all candidates with no bounding, there is no retry logic, no stall watchdog, no per-wave result commits, and no backoff on high failure rates—leaving it vulnerable to both silent work loss and hung-connection deadlock with no recovery path.
 
-## With skill — rubric 62%, patterns 69%
+## With skill — rubric 78%, patterns 81%
 
 ```js
 export const meta = {
   name: 'code-review-swarm',
-  description: 'Review changed files across five dimensions, verify findings, and synthesize a prioritized review.',
-  phases: [{ title: 'Plan' }, { title: 'Find' }, { title: 'Verify' }, { title: 'Synthesize' }],
+  description: 'Review 28 changed files across five dimensions, verify candidate findings, and synthesize a prioritized review.',
+  phases: [{ title: 'Find' }, { title: 'Verify' }, { title: 'Synthesize' }],
 }
 
-const CHANGED_FILES = [
-  // Replace with the 28 changed files for the review.
-  'src/file1.js',
-  'src/file2.js',
-  'src/file3.js',
-  'src/file4.js',
-  'src/file5.js',
-  'src/file6.js',
-  'src/file7.js',
-  'src/file8.js',
-  'src/file9.js',
-  'src/file10.js',
-  'src/file11.js',
-  'src/file12.js',
-  'src/file13.js',
-  'src/file14.js',
-  'src/file15.js',
-  'src/file16.js',
-  'src/file17.js',
-  'src/file18.js',
-  'src/file19.js',
-  'src/file20.js',
-  'src/file21.js',
-  'src/file22.js',
-  'src/file23.js',
-  'src/file24.js',
-  'src/file25.js',
-  'src/file26.js',
-  'src/file27.js',
-  'src/file28.js',
+// Args shape expected:
+// {
+//   changedFiles: [{ path: string, diff?: string, summary?: string }],
+//   repoContext?: string,
+//   reviewFocus?: string,
+//   maxFindingsPerFile?: number
+// }
+
+const WAVE_SIZE = 7
+const DIMENSIONS = [
+  'correctness bugs',
+  'security issues',
+  'performance problems',
+  'style / maintainability issues',
+  'missing tests',
 ]
 
-const DIMENSIONS = ['correctness bugs', 'security', 'performance', 'style', 'missing tests']
-const WAVE_SIZE = 6
-
-const ISSUE_SCHEMA = {
+const FINDING_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
     file: { type: 'string' },
-    dimension: { type: 'string', enum: DIMENSIONS },
+    dimension: { type: 'string' },
     title: { type: 'string' },
-    description: { type: 'string' },
-    severity: { type: 'string', enum: ['critical', 'high', 'medium', 'low', 'info'] },
+    severity: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
     confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
-    evidence: { type: 'array', items: { type: 'string' }, maxItems: 3 },
-    recommendation: { type: 'string' },
+    location: { type: 'string' },
+    evidence: { type: 'string' },
+    rationale: { type: 'string' },
+    suggestedFix: { type: 'string' },
   },
-  required: ['file', 'dimension', 'title', 'description', 'severity', 'confidence', 'evidence', 'recommendation'],
+  required: ['file', 'dimension', 'title', 'severity', 'confidence', 'location', 'evidence', 'rationale', 'suggestedFix'],
 }
 
-const VERIFIED_ISSUE_SCHEMA = {
+const VERIFIED_FINDING_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
     file: { type: 'string' },
-    dimension: { type: 'string', enum: DIMENSIONS },
+    dimension: { type: 'string' },
     title: { type: 'string' },
-    description: { type: 'string' },
-    severity: { type: 'string', enum: ['critical', 'high', 'medium', 'low', 'info'] },
+    severity: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
     confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
-    evidence: { type: 'array', items: { type: 'string' }, maxItems: 3 },
-    recommendation: { type: 'string' },
-    verified: { type: 'boolean' },
+    location: { type: 'string' },
+    evidence: { type: 'string' },
+    rationale: { type: 'string' },
+    suggestedFix: { type: 'string' },
+    verification: {
+      type: 'string',
+      enum: ['confirmed', 'rejected', 'needs-more-context'],
+    },
     verificationNotes: { type: 'string' },
   },
-  required: ['file', 'dimension', 'title', 'description', 'severity', 'confidence', 'evidence', 'recommendation', 'verified', 'verificationNotes'],
+  required: [
+    'file',
+    'dimension',
+    'title',
+    'severity',
+    'confidence',
+    'location',
+    'evidence',
+    'rationale',
+    'suggestedFix',
+    'verification',
+    'verificationNotes',
+  ],
 }
 
 const chunk = (arr, n) => {
@@ -465,200 +309,294 @@ const chunk = (arr, n) => {
   return out
 }
 
-const stableFilesText = JSON.stringify([...CHANGED_FILES].sort())
+const changedFiles = Array.isArray(args?.changedFiles) ? args.changedFiles : []
+const repoContext = args?.repoContext ? String(args.repoContext) : ''
+const reviewFocus = args?.reviewFocus ? String(args.reviewFocus) : ''
+const maxFindingsPerFile = Number.isFinite(args?.maxFindingsPerFile) ? args.maxFindingsPerFile : 3
 
-function reviewPrompt(file) {
+function buildFindPrompt(file) {
   return [
-    `You are a meticulous code reviewer.`,
-    `Review the changed file below across these dimensions: correctness bugs, security, performance, style, missing tests.`,
-    `Only report concrete, actionable issues that are plausibly introduced or exposed by this change.`,
-    `Do not report nitpicks unless they materially affect maintainability or clarity.`,
-    `Return at most 5 findings total for this file, and at most 1 finding per dimension.`,
-    `Prefer high-signal issues with specific evidence from the diff/content.`,
-    `For evidence, cite short phrases or line-level references from the file content; keep it concise.`,
+    `You are reviewing one changed file in a code review swarm.`,
+    `Find candidate issues across exactly these dimensions:`,
+    ...DIMENSIONS.map(d => `- ${d}`),
     ``,
-    `FILE: ${file}`,
+    `File path: ${file.path}`,
+    file.summary ? `File summary: ${file.summary}` : '',
+    file.diff ? `Diff:\n${file.diff}` : '',
+    repoContext ? `Repo context:\n${repoContext}` : '',
+    reviewFocus ? `Review focus:\n${reviewFocus}` : '',
+    ``,
+    `Task: identify at most ${maxFindingsPerFile} candidate findings total for this file.`,
+    `Prefer concrete, actionable issues with precise evidence from the diff or context.`,
+    `Keep each candidate short and specific.`,
+    `Return only findings that look plausible enough to verify.`,
+  ].filter(Boolean).join('\n')
+}
+
+function buildVerifyPrompt(candidate) {
+  return [
+    `You are verifying one candidate code review finding.`,
+    `Decide whether it is truly present and report only what is supported.`,
+    ``,
+    `Candidate finding:`,
+    JSON.stringify(candidate, null, 2),
+    ``,
+    `Verification rules:`,
+    `- confirmed: the issue is clearly supported by the code/context`,
+    `- rejected: the issue is not supported or is speculative`,
+    `- needs-more-context: plausibly real but cannot be confirmed from provided context`,
+    ``,
+    `If confirmed, keep severity only if justified; otherwise lower it.`,
+    `Return a concise verification note with the strongest supporting evidence or the reason it fails.`,
   ].join('\n')
 }
 
-function verifyPrompt(issue) {
+function buildSynthesisPrompt(verifiedFindings, missingFiles) {
+  const payload = {
+    totalFiles: changedFiles.length,
+    reviewedFiles: [...new Set(verifiedFindings.map(f => f.file))].sort(),
+    missingFiles: missingFiles.slice().sort(),
+    findings: verifiedFindings.slice().sort((a, b) => {
+      const sevRank = { critical: 0, high: 1, medium: 2, low: 3 }
+      if (sevRank[a.severity] !== sevRank[b.severity]) return sevRank[a.severity] - sevRank[b.severity]
+      if (a.file !== b.file) return a.file.localeCompare(b.file)
+      return a.title.localeCompare(b.title)
+    }),
+  }
+
   return [
-    `You are verifying a code-review finding.`,
-    `Check whether the following finding is supported by the changed code and whether the severity is appropriate.`,
-    `Reject speculative or weakly supported issues.`,
-    `If the issue is valid, confirm it and keep the recommendation concise.`,
-    `If it is not valid, explain why in verificationNotes and set verified to false.`,
+    `You are synthesizing a single prioritized code review from verified findings.`,
+    `Include severity levels and a concise summary of risk.`,
+    `Flag gaps explicitly: any missing files, thin evidence, or areas that need follow-up.`,
+    `Do not invent issues. Only use the verified findings provided.`,
     ``,
-    `Finding JSON:`,
-    JSON.stringify(issue),
+    `Structured input:`,
+    JSON.stringify(payload, null, 2),
+    ``,
+    `Output format:`,
+    `1. Executive summary`,
+    `2. Prioritized findings grouped by severity`,
+    `3. File coverage / gaps`,
+    `4. Recommended next actions`,
   ].join('\n')
 }
 
-function synthPrompt(verifiedIssues, missingFiles) {
-  const sorted = [...verifiedIssues].sort((a, b) => {
-    const sa = severityRank(a.severity) - severityRank(b.severity)
-    if (sa !== 0) return sa
-    if (a.file !== b.file) return a.file < b.file ? -1 : 1
-    if (a.dimension !== b.dimension) return a.dimension < b.dimension ? -1 : 1
-    return a.title < b.title ? -1 : a.title > b.title ? 1 : 0
-  })
-  return [
-    `Synthesize a single prioritized code review from the verified findings.`,
-    `Prioritize by severity, then confidence, then breadth of impact.`,
-    `Group related findings when appropriate, but do not lose important distinct issues.`,
-    `Include explicit severity levels: critical, high, medium, low, info.`,
-    `Flag any gaps, uncertainty, or missing-file coverage in a separate section.`,
-    `If there are no verified findings, say so clearly and summarize the overall risk posture.`,
-    ``,
-    `Changed files (${CHANGED_FILES.length}): ${stableFilesText}`,
-    `Missing files not fully reviewed in this run: ${JSON.stringify(missingFiles)}`,
-    `Verified findings payload (${sorted.length}): ${JSON.stringify(sorted)}`,
-  ].join('\n')
+function normalizeFinding(f) {
+  if (!f) return null
+  return {
+    file: f.file,
+    dimension: f.dimension,
+    title: f.title,
+    severity: f.severity,
+    confidence: f.confidence,
+    location: f.location,
+    evidence: f.evidence,
+    rationale: f.rationale,
+    suggestedFix: f.suggestedFix,
+  }
+}
+
+function keyOfFinding(f) {
+  return `${f.file}::${f.dimension}::${f.title}`.toLowerCase()
 }
 
 function severityRank(sev) {
-  return ({ critical: 0, high: 1, medium: 2, low: 3, info: 4 })[sev] ?? 99
+  return { critical: 0, high: 1, medium: 2, low: 3 }[sev] ?? 4
 }
 
-phase('Plan')
-log(`Reviewing ${CHANGED_FILES.length} files across ${DIMENSIONS.length} dimensions.`)
+const files = changedFiles.slice(0, 28)
+const waves = chunk(files, WAVE_SIZE)
 
-const waves = chunk(CHANGED_FILES, WAVE_SIZE)
-const found = []
-let unreviewed = []
+const discovered = []
+let failedFiles = []
 
-async function reviewFile(file) {
-  return agent(reviewPrompt(file), {
-    label: `review:${file}`,
-    phase: 'Find',
-    schema: { type: 'array', items: ISSUE_SCHEMA, maxItems: 5 },
-    model: 'claude-3-5-sonnet',
-    effort: 'high',
-  })
-}
-
-async function verifyFinding(issue) {
-  return agent(verifyPrompt(issue), {
-    label: `verify:${issue.file}:${issue.dimension}:${issue.title}`,
-    phase: 'Verify',
-    schema: VERIFIED_ISSUE_SCHEMA,
-    model: 'claude-3-5-sonnet',
-    effort: 'high',
-  })
-}
-
+phase('Find')
 for (let w = 0; w < waves.length; w++) {
-  phase(`Find wave ${w + 1}/${waves.length}`)
-  const batch = await parallel(waves[w].map(file => () => reviewFile(file)))
+  const wave = waves[w]
+  log(`Find wave ${w + 1}/${waves.length}: ${wave.length} files`)
+  const batch = await parallel(
+    wave.map(file => () =>
+      agent(buildFindPrompt(file), {
+        label: `find:${file.path}`,
+        phase: 'Find',
+        schema: {
+          type: 'array',
+          maxItems: maxFindingsPerFile,
+          items: FINDING_SCHEMA,
+        },
+        effort: 'medium',
+      })
+    )
+  )
 
-  const nulls = batch.filter(r => r === null).length
-  batch.forEach((r, i) => {
-    const file = waves[w][i]
-    if (!r) {
-      unreviewed.push(file)
+  let nulls = 0
+  batch.forEach((res, i) => {
+    if (res === null) {
+      nulls += 1
+      failedFiles.push(wave[i])
       return
     }
-    for (const issue of r) {
-      found.push(issue)
+    if (Array.isArray(res)) {
+      res.map(normalizeFinding).filter(Boolean).forEach(f => discovered.push(f))
     }
   })
 
-  log(`Wave ${w + 1}: ${found.length} candidate findings from ${waves[w].length} files, ${nulls} review calls returned null.`)
+  log(`Find wave ${w + 1}: ${discovered.length} candidate findings so far; ${failedFiles.length} files to retry`)
 
-  if (nulls / batch.length > 0.4) {
-    log(`instability: ${nulls}/${batch.length} review calls failed this wave — backing off; returning partial review and resuming later`)
+  if (batch.length && nulls / batch.length > 0.4) {
+    log(`instability: ${nulls}/${batch.length} failed this wave — backing off; return partial, resume later`)
     break
   }
 }
 
-const deduped = []
-const seen = new Set()
-for (const issue of found) {
-  const key = `${issue.file}::${issue.dimension}::${issue.title}`.toLowerCase()
-  if (seen.has(key)) continue
-  seen.add(key)
-  deduped.push(issue)
+if (failedFiles.length) {
+  phase('Retry Find')
+  log(`Retrying ${failedFiles.length} files from failed find wave(s)`)
+  const retried = await parallel(
+    failedFiles.map(file => () =>
+      agent(buildFindPrompt(file), {
+        label: `find-retry:${file.path}`,
+        phase: 'Find',
+        schema: {
+          type: 'array',
+          maxItems: maxFindingsPerFile,
+          items: FINDING_SCHEMA,
+        },
+        effort: 'medium',
+      })
+    )
+  )
+
+  const stillFailed = []
+  retried.forEach((res, i) => {
+    if (res === null) {
+      stillFailed.push(failedFiles[i])
+      return
+    }
+    if (Array.isArray(res)) {
+      res.map(normalizeFinding).filter(Boolean).forEach(f => discovered.push(f))
+    }
+  })
+  failedFiles = stillFailed
+  log(`Retry Find recovered ${retried.filter(Boolean).length}; still missing ${failedFiles.length}`)
 }
+
+const uniqueCandidatesMap = new Map()
+for (const f of discovered) {
+  if (!f) continue
+  if (!uniqueCandidatesMap.has(keyOfFinding(f))) uniqueCandidatesMap.set(keyOfFinding(f), f)
+}
+const uniqueCandidates = [...uniqueCandidatesMap.values()]
 
 phase('Verify')
 const verified = []
-let rejected = []
+let verifyFailed = []
+const verifyWaves = chunk(uniqueCandidates, WAVE_SIZE)
 
-const verifyWaves = chunk(deduped, WAVE_SIZE)
 for (let w = 0; w < verifyWaves.length; w++) {
-  const batch = await parallel(verifyWaves[w].map(issue => () => verifyFinding(issue)))
+  const wave = verifyWaves[w]
+  log(`Verify wave ${w + 1}/${verifyWaves.length}: ${wave.length} candidates`)
+  const batch = await parallel(
+    wave.map(candidate => () =>
+      agent(buildVerifyPrompt(candidate), {
+        label: `verify:${candidate.file}:${candidate.title}`,
+        phase: 'Verify',
+        schema: VERIFIED_FINDING_SCHEMA,
+        effort: 'high',
+      })
+    )
+  )
 
-  const nulls = batch.filter(r => r === null).length
-  batch.forEach((r, i) => {
-    const original = verifyWaves[w][i]
-    if (!r) {
-      rejected.push({ ...original, verified: false, verificationNotes: 'Verification agent returned null; treat as unverified.' })
+  let nulls = 0
+  batch.forEach((res, i) => {
+    if (res === null) {
+      nulls += 1
+      verifyFailed.push(wave[i])
       return
     }
-    if (r.verified) verified.push(r)
-    else rejected.push(r)
+    if (res.verification === 'confirmed') {
+      verified.push({
+        ...normalizeFinding(res),
+        verification: res.verification,
+        verificationNotes: res.verificationNotes,
+      })
+    }
   })
 
-  log(`Verify wave ${w + 1}: ${verified.length} verified, ${rejected.length} rejected/unverified, ${nulls} null verification calls.`)
+  log(`Verify wave ${w + 1}: ${verified.length} confirmed findings so far; ${verifyFailed.length} candidates to retry`)
 
-  if (nulls / batch.length > 0.4) {
-    log(`instability: ${nulls}/${batch.length} verification calls failed this wave — backing off; returning partial review and resuming later`)
+  if (batch.length && nulls / batch.length > 0.4) {
+    log(`instability: ${nulls}/${batch.length} failed this wave — backing off; return partial, resume later`)
     break
   }
 }
 
-const verifiedIssues = verified
-  .filter(v => v.verified)
-  .sort((a, b) => {
-    const sr = severityRank(a.severity) - severityRank(b.severity)
-    if (sr !== 0) return sr
-    const cr = ({ high: 0, medium: 1, low: 2 })[b.confidence] - ({ high: 0, medium: 1, low: 2 })[a.confidence]
-    if (cr !== 0) return cr
-    if (a.file !== b.file) return a.file < b.file ? -1 : 1
-    return a.title < b.title ? -1 : a.title > b.title ? 1 : 0
+if (verifyFailed.length) {
+  phase('Retry Verify')
+  log(`Retrying ${verifyFailed.length} verification candidates`)
+  const retried = await parallel(
+    verifyFailed.map(candidate => () =>
+      agent(buildVerifyPrompt(candidate), {
+        label: `verify-retry:${candidate.file}:${candidate.title}`,
+        phase: 'Verify',
+        schema: VERIFIED_FINDING_SCHEMA,
+        effort: 'high',
+      })
+    )
+  )
+
+  const stillFailed = []
+  retried.forEach((res, i) => {
+    if (res === null) {
+      stillFailed.push(verifyFailed[i])
+      return
+    }
+    if (res.verification === 'confirmed') {
+      verified.push({
+        ...normalizeFinding(res),
+        verification: res.verification,
+        verificationNotes: res.verificationNotes,
+      })
+    }
   })
-
-const reviewedFiles = new Set([...verifiedIssues, ...rejected].map(x => x.file))
-const missingFiles = CHANGED_FILES.filter(f => !reviewedFiles.has(f)).concat(unreviewed.filter(f => !reviewedFiles.has(f)))
-
-if (missingFiles.length) {
-  log(`⚠ partial coverage: ${missingFiles.length}/${CHANGED_FILES.length} files may need another pass.`)
+  verifyFailed = stillFailed
+  log(`Retry Verify recovered ${retried.filter(Boolean).length}; still missing ${verifyFailed.length}`)
 }
 
-phase('Synthesize')
-const synthesis = await agent(
-  synthPrompt(verifiedIssues, [...new Set(missingFiles)]),
-  {
-    label: 'synthesize-review',
-    phase: 'Synthesize',
-    schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        summary: { type: 'string' },
-        prioritizedFindings: {
-          type: 'array',
-          items: VERIFIED_ISSUE_SCHEMA,
-        },
-        gaps: { type: 'array', items: { type: 'string' } },
-        overallAssessment: { type: 'string' },
-      },
-      required: ['summary', 'prioritizedFindings', 'gaps', 'overallAssessment'],
-    },
-    model: 'claude-3-5-sonnet',
-    effort: 'high',
+const dedupedVerifiedMap = new Map()
+for (const f of verified) {
+  if (!f) continue
+  const k = keyOfFinding(f)
+  const existing = dedupedVerifiedMap.get(k)
+  if (!existing || severityRank(f.severity) < severityRank(existing.severity)) {
+    dedupedVerifiedMap.set(k, f)
   }
-)
+}
+const dedupedVerified = [...dedupedVerifiedMap.values()].sort((a, b) => {
+  const s = severityRank(a.severity) - severityRank(b.severity)
+  if (s !== 0) return s
+  if (a.file !== b.file) return a.file.localeCompare(b.file)
+  return a.title.localeCompare(b.title)
+})
+
+const reviewedFiles = new Set(dedupedVerified.map(f => f.file))
+const missingFiles = files.filter(f => !reviewedFiles.has(f.path)).map(f => f.path)
+
+phase('Synthesize')
+const synthesis = await agent(buildSynthesisPrompt(dedupedVerified, missingFiles), {
+  label: 'synthesize-review',
+  phase: 'Synthesize',
+  effort: 'high',
+})
 
 return {
-  reviewedFiles: CHANGED_FILES.length - new Set(missingFiles).size,
-  missingFiles: [...new Set(missingFiles)],
-  candidateFindings: deduped.length,
-  verifiedFindings: verifiedIssues.length,
-  rejectedFindings: rejected.length,
+  totalFiles: files.length,
+  reviewedFiles: [...reviewedFiles].sort(),
+  missingFiles,
+  verifiedFindings: dedupedVerified,
   synthesis,
 }
 ```
 
-> **GPT-5.5 judge:** The script uses bounded waves of 6, capped schemas/outputs, null-tolerant handling, partial synthesis with explicit gaps, and backs off on high null rates. However, it has no armed ScheduleWakeup/timeout watchdog, so one hung agent call inside a wave can still deadlock the whole run with no notification. It also has no explicit per-agent retry, no durable per-wave checkpointing, and completed no-finding reviews are not tracked correctly, causing clean files to be reported as missing. Overall it avoids the worst unbounded fan-out pattern but misses key safe-by-construction protections against hangs and loss of completed work.
+> **Claude judge:** The script implements bounded waves (size 7), per-agent null-tolerance with retry phases, incremental per-wave result accumulation, deterministic prompts, capped schemas, explicit gap-flagging in synthesis, and high-failure-rate backoff — covering 7 of 8 safety properties well. The sole missing element is an armed ScheduleWakeup stall watchdog, meaning a hung agent connection could deadlock a wave indefinitely with no notification, which prevents a higher score.
 

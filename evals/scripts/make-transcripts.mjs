@@ -1,7 +1,7 @@
 // Turn results/latest.json into human-readable, committed artifacts so anyone can inspect EXACTLY
 // what was sent and what each model produced — without running anything:
 //   results/transcripts/<task>__<model>.md   one per task x model: baseline vs with-skill output
-//                                            + the GPT-5.5 judge's score and reasoning for each
+//                                            + the Claude judge's score and reasoning for each
 //   results/transcripts/README.md            an index
 //   prompts/rendered/baseline.example.md     the exact rendered baseline prompt (one task)
 //   prompts/rendered/with-skill.example.md   the exact rendered with-skill prompt (shows SKILL.md)
@@ -88,7 +88,7 @@ for (const t of tasks) {
       const pat = compBy(r, "javascript");
       let out = `## ${title} — rubric ${pct(rub?.score)}, patterns ${pct(pat?.score)}\n\n`;
       out += asCode(outputText(r)) + "\n\n";
-      if (rub?.reason) out += `> **GPT-5.5 judge:** ${String(rub.reason).replace(/\n+/g, " ").trim()}\n`;
+      if (rub?.reason) out += `> **Claude judge:** ${String(rub.reason).replace(/\n+/g, " ").trim()}\n`;
       return out;
     };
 
@@ -98,7 +98,7 @@ for (const t of tasks) {
       "below. The **with-skill** variant additionally injects the live " +
       "[`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: " +
       "[baseline](../../prompts/rendered/baseline.example.md) · " +
-      "[with-skill](../../prompts/rendered/with-skill.example.md). Judge: GPT-5.5.\n\n";
+      "[with-skill](../../prompts/rendered/with-skill.example.md). Judge: Claude (claude-sonnet-4-6).\n\n";
     md += `**Task**\n\n> ${taskText(ref).replace(/\n+/g, " ").trim()}\n\n---\n\n`;
     md += section(b, "Baseline (no skill)") + "\n";
     md += section(w, "With skill") + "\n";
@@ -115,7 +115,7 @@ for (const t of tasks) {
 let idx = "# Eval transcripts\n\n";
 idx +=
   "Exactly what each model produced for each task, **baseline** (no skill) vs **with-skill**, with " +
-  "the GPT-5.5 judge's score and reasoning. This is the raw evidence behind " +
+  "the Claude judge's score and reasoning. This is the raw evidence behind " +
   "[`../RESULTS.md`](../RESULTS.md). The prompts are in [`../../prompts/`](../../prompts/) " +
   "(rendered examples under [`rendered/`](../../prompts/rendered/)).\n\n";
 idx += "| Task | Model | Baseline | With skill | Δ | Transcript |\n|---|---|---|---|---|---|\n";

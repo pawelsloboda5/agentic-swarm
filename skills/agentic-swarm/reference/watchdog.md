@@ -3,7 +3,7 @@
 The Workflow harness fires a `<task-notification>` on **completion**, and **nothing** on a
 stall. A hung connection inside a barrier makes the workflow `await` forever. The watchdog is
 an external heartbeat that notices the journal has stopped growing and forces a stop + resume.
-This was the *only* thing that caught the 2-hour stall in the origin run (see `reference/origin.md`).
+A manual version of this watchdog is the only thing that reliably catches a silent stall.
 
 It has two moving parts:
 1. **The trigger** — a `ScheduleWakeup` that re-invokes your session after a delay.

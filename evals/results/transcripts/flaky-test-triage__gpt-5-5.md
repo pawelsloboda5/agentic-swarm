@@ -1,6 +1,6 @@
 # flaky-test-triage — `gpt-5.5`
 
-> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: GPT-5.5.
+> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: Claude (claude-sonnet-4-6).
 
 **Task**
 
@@ -8,725 +8,579 @@
 
 ---
 
-## Baseline (no skill) — rubric 25%, patterns 38%
+## Baseline (no skill) — rubric 35%, patterns 31%
 
 ```js
 export const meta = {
   name: 'flaky-test-triage',
-  description:
-    'Investigate 18 flaky tests with one subagent per test, then synthesize a prioritized fix plan with unknown root causes clearly flagged.',
+  description: 'Investigate flaky tests with one subagent per test, then synthesize a prioritized fix plan with undetermined root causes flagged.',
   phases: [
-    { title: 'Normalize flaky test list' },
+    { title: 'Prepare flaky-test inventory' },
     { title: 'Investigate root causes' },
     { title: 'Synthesize prioritized fix plan' },
   ],
 }
 
-const EXPECTED_TEST_COUNT = 18
+phase('Prepare flaky-test inventory')
 
-phase('Normalize flaky test list')
+const rawTests =
+  Array.isArray(args) ? args :
+  Array.isArray(args?.tests) ? args.tests :
+  Array.isArray(args?.flakyTests) ? args.flakyTests :
+  Array.isArray(args?.flaky_tests) ? args.flaky_tests :
+  []
 
-const input = args ?? {}
-
-const testDescriptorSchema = {
-  type: 'object',
-  required: ['id', 'name'],
-  additionalProperties: false,
-  properties: {
-    id: { type: 'string' },
-    name: { type: 'string' },
-    file: { type: 'string' },
-    failureLog: { type: 'string' },
-    ciJobUrl: { type: 'string' },
-    metadata: {
-      type: 'object',
-      additionalProperties: true,
-    },
-  },
+const sharedContext = {
+  issue: args?.issue ?? args?.ticket ?? args?.task ?? null,
+  ciRun: args?.ciRun ?? args?.ci_run ?? args?.ci ?? null,
+  failureSummary: args?.failureSummary ?? args?.failure_summary ?? args?.summary ?? null,
+  repositoryHints: args?.repositoryHints ?? args?.repository_hints ?? args?.hints ?? null,
+  constraints: args?.constraints ?? null,
 }
 
-const resolverSchema = {
-  type: 'object',
-  required: ['tests', 'notes'],
-  additionalProperties: false,
-  properties: {
-    tests: {
-      type: 'array',
-      items: testDescriptorSchema,
-    },
-    notes: { type: 'string' },
-  },
-}
-
-function firstArray(...values) {
-  for (const value of values) {
-    if (Array.isArray(value)) return value
-  }
-  return null
-}
-
-function parseTestListText(text) {
-  if (typeof text !== 'string') return []
-  return text
-    .split('\n')
-    .map((line) =>
-      line
-        .trim()
-        .replace(/^[-*]\s+/, '')
-        .replace(/^\d+[.)]\s+/, '')
-        .trim(),
-    )
-    .filter(Boolean)
-    .map((name, index) => ({
-      id: `test-${String(index + 1).padStart(2, '0')}`,
-      name,
-    }))
-}
-
-function normalizeTestDescriptor(item, index) {
-  if (typeof item === 'string') {
+function normalizeTest(test, index) {
+  if (typeof test === 'string') {
     return {
-      id: `test-${String(index + 1).padStart(2, '0')}`,
-      name: item,
+      index,
+      id: `flaky-test-${index + 1}`,
+      name: test,
+      path: null,
+      command: null,
+      failureLog: null,
+      notes: null,
+      raw: test,
     }
   }
 
-  if (!item || typeof item !== 'object') {
-    return null
-  }
-
+  const t = test && typeof test === 'object' ? test : {}
   const name =
-    item.name ??
-    item.testName ??
-    item.test ??
-    item.title ??
-    item.fullName ??
-    item.nodeid ??
-    item.nodeId ??
-    item.identifier ??
-    item.id
+    t.name ??
+    t.testName ??
+    t.test_name ??
+    t.title ??
+    t.fullName ??
+    t.full_name ??
+    t.id ??
+    `flaky-test-${index + 1}`
 
-  if (!name || typeof name !== 'string') {
-    return null
+  return {
+    index,
+    id: String(t.id ?? t.key ?? `flaky-test-${index + 1}`),
+    name: String(name),
+    path: t.path ?? t.file ?? t.filePath ?? t.file_path ?? null,
+    command: t.command ?? t.reproCommand ?? t.repro_command ?? t.testCommand ?? t.test_command ?? null,
+    failureLog: t.failureLog ?? t.failure_log ?? t.error ?? t.stderr ?? t.log ?? null,
+    notes: t.notes ?? t.context ?? t.description ?? null,
+    raw: t,
   }
-
-  const descriptor = {
-    id:
-      typeof item.id === 'string' && item.id.trim()
-        ? item.id.trim()
-        : `test-${String(index + 1).padStart(2, '0')}`,
-    name: name.trim(),
-  }
-
-  const file = item.file ?? item.path ?? item.testFile ?? item.specFile
-  if (typeof file === 'string' && file.trim()) descriptor.file = file.trim()
-
-  const failureLog =
-    item.failureLog ??
-    item.log ??
-    item.stderr ??
-    item.output ??
-    item.stackTrace ??
-    item.stack
-  if (typeof failureLog === 'string' && failureLog.trim()) {
-    descriptor.failureLog = failureLog.trim()
-  }
-
-  const ciJobUrl = item.ciJobUrl ?? item.url ?? item.buildUrl ?? item.jobUrl
-  if (typeof ciJobUrl === 'string' && ciJobUrl.trim()) {
-    descriptor.ciJobUrl = ciJobUrl.trim()
-  }
-
-  descriptor.metadata = item
-  return descriptor
 }
 
-function normalizeTestList(items) {
-  return items
-    .map((item, index) => normalizeTestDescriptor(item, index))
-    .filter(Boolean)
-}
+const tests = rawTests.map(normalizeTest)
 
-const explicitArray = firstArray(
-  Array.isArray(input) ? input : null,
-  input.tests,
-  input.flakyTests,
-  input.flakes,
-  input.testCases,
-  input.test_list,
-)
-
-let tests = explicitArray
-  ? normalizeTestList(explicitArray)
-  : normalizeTestList(
-      parseTestListText(
-        input.testListText ??
-          input.flakyTestList ??
-          input.flakyTestsText ??
-          input.testsText ??
-          '',
-      ),
-    )
-
-if (tests.length !== EXPECTED_TEST_COUNT) {
-  log(
-    `Input contained ${tests.length} normalized test descriptor(s); asking a resolver subagent to identify exactly ${EXPECTED_TEST_COUNT}.`,
-  )
-
-  const resolved = await agent(
-    `Resolve the exact list of ${EXPECTED_TEST_COUNT} flaky tests to triage.
-
-You are preparing input for a flaky-test triage workflow. Inspect the supplied workflow args and, if useful, the repository context available to you. Return exactly the flaky tests that should be investigated.
-
-Rules:
-- Prefer explicit lists from args.tests, args.flakyTests, issue text, CI summaries, or failure-log summaries.
-- Preserve file paths, failure logs, CI URLs, and any other useful metadata when available.
-- If more than ${EXPECTED_TEST_COUNT} candidate tests are present, choose the ${EXPECTED_TEST_COUNT} tests most clearly marked as flaky or most recently/frequently failing.
-- If fewer than ${EXPECTED_TEST_COUNT} can be identified, return only the identifiable tests and explain what is missing in notes.
-- Do not investigate root causes in this step.
-
-Workflow args:
-${JSON.stringify(input, null, 2)}
-
-Already normalized candidates:
-${JSON.stringify(tests, null, 2)}`,
-    {
-      label: 'resolve-flaky-test-list',
-      phase: 'Normalize flaky test list',
-      effort: 'medium',
-      schema: resolverSchema,
+if (tests.length === 0) {
+  log('No flaky tests were provided. Pass args.tests as an array of 18 test names or test descriptor objects.')
+  return {
+    ok: false,
+    error: 'No flaky tests provided',
+    expectedArgs: {
+      tests: [
+        {
+          id: 'optional stable id',
+          name: 'required test name',
+          path: 'optional test file path',
+          command: 'optional repro command',
+          failureLog: 'optional CI failure log or error excerpt',
+          notes: 'optional context',
+        },
+      ],
     },
-  )
-
-  if (resolved && Array.isArray(resolved.tests)) {
-    tests = normalizeTestList(resolved.tests)
-    log(`Resolver returned ${tests.length} test descriptor(s). ${resolved.notes}`)
   }
 }
 
-if (tests.length !== EXPECTED_TEST_COUNT) {
-  throw new Error(
-    `Expected exactly ${EXPECTED_TEST_COUNT} flaky tests, but found ${tests.length}. Pass args.tests or args.flakyTests as an array of 18 test names/descriptors.`,
-  )
+if (tests.length !== 18) {
+  log(`Expected 18 flaky tests, but received ${tests.length}. Proceeding with the provided list.`)
+} else {
+  log('Received 18 flaky tests. Launching one investigation subagent per test.')
 }
-
-log(`Starting one root-cause investigation subagent for each of ${EXPECTED_TEST_COUNT} flaky tests.`)
-
-phase('Investigate root causes')
 
 const investigationSchema = {
   type: 'object',
-  required: [
-    'test_id',
-    'test_name',
-    'root_cause_determined',
-    'failure_mode',
-    'root_cause',
-    'evidence',
-    'proposed_fix',
-    'confidence',
-    'priority_signals',
-    'unknown_reason',
-    'next_steps_if_unknown',
-  ],
   additionalProperties: false,
+  required: [
+    'testId',
+    'testName',
+    'rootCauseStatus',
+    'rootCause',
+    'confidence',
+    'evidence',
+    'reproduction',
+    'fixProposal',
+    'prioritySignals',
+    'openQuestions',
+    'summary',
+  ],
   properties: {
-    test_id: { type: 'string' },
-    test_name: { type: 'string' },
-    file: { type: 'string' },
-    root_cause_determined: { type: 'boolean' },
-    failure_mode: { type: 'string' },
-    root_cause: { type: 'string' },
+    testId: { type: 'string' },
+    testName: { type: 'string' },
+    rootCauseStatus: {
+      type: 'string',
+      enum: ['determined', 'suspected', 'undetermined'],
+      description: 'Use undetermined if the evidence is insufficient to identify a plausible root cause.',
+    },
+    rootCause: {
+      type: ['string', 'null'],
+      description: 'Concrete root cause when determined or suspected; null if undetermined.',
+    },
+    confidence: {
+      type: 'string',
+      enum: ['high', 'medium', 'low', 'none'],
+    },
     evidence: {
       type: 'array',
       items: {
         type: 'object',
-        required: ['source', 'detail'],
         additionalProperties: false,
+        required: ['kind', 'detail'],
         properties: {
-          source: { type: 'string' },
+          kind: {
+            type: 'string',
+            enum: ['code', 'test', 'log', 'reproduction', 'history', 'configuration', 'other'],
+          },
           detail: { type: 'string' },
+          file: { type: ['string', 'null'] },
         },
       },
     },
-    proposed_fix: {
+    reproduction: {
       type: 'object',
-      required: ['summary', 'files_to_change', 'change_details', 'risks'],
       additionalProperties: false,
+      required: ['attempted', 'commands', 'outcome'],
       properties: {
-        summary: { type: 'string' },
-        files_to_change: {
-          type: 'array',
-          items: { type: 'string' },
-        },
-        change_details: {
-          type: 'array',
-          items: { type: 'string' },
-        },
-        risks: {
-          type: 'array',
-          items: { type: 'string' },
-        },
+        attempted: { type: 'boolean' },
+        commands: { type: 'array', items: { type: 'string' } },
+        outcome: { type: 'string' },
       },
     },
-    confidence: {
-      type: 'string',
-      enum: ['high', 'medium', 'low', 'unknown'],
-    },
-    priority_signals: {
+    fixProposal: {
       type: 'object',
-      required: [
-        'severity',
-        'frequency',
-        'blast_radius',
-        'fix_complexity',
-        'blocks_ci',
-        'shared_cause_likelihood',
-      ],
       additionalProperties: false,
+      required: ['summary', 'steps', 'likelyFiles', 'risk', 'estimatedEffort'],
       properties: {
-        severity: {
-          type: 'string',
-          enum: ['critical', 'high', 'medium', 'low', 'unknown'],
+        summary: {
+          type: ['string', 'null'],
+          description: 'Concise fix proposal; null if no responsible root cause could be identified.',
         },
-        frequency: {
-          type: 'string',
-          enum: ['very_high', 'high', 'medium', 'low', 'unknown'],
-        },
-        blast_radius: {
-          type: 'string',
-          enum: ['broad', 'moderate', 'narrow', 'unknown'],
-        },
-        fix_complexity: {
-          type: 'string',
-          enum: ['small', 'medium', 'large', 'unknown'],
-        },
-        blocks_ci: {
-          type: 'string',
-          enum: ['yes', 'no', 'unknown'],
-        },
-        shared_cause_likelihood: {
-          type: 'string',
-          enum: ['high', 'medium', 'low', 'unknown'],
-        },
+        steps: { type: 'array', items: { type: 'string' } },
+        likelyFiles: { type: 'array', items: { type: 'string' } },
+        risk: { type: 'string', enum: ['low', 'medium', 'high', 'unknown'] },
+        estimatedEffort: { type: 'string', enum: ['small', 'medium', 'large', 'unknown'] },
       },
     },
-    related_tests_or_components: {
-      type: 'array',
-      items: { type: 'string' },
+    prioritySignals: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['userImpact', 'ciImpact', 'blastRadius', 'fixConfidence'],
+      properties: {
+        userImpact: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'unknown'] },
+        ciImpact: { type: 'string', enum: ['low', 'medium', 'high', 'unknown'] },
+        blastRadius: { type: 'string', enum: ['narrow', 'moderate', 'wide', 'unknown'] },
+        fixConfidence: { type: 'string', enum: ['high', 'medium', 'low', 'none'] },
+      },
     },
-    reproduction_or_validation_steps: {
-      type: 'array',
-      items: { type: 'string' },
-    },
-    unknown_reason: { type: 'string' },
-    next_steps_if_unknown: {
-      type: 'array',
-      items: { type: 'string' },
-    },
+    openQuestions: { type: 'array', items: { type: 'string' } },
+    summary: { type: 'string' },
   },
 }
 
-function labelForTest(test, index) {
-  const compactName = String(test.name)
-    .replace(/\s+/g, ' ')
-    .replace(/[^\w./:#-]+/g, '-')
-    .slice(0, 64)
-  return `triage-${String(index + 1).padStart(2, '0')}-${compactName}`
-}
+function investigationPrompt(test) {
+  return `You are a senior engineer performing flaky-test triage in this repository.
 
-const investigationResults = await parallel(
-  tests.map((test, index) => async () => {
-    return await agent(
-      `Investigate this flaky test and determine its root cause if possible.
+Investigate exactly one flaky test. Do not edit files or create commits. You may inspect code, search history if available, read tests, reason from logs, and run targeted commands when useful and safe.
 
-Test descriptor:
+Shared triage context:
+${JSON.stringify(sharedContext, null, 2)}
+
+Test under investigation:
 ${JSON.stringify(test, null, 2)}
 
-Overall workflow context:
-${JSON.stringify(
-  {
-    repositoryContext: input.repositoryContext ?? input.context ?? '',
-    ciContext: input.ciContext ?? input.ci ?? '',
-    knownRecentChanges: input.knownRecentChanges ?? input.recentChanges ?? '',
-    instructions: input.instructions ?? '',
-  },
-  null,
-  2,
-)}
-
 Your task:
-1. Inspect the test, the code under test, fixtures/helpers, mocks, shared state, and any relevant CI/failure-log context.
-2. Identify the concrete root cause of flakiness, not just the visible symptom.
-3. Consider common flake classes: async race, missing await, timing/sleep, polling, clock/timezone, randomness, test order dependence, leaked global state, leaked resources, network/external dependency, filesystem/temp-dir collision, parallelism, non-deterministic data, database isolation, retries masking failures, and environment assumptions.
-4. Propose a minimal, production-quality fix. Do not edit files; report the proposed change only.
-5. Include evidence with file paths, code references, log lines, commands tried, or observations.
-6. If the root cause cannot be determined confidently, set root_cause_determined=false, root_cause="UNKNOWN", explain exactly why in unknown_reason, and provide concrete next steps to determine it.
+1. Identify the most likely root cause of this test's flakiness.
+2. Collect concrete evidence from code, test structure, logs, configuration, or reproduction attempts.
+3. Propose a practical fix, including likely files and steps.
+4. If the root cause cannot be determined, explicitly return rootCauseStatus="undetermined", rootCause=null, confidence="none", explain why in summary/openQuestions, and do not invent a fix.
+5. If the cause is plausible but not proven, use rootCauseStatus="suspected" and confidence="low" or "medium".
 
-Return only the structured result requested by the schema.`,
-      {
-        label: labelForTest(test, index),
-        phase: 'Investigate root causes',
-        effort: 'high',
-        schema: investigationSchema,
-      },
-    )
-  }),
-)
+Triage guidance:
+- Look for timing/race assumptions, async waits, order dependence, shared global state, random data, clock/timezone sensitivity, network/filesystem dependence, resource leaks, test pollution, retries masking failures, environment-specific behavior, and insufficient cleanup.
+- Prefer specific evidence over generic guesses.
+- Keep the proposed fix minimal but robust.
+- Return only the structured result requested by the schema.`
+}
 
-const normalizedInvestigations = investigationResults.map((result, index) => {
-  const test = tests[index]
+phase('Investigate root causes')
 
-  if (result) {
-    return {
-      ...result,
-      test_id: result.test_id || test.id,
-      test_name: result.test_name || test.name,
-      file: result.file || test.file || '',
-      triage_agent_completed: true,
+const investigationResults = await parallel(
+  tests.map((test) => async () => {
+    const result = await agent(investigationPrompt(test), {
+      label: `triage:${test.id}`,
+      phase: 'Investigate root causes',
+      schema: investigationSchema,
+      effort: 'high',
+    })
+
+    if (result === null) {
+      return {
+        testId: test.id,
+        testName: test.name,
+        rootCauseStatus: 'undetermined',
+        rootCause: null,
+        confidence: 'none',
+        evidence: [],
+        reproduction: {
+          attempted: false,
+          commands: [],
+          outcome: 'Investigation subagent was skipped or failed with a terminal API error.',
+        },
+        fixProposal: {
+          summary: null,
+          steps: [],
+          likelyFiles: [],
+          risk: 'unknown',
+          estimatedEffort: 'unknown',
+        },
+        prioritySignals: {
+          userImpact: 'unknown',
+          ciImpact: 'unknown',
+          blastRadius: 'unknown',
+          fixConfidence: 'none',
+        },
+        openQuestions: ['Rerun triage for this test; the investigation subagent did not complete.'],
+        summary: 'Root cause could not be determined because the investigation subagent did not complete.',
+      }
     }
-  }
 
-  return {
-    test_id: test.id,
-    test_name: test.name,
-    file: test.file || '',
-    root_cause_determined: false,
-    failure_mode: 'UNKNOWN - triage subagent did not complete successfully',
-    root_cause: 'UNKNOWN',
-    evidence: [],
-    proposed_fix: {
-      summary: 'No fix proposed because the triage subagent failed or was skipped.',
-      files_to_change: [],
-      change_details: [],
-      risks: ['Requires manual investigation because automated triage did not complete.'],
-    },
-    confidence: 'unknown',
-    priority_signals: {
-      severity: 'unknown',
-      frequency: 'unknown',
-      blast_radius: 'unknown',
-      fix_complexity: 'unknown',
-      blocks_ci: 'unknown',
-      shared_cause_likelihood: 'unknown',
-    },
-    related_tests_or_components: [],
-    reproduction_or_validation_steps: [],
-    unknown_reason:
-      'The investigation subagent returned null, indicating it was skipped or died on a terminal API error.',
-    next_steps_if_unknown: [
-      'Manually inspect the test and recent CI failures.',
-      'Re-run the workflow or the individual triage with more failure logs.',
-    ],
-    triage_agent_completed: false,
-  }
-})
-
-const unknownCount = normalizedInvestigations.filter(
-  (item) => !item.root_cause_determined,
-).length
-
-log(
-  `Completed investigations. ${EXPECTED_TEST_COUNT - unknownCount} root cause(s) determined; ${unknownCount} unknown root cause(s) to flag.`,
+    return result
+  })
 )
+
+const completed = investigationResults.filter(Boolean)
+const undeterminedCount = completed.filter((r) => r.rootCauseStatus === 'undetermined').length
+const suspectedCount = completed.filter((r) => r.rootCauseStatus === 'suspected').length
+const determinedCount = completed.filter((r) => r.rootCauseStatus === 'determined').length
+
+log(`Investigations complete: ${determinedCount} determined, ${suspectedCount} suspected, ${undeterminedCount} undetermined.`)
 
 phase('Synthesize prioritized fix plan')
 
 const synthesisSchema = {
   type: 'object',
-  required: [
-    'executive_summary',
-    'prioritized_fix_plan',
-    'unknown_root_cause_tests',
-    'shared_themes',
-    'validation_strategy',
-    'markdown_report',
-  ],
   additionalProperties: false,
+  required: [
+    'executiveSummary',
+    'prioritizedFixPlan',
+    'undeterminedRootCauses',
+    'crossCuttingPatterns',
+    'recommendedExecutionOrder',
+    'markdownReport',
+  ],
   properties: {
-    executive_summary: { type: 'string' },
-    prioritized_fix_plan: {
+    executiveSummary: { type: 'string' },
+    prioritizedFixPlan: {
       type: 'array',
       items: {
         type: 'object',
+        additionalProperties: false,
         required: [
           'rank',
+          'testIds',
+          'testNames',
           'priority',
-          'test_id',
-          'test_name',
-          'root_cause_determined',
-          'root_cause_summary',
-          'fix_summary',
+          'rootCauseStatus',
+          'rootCause',
+          'fix',
           'rationale',
-          'implementation_notes',
+          'likelyFiles',
           'risk',
+          'estimatedEffort',
           'confidence',
         ],
-        additionalProperties: false,
         properties: {
-          rank: { type: 'integer' },
-          priority: {
-            type: 'string',
-            enum: ['P0', 'P1', 'P2', 'P3'],
-          },
-          test_id: { type: 'string' },
-          test_name: { type: 'string' },
-          root_cause_determined: { type: 'boolean' },
-          root_cause_summary: { type: 'string' },
-          fix_summary: { type: 'string' },
+          rank: { type: 'integer', minimum: 1 },
+          testIds: { type: 'array', items: { type: 'string' } },
+          testNames: { type: 'array', items: { type: 'string' } },
+          priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] },
+          rootCauseStatus: { type: 'string', enum: ['determined', 'suspected', 'undetermined'] },
+          rootCause: { type: ['string', 'null'] },
+          fix: { type: ['string', 'null'] },
           rationale: { type: 'string' },
-          implementation_notes: {
-            type: 'array',
-            items: { type: 'string' },
-          },
-          risk: { type: 'string' },
-          confidence: {
-            type: 'string',
-            enum: ['high', 'medium', 'low', 'unknown'],
-          },
+          likelyFiles: { type: 'array', items: { type: 'string' } },
+          risk: { type: 'string', enum: ['low', 'medium', 'high', 'unknown'] },
+          estimatedEffort: { type: 'string', enum: ['small', 'medium', 'large', 'unknown'] },
+          confidence: { type: 'string', enum: ['high', 'medium', 'low', 'none'] },
         },
       },
     },
-    unknown_root_cause_tests: {
+    undeterminedRootCauses: {
+      type: 'array',
+      description: 'Every test whose root cause could not be determined must appear here.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['testId', 'testName', 'whyUndetermined', 'nextDiagnosticSteps'],
+        properties: {
+          testId: { type: 'string' },
+          testName: { type: 'string' },
+          whyUndetermined: { type: 'string' },
+          nextDiagnosticSteps: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+    crossCuttingPatterns: {
       type: 'array',
       items: {
         type: 'object',
-        required: ['test_id', 'test_name', 'why_unknown', 'next_steps'],
         additionalProperties: false,
+        required: ['pattern', 'affectedTestIds', 'recommendation'],
         properties: {
-          test_id: { type: 'string' },
-          test_name: { type: 'string' },
-          why_unknown: { type: 'string' },
-          next_steps: {
-            type: 'array',
-            items: { type: 'string' },
-          },
+          pattern: { type: 'string' },
+          affectedTestIds: { type: 'array', items: { type: 'string' } },
+          recommendation: { type: 'string' },
         },
       },
     },
-    shared_themes: {
+    recommendedExecutionOrder: {
       type: 'array',
-      items: { type: 'string' },
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['step', 'action', 'testIds', 'reason'],
+        properties: {
+          step: { type: 'integer', minimum: 1 },
+          action: { type: 'string' },
+          testIds: { type: 'array', items: { type: 'string' } },
+          reason: { type: 'string' },
+        },
+      },
     },
-    validation_strategy: {
-      type: 'array',
-      items: { type: 'string' },
+    markdownReport: {
+      type: 'string',
+      description: 'Human-readable prioritized fix plan. Must clearly flag undetermined tests.',
     },
-    markdown_report: { type: 'string' },
   },
 }
 
-const synthesis = await agent(
-  `Synthesize a prioritized fix plan for these ${EXPECTED_TEST_COUNT} flaky-test investigations.
+const synthesisPrompt = `You are the triage lead. Synthesize the individual flaky-test investigations into a prioritized fix plan.
 
-Investigation results:
-${JSON.stringify(normalizedInvestigations, null, 2)}
+Original flaky-test inventory:
+${JSON.stringify(tests, null, 2)}
 
-Requirements:
-- Produce a concise but complete prioritized plan.
-- Prioritize fixes by CI/user impact, frequency, blast radius, confidence, shared root cause, and implementation complexity.
-- Group or call out tests that likely share a root cause.
-- Clearly flag every test whose root cause could not be determined.
-- For unknowns, include why the root cause is unknown and the next diagnostic steps.
-- Do not hide failed/skipped triage subagents; treat them as unknown root causes.
-- The markdown_report must be directly readable by maintainers and include:
-  1. Executive summary
-  2. Prioritized fix plan
-  3. Shared themes / batching opportunities
-  4. Root cause not determined section
-  5. Validation strategy`,
-  {
-    label: 'synthesize-fix-plan',
-    phase: 'Synthesize prioritized fix plan',
-    effort: 'high',
-    schema: synthesisSchema,
-  },
-)
+Individual investigation results:
+${JSON.stringify(completed, null, 2)}
 
-function buildFallbackReport(investigations) {
-  const unknowns = investigations.filter((item) => !item.root_cause_determined)
-  const knowns = investigations.filter((item) => item.root_cause_determined)
+Synthesis requirements:
+1. Produce a prioritized fix plan across all provided tests.
+2. Group tests only when they share the same root cause or can be fixed by the same change.
+3. Prioritize by CI/user impact, blast radius, confidence, risk, and effort.
+4. Clearly flag every test whose root cause could not be determined. These must appear in undeterminedRootCauses and in the markdown report.
+5. Distinguish "suspected" from "determined" root causes; do not overstate confidence.
+6. Include concrete next diagnostic steps for undetermined tests.
+7. Make the markdown report suitable to paste into an issue or incident update.
 
-  const lines = []
-  lines.push('# Flaky Test Triage: Prioritized Fix Plan')
-  lines.push('')
-  lines.push('## Executive summary')
-  lines.push(
-    `Investigated ${investigations.length} flaky tests. Root cause was determined for ${knowns.length}; ${unknowns.length} test(s) remain unknown and are explicitly flagged below.`,
-  )
-  lines.push('')
-  lines.push('## Prioritized fix plan')
-  investigations.forEach((item, index) => {
-    const status = item.root_cause_determined
-      ? item.root_cause
-      : 'ROOT CAUSE NOT DETERMINED'
-    lines.push(
-      `${index + 1}. **${item.test_name}** (${item.test_id}) — ${status}`,
-    )
-    lines.push(`   - Proposed fix: ${item.proposed_fix.summary}`)
-    lines.push(`   - Confidence: ${item.confidence}`)
-    if (item.file) lines.push(`   - File: ${item.file}`)
-  })
-  lines.push('')
-  lines.push('## Root cause not determined')
-  if (unknowns.length === 0) {
-    lines.push('None.')
-  } else {
-    unknowns.forEach((item) => {
-      lines.push(`- **${item.test_name}** (${item.test_id})`)
-      lines.push(`  - Why unknown: ${item.unknown_reason}`)
-      if (item.next_steps_if_unknown.length) {
-        lines.push(
-          `  - Next steps: ${item.next_steps_if_unknown.join('; ')}`,
-        )
-      }
-    })
+Return only the structured result requested by the schema.`
+
+const synthesis = await agent(synthesisPrompt, {
+  label: 'synthesize-prioritized-fix-plan',
+  phase: 'Synthesize prioritized fix plan',
+  schema: synthesisSchema,
+  effort: 'high',
+})
+
+if (synthesis === null) {
+  const fallbackUndetermined = completed
+    .filter((r) => r.rootCauseStatus === 'undetermined')
+    .map((r) => ({
+      testId: r.testId,
+      testName: r.testName,
+      whyUndetermined: r.summary || 'Root cause could not be determined.',
+      nextDiagnosticSteps: r.openQuestions && r.openQuestions.length > 0
+        ? r.openQuestions
+        : ['Rerun targeted triage with more CI logs and local reproduction attempts.'],
+    }))
+
+  const fallbackPlan = completed.map((r, i) => ({
+    rank: i + 1,
+    testIds: [r.testId],
+    testNames: [r.testName],
+    priority: r.rootCauseStatus === 'determined' ? 'P1' : r.rootCauseStatus === 'suspected' ? 'P2' : 'P3',
+    rootCauseStatus: r.rootCauseStatus,
+    rootCause: r.rootCause,
+    fix: r.fixProposal.summary,
+    rationale: r.summary,
+    likelyFiles: r.fixProposal.likelyFiles,
+    risk: r.fixProposal.risk,
+    estimatedEffort: r.fixProposal.estimatedEffort,
+    confidence: r.confidence,
+  }))
+
+  return {
+    ok: false,
+    warning: 'Synthesis subagent did not complete; returning unsynthesized investigation results with a fallback ordering.',
+    counts: {
+      total: tests.length,
+      determined: determinedCount,
+      suspected: suspectedCount,
+      undetermined: undeterminedCount,
+    },
+    investigations: completed,
+    synthesis: {
+      executiveSummary: 'Synthesis failed. Review individual investigations and rerun the synthesis phase.',
+      prioritizedFixPlan: fallbackPlan,
+      undeterminedRootCauses: fallbackUndetermined,
+      crossCuttingPatterns: [],
+      recommendedExecutionOrder: fallbackPlan.map((p) => ({
+        step: p.rank,
+        action: p.fix || `Diagnose ${p.testNames.join(', ')}`,
+        testIds: p.testIds,
+        reason: p.rationale,
+      })),
+      markdownReport:
+        `# Flaky-test triage fallback report\n\n` +
+        `Synthesis did not complete. Counts: ${determinedCount} determined, ${suspectedCount} suspected, ${undeterminedCount} undetermined.\n\n` +
+        `## Undetermined root causes\n\n` +
+        (fallbackUndetermined.length
+          ? fallbackUndetermined.map((u) => `- **${u.testName}** (${u.testId}): ${u.whyUndetermined}`).join('\n')
+          : '- None flagged by completed investigations.'),
+    },
   }
-  lines.push('')
-  lines.push('## Validation strategy')
-  lines.push(
-    '- After implementing each fix, run the affected test repeatedly and in parallel with neighboring suites.',
-  )
-  lines.push(
-    '- Re-run the CI job or shard that historically exposed the flake.',
-  )
-  lines.push(
-    '- Track post-merge failure rate for the touched tests before closing the flake issues.',
-  )
-  return lines.join('\n')
 }
 
-const finalReport = synthesis
-  ? synthesis.markdown_report
-  : buildFallbackReport(normalizedInvestigations)
+log('Prioritized flaky-test fix plan synthesized.')
 
-log('Flaky-test triage synthesis complete.')
-log(finalReport)
-
-finalReport
+return {
+  ok: true,
+  counts: {
+    total: tests.length,
+    determined: determinedCount,
+    suspected: suspectedCount,
+    undetermined: undeterminedCount,
+  },
+  investigations: completed,
+  synthesis,
+  report: synthesis.markdownReport,
+}
 ```
 
-> **GPT-5.5 judge:** The workflow uses a single hard-barrier `parallel()` fan-out across all 18 investigations, with no bounded waves, no armed stall watchdog/ScheduleWakeup, no per-agent retry wrapper, no timeout handling, no per-wave or incremental result commits, no resume/cache-stable prompts, and no high-failure-rate backoff. If one subagent hangs, the whole run can deadlock before synthesis and completed work remains only in memory, risking loss. It does get partial credit for structured/lean schemas, null-tolerant normalization after subagent completion, fallback synthesis, and explicit flagging of unknown root causes, but those only help if the parallel barrier returns.
+> **Claude judge:** The script handles null agent results gracefully and has solid schema/gap-flagging, but launches all 18 subagents in a single unbounded parallel() with no wave batching, no retry on failure (only stub replacement), no per-wave result commits, and no stall watchdog—leaving it vulnerable to both deadlock and silent work loss at scale.
 
-## With skill — rubric 86%, patterns 100%
+## With skill — rubric 92%, patterns 100%
 
 ```js
 export const meta = {
   name: 'flaky-test-triage',
-  description: 'Investigate flaky tests in bounded waves and synthesize a prioritized fix plan with explicit gaps.',
+  description: 'Investigate 18 flaky tests in bounded waves and synthesize a prioritized fix plan with explicit unresolved gaps.',
   phases: [
-    { title: 'Validate Inputs' },
+    { title: 'Validate inputs' },
     { title: 'Investigate' },
-    { title: 'Retry' },
-    { title: 'Synthesize' },
+    { title: 'Retry failed investigations' },
+    { title: 'Synthesize prioritized fix plan' },
   ],
 }
 
-/*
-Agent-level watchdog to arm immediately after launching this workflow
-(replace wf_<id>, <taskId>, and <path> with the Workflow launch result values):
+// OPERATOR NOTE — arm this watchdog immediately after launching the workflow.
+// ScheduleWakeup({
+//   delaySeconds: 1200,
+//   reason: "watchdog: flaky-test-triage wf_<id> may stall silently; check journal mtime",
+//   prompt: "Watchdog for run wf_<id>: if the journal mtime is >20 min old AND the workflow task is not 'completed', TaskStop the task then resume via Workflow({scriptPath, resumeFromRunId}); else re-arm another 1200s ScheduleWakeup. Plain one-shot watchdog — NOT a /loop sentinel."
+// })
 
-ScheduleWakeup({
-  delaySeconds: 1200,
-  reason: "watchdog: swarm wf_<id> may stall silently; check journal mtime",
-  prompt: "Watchdog for swarm run wf_<id> (task <taskId>, journal at <path>): if the journal mtime is older than 20 min AND the workflow task is not 'completed', TaskStop the task then resume with Workflow({scriptPath, resumeFromRunId}). Otherwise re-arm another 1200s ScheduleWakeup. Do NOT use the autonomous-loop sentinel — this is a plain one-shot watchdog, not a /loop."
-})
-*/
-
-const TRIAGE_SCHEMA = {
+const TEST_INVESTIGATION_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: [
     'key',
     'testName',
-    'status',
+    'location',
     'rootCauseDetermined',
-    'confidence',
-    'rootCauseSummary',
+    'rootCause',
     'failureMode',
+    'confidence',
     'evidence',
     'proposedFix',
-    'priorityHint',
+    'fixFiles',
+    'priority',
     'risk',
+    'estimatedEffort',
     'validationPlan',
-    'commandsRun',
-    'filesInspected',
-    'followUpNeeded',
+    'unresolvedQuestions',
   ],
   properties: {
-    key: { type: 'string' },
+    key: { type: 'string', minLength: 1 },
     testName: { type: 'string' },
-    status: { type: 'string', enum: ['determined', 'likely', 'undetermined'] },
+    location: { type: 'string' },
     rootCauseDetermined: { type: 'boolean' },
-    confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
-    rootCauseSummary: { type: 'string', maxLength: 900 },
+    rootCause: {
+      type: 'string',
+      description: 'One concise paragraph. If undetermined, say what is known and why the cause remains unclear.',
+    },
     failureMode: {
       type: 'string',
-      enum: [
-        'async-timing',
-        'shared-state',
-        'test-order-dependency',
-        'time-randomness',
-        'external-service',
-        'resource-leak',
-        'fixture-cleanup',
-        'environment-specific',
-        'race-condition',
-        'assertion-too-broad-or-too-strict',
-        'product-bug',
-        'unknown',
-        'other',
-      ],
+      description: 'Short description of how/when the test flakes.',
     },
+    confidence: { type: 'string', enum: ['high', 'medium', 'low', 'unknown'] },
     evidence: {
       type: 'array',
-      maxItems: 5,
+      maxItems: 6,
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['source', 'observation'],
+        required: ['kind', 'reference', 'summary'],
         properties: {
-          source: { type: 'string', maxLength: 240 },
-          observation: { type: 'string', maxLength: 500 },
+          kind: {
+            type: 'string',
+            enum: ['code', 'test-log', 'ci-history', 'local-run', 'commit-history', 'documentation', 'inference'],
+          },
+          reference: {
+            type: 'string',
+            description: 'File path, command, CI URL, symbol name, or other compact reference. No long pasted logs.',
+          },
+          summary: {
+            type: 'string',
+            description: 'One-line evidence summary.',
+          },
         },
       },
     },
     proposedFix: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['summary', 'filesToChange', 'patchSketch', 'ownerArea'],
-      properties: {
-        summary: { type: 'string', maxLength: 900 },
-        filesToChange: {
-          type: 'array',
-          maxItems: 8,
-          items: { type: 'string', maxLength: 220 },
-        },
-        patchSketch: { type: 'string', maxLength: 1400 },
-        ownerArea: { type: 'string', maxLength: 160 },
-      },
+      type: 'string',
+      description: 'Concrete fix proposal. If root cause undetermined, propose the next diagnostic step instead.',
     },
-    priorityHint: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] },
-    risk: { type: 'string', enum: ['low', 'medium', 'high'] },
+    fixFiles: {
+      type: 'array',
+      maxItems: 8,
+      items: { type: 'string' },
+    },
+    priority: {
+      type: 'string',
+      enum: ['P0', 'P1', 'P2', 'P3'],
+      description: 'Priority to fix based on impact, confidence, and ease.',
+    },
+    risk: {
+      type: 'string',
+      enum: ['low', 'medium', 'high', 'unknown'],
+    },
+    estimatedEffort: {
+      type: 'string',
+      enum: ['small', 'medium', 'large', 'unknown'],
+    },
     validationPlan: {
       type: 'array',
       maxItems: 5,
-      items: { type: 'string', maxLength: 300 },
+      items: { type: 'string' },
     },
-    commandsRun: {
-      type: 'array',
-      maxItems: 6,
-      items: { type: 'string', maxLength: 260 },
-    },
-    filesInspected: {
-      type: 'array',
-      maxItems: 12,
-      items: { type: 'string', maxLength: 220 },
-    },
-    followUpNeeded: {
+    unresolvedQuestions: {
       type: 'array',
       maxItems: 5,
-      items: { type: 'string', maxLength: 300 },
+      items: { type: 'string' },
     },
   },
 }
@@ -735,16 +589,28 @@ const SYNTHESIS_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: [
-    'executiveSummary',
+    'summary',
+    'coverage',
     'prioritizedFixPlan',
-    'clusters',
-    'undeterminedTests',
-    'missingInvestigations',
-    'validationStrategy',
+    'undeterminedRootCauses',
+    'crossCuttingThemes',
     'recommendedExecutionOrder',
+    'validationStrategy',
   ],
   properties: {
-    executiveSummary: { type: 'string', maxLength: 1800 },
+    summary: { type: 'string' },
+    coverage: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['totalTests', 'investigated', 'missingOrFailed', 'determinedRootCauses', 'undeterminedRootCauses'],
+      properties: {
+        totalTests: { type: 'integer' },
+        investigated: { type: 'integer' },
+        missingOrFailed: { type: 'integer' },
+        determinedRootCauses: { type: 'integer' },
+        undeterminedRootCauses: { type: 'integer' },
+      },
+    },
     prioritizedFixPlan: {
       type: 'array',
       maxItems: 18,
@@ -753,182 +619,108 @@ const SYNTHESIS_SCHEMA = {
         additionalProperties: false,
         required: [
           'rank',
+          'key',
+          'testName',
           'priority',
-          'testsCovered',
-          'rootCause',
-          'fix',
-          'rationale',
+          'rootCauseDetermined',
+          'recommendedAction',
+          'whyNow',
+          'files',
           'risk',
-          'confidence',
+          'estimatedEffort',
           'validation',
         ],
         properties: {
-          rank: { type: 'integer', minimum: 1 },
+          rank: { type: 'integer' },
+          key: { type: 'string' },
+          testName: { type: 'string' },
           priority: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] },
-          testsCovered: {
+          rootCauseDetermined: { type: 'boolean' },
+          recommendedAction: { type: 'string' },
+          whyNow: { type: 'string' },
+          files: {
             type: 'array',
-            maxItems: 18,
+            maxItems: 8,
             items: { type: 'string' },
           },
-          rootCause: { type: 'string', maxLength: 900 },
-          fix: { type: 'string', maxLength: 1200 },
-          rationale: { type: 'string', maxLength: 900 },
-          risk: { type: 'string', enum: ['low', 'medium', 'high'] },
-          confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+          risk: { type: 'string', enum: ['low', 'medium', 'high', 'unknown'] },
+          estimatedEffort: { type: 'string', enum: ['small', 'medium', 'large', 'unknown'] },
           validation: {
             type: 'array',
-            maxItems: 6,
-            items: { type: 'string', maxLength: 300 },
-          },
-        },
-      },
-    },
-    clusters: {
-      type: 'array',
-      maxItems: 10,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['theme', 'tests', 'sharedFixOpportunity'],
-        properties: {
-          theme: { type: 'string', maxLength: 240 },
-          tests: {
-            type: 'array',
-            maxItems: 18,
+            maxItems: 5,
             items: { type: 'string' },
           },
-          sharedFixOpportunity: { type: 'string', maxLength: 800 },
         },
       },
     },
-    undeterminedTests: {
+    undeterminedRootCauses: {
       type: 'array',
       maxItems: 18,
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['key', 'testName', 'whyUndetermined', 'recommendedNextSteps'],
+        required: ['key', 'testName', 'status', 'nextDiagnosticStep'],
         properties: {
           key: { type: 'string' },
           testName: { type: 'string' },
-          whyUndetermined: { type: 'string', maxLength: 900 },
-          recommendedNextSteps: {
-            type: 'array',
-            maxItems: 5,
-            items: { type: 'string', maxLength: 300 },
-          },
+          status: { type: 'string' },
+          nextDiagnosticStep: { type: 'string' },
         },
       },
     },
-    missingInvestigations: {
+    crossCuttingThemes: {
       type: 'array',
-      maxItems: 18,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['key', 'testName', 'reason'],
-        properties: {
-          key: { type: 'string' },
-          testName: { type: 'string' },
-          reason: { type: 'string', maxLength: 500 },
-        },
-      },
-    },
-    validationStrategy: {
-      type: 'array',
-      maxItems: 10,
-      items: { type: 'string', maxLength: 400 },
+      maxItems: 8,
+      items: { type: 'string' },
     },
     recommendedExecutionOrder: {
       type: 'array',
       maxItems: 18,
-      items: { type: 'string', maxLength: 300 },
+      items: { type: 'string' },
+    },
+    validationStrategy: {
+      type: 'array',
+      maxItems: 8,
+      items: { type: 'string' },
     },
   },
 }
 
-function stableObject(value) {
-  if (Array.isArray(value)) return value.map(stableObject)
-  if (value && typeof value === 'object') {
-    const out = {}
-    for (const key of Object.keys(value).sort()) out[key] = stableObject(value[key])
-    return out
-  }
-  return value
+function asArray(value) {
+  if (Array.isArray(value)) return value
+  if (value && Array.isArray(value.tests)) return value.tests
+  return []
 }
 
-function stableStringify(value) {
-  return JSON.stringify(stableObject(value), null, 2)
-}
-
-function compactString(value) {
+function stableString(value) {
   if (value === null || value === undefined) return ''
-  return String(value).trim()
+  if (typeof value === 'string') return value
+  return JSON.stringify(value, Object.keys(value).sort())
 }
 
-function keyBaseFor(raw, index) {
-  if (typeof raw === 'string') return compactString(raw) || `test-${String(index + 1).padStart(2, '0')}`
-  return (
-    compactString(raw.key) ||
-    compactString(raw.id) ||
-    compactString(raw.testName) ||
-    compactString(raw.name) ||
-    compactString(raw.title) ||
-    compactString(raw.file) ||
-    `test-${String(index + 1).padStart(2, '0')}`
-  )
-}
-
-function normalizeRawTest(raw, index) {
-  if (typeof raw === 'string') {
+function normalizeTest(test, index) {
+  if (typeof test === 'string') {
+    const name = test.trim()
     return {
-      keyBase: keyBaseFor(raw, index),
-      testName: compactString(raw),
-      file: '',
-      command: '',
-      failure: '',
-      notes: '',
-      raw,
+      key: `test-${String(index + 1).padStart(2, '0')}:${name}`,
+      testName: name,
+      location: '',
+      raw: { name },
     }
   }
 
-  const testName =
-    compactString(raw.testName) ||
-    compactString(raw.name) ||
-    compactString(raw.title) ||
-    compactString(raw.id) ||
-    compactString(raw.key) ||
-    `test-${String(index + 1).padStart(2, '0')}`
+  const raw = test && typeof test === 'object' ? test : { value: stableString(test) }
+  const explicitKey = raw.key || raw.id || raw.testId || raw.name || raw.testName || raw.fullName
+  const filePart = raw.file || raw.path || raw.location || ''
+  const namePart = raw.name || raw.testName || raw.fullName || raw.title || explicitKey || `test-${index + 1}`
+  const key = raw.key || raw.id || raw.testId || `${filePart ? `${filePart}::` : ''}${namePart}` || `test-${String(index + 1).padStart(2, '0')}`
 
   return {
-    keyBase: keyBaseFor(raw, index),
-    testName,
-    file: compactString(raw.file || raw.path || raw.testFile),
-    command: compactString(raw.command || raw.testCommand || raw.reproCommand),
-    failure: compactString(raw.failure || raw.failureLog || raw.error || raw.symptom),
-    notes: compactString(raw.notes || raw.context || raw.description),
+    key: String(key),
+    testName: String(namePart),
+    location: String(filePart || raw.location || ''),
     raw,
   }
-}
-
-function normalizeTests(input) {
-  const seen = {}
-  return input.map((raw, index) => {
-    const normalized = normalizeRawTest(raw, index)
-    const base = normalized.keyBase
-    const count = seen[base] || 0
-    seen[base] = count + 1
-    return {
-      key: count === 0 ? base : `${base}__${count + 1}`,
-      testName: normalized.testName,
-      file: normalized.file,
-      command: normalized.command,
-      failure: normalized.failure,
-      notes: normalized.notes,
-      ordinal: index + 1,
-      raw: normalized.raw,
-    }
-  })
 }
 
 function chunk(items, size) {
@@ -937,125 +729,138 @@ function chunk(items, size) {
   return out
 }
 
-function chooseWaveSize(value) {
-  const n = Number(value || 6)
-  if (!Number.isFinite(n)) return 6
-  if (n < 6) return 6
-  if (n > 8) return 8
-  return Math.floor(n)
-}
-
-function labelFor(prefix, key) {
-  const clean = String(key).replace(/\s+/g, ' ').slice(0, 80)
-  return `${prefix}:${clean}`
-}
-
-const rawTests =
-  Array.isArray(args?.tests) ? args.tests :
-  Array.isArray(args?.flakyTests) ? args.flakyTests :
-  Array.isArray(args) ? args :
-  typeof args?.tests === 'string' ? args.tests.split('\n').map(s => s.trim()).filter(Boolean) :
-  typeof args?.flakyTests === 'string' ? args.flakyTests.split('\n').map(s => s.trim()).filter(Boolean) :
-  []
-
-phase('Validate Inputs')
-
-if (!rawTests.length) {
-  log('No flaky tests were provided. Pass args.tests as an array of 18 test names/spec objects.')
-  return {
-    error: 'No tests provided',
-    expectedArgsShape: {
-      tests: [
-        {
-          key: 'stable-test-id',
-          testName: 'name of flaky test',
-          file: 'optional/path/to/test_file',
-          command: 'optional command to reproduce',
-          failure: 'optional failure excerpt',
-          notes: 'optional context',
-        },
-      ],
-    },
-  }
-}
-
-const tests = normalizeTests(rawTests)
-const expectedCount = Number(args?.expectedCount || 18)
-if (tests.length !== expectedCount) {
-  log(`Input contains ${tests.length} tests; expected ${expectedCount}. Proceeding with all provided tests.`)
-}
-
-const repoContext = compactString(args?.repoContext || args?.context || '')
-const globalReproCommand = compactString(args?.reproCommand || args?.command || '')
-const triageHints = compactString(args?.hints || args?.triageHints || '')
-const waveSize = chooseWaveSize(args?.waveSize)
-const waves = chunk(tests, waveSize)
-
-function buildTriagePrompt(test) {
-  const payload = {
-    test: {
-      key: test.key,
-      ordinal: test.ordinal,
-      testName: test.testName,
-      file: test.file,
-      command: test.command,
-      failure: test.failure,
-      notes: test.notes,
-    },
-    repositoryContext: repoContext,
-    globalReproCommand,
-    triageHints,
-  }
-
-  return `You are a senior test-infrastructure engineer triaging exactly one flaky test.
-
-Goal:
-Find the most likely root cause of this flaky test and propose a concrete, minimal fix.
-
-Test specification:
-${stableStringify(payload)}
-
-Instructions:
-- Work independently. Inspect the repository, relevant test code, fixtures, helpers, and implementation code.
-- If practical, run the provided test command or a targeted equivalent. If a command is missing, infer a safe targeted command from the repo.
-- Prefer evidence from code paths, fixtures, logs, assertions, timing, shared state, mocks, async handling, cleanup, and external dependencies.
-- Do not edit files permanently. If a fix is clear, provide a concise patch sketch or exact change description.
-- If you cannot determine the root cause, set status="undetermined", rootCauseDetermined=false, confidence="low", failureMode="unknown", and explain what evidence is missing.
-- Keep output lean: at most 5 evidence items, no long logs, no pasted file dumps.
-
-Return only data conforming to the schema. The key field must be exactly: ${JSON.stringify(test.key)}.`
-}
-
-function runTriage(test, phaseTitle, attemptName) {
-  return agent(buildTriagePrompt(test), {
-    label: labelFor(attemptName, test.key),
-    phase: phaseTitle,
-    schema: TRIAGE_SCHEMA,
-    model: args?.workerModel || undefined,
-    effort: args?.workerEffort || 'medium',
-    isolation: 'worktree',
+function sortByKey(items) {
+  return [...items].sort((a, b) => {
+    const ak = String(a.key || '')
+    const bk = String(b.key || '')
+    return ak > bk ? 1 : ak < bk ? -1 : 0
   })
 }
 
-const done = []
-let failed = []
-let instabilityBackoff = false
-let backoffWave = null
-const launchedKeys = new Set()
+function buildInvestigationPrompt(test, repoContext) {
+  return [
+    'You are a senior test-infrastructure engineer triaging one flaky test.',
+    '',
+    'Task: determine the most likely root cause of this flaky test and propose a concrete fix.',
+    '',
+    'Hard requirements:',
+    '- Investigate only this test; do not modify files.',
+    '- Inspect relevant source, test code, fixtures, async timing, shared state, mocks, CI/test logs if available, and nearby history if useful.',
+    '- Prefer a specific root cause over generic “timing issue” language.',
+    '- If the root cause cannot be determined from available evidence, set rootCauseDetermined=false and clearly state the remaining uncertainty.',
+    '- Keep output lean: concise evidence references, no pasted log walls, no long quotes.',
+    '- Return data matching the schema exactly.',
+    '',
+    `Stable test key: ${test.key}`,
+    `Test name: ${test.testName}`,
+    `Location hint: ${test.location || '(not provided)'}`,
+    '',
+    'Raw test descriptor:',
+    JSON.stringify(test.raw, null, 2),
+    '',
+    'Repository / project context supplied by caller:',
+    repoContext || '(none supplied)',
+  ].join('\n')
+}
+
+function buildSynthesisPrompt(allTests, investigations, missing, backedOff, repoContext) {
+  const investigationPayload = JSON.stringify(sortByKey(investigations))
+  const missingPayload = JSON.stringify(sortByKey(missing))
+  const plannedPayload = JSON.stringify(sortByKey(allTests).map(t => ({
+    key: t.key,
+    testName: t.testName,
+    location: t.location,
+  })))
+
+  return [
+    'You are the triage lead synthesizing a flaky-test remediation plan.',
+    '',
+    'Create a prioritized fix plan from the completed per-test investigations.',
+    '',
+    'Hard requirements:',
+    '- Prioritize fixes by impact, confidence, effort, shared root causes, and de-flaking leverage.',
+    '- Clearly flag every test whose root cause could not be determined.',
+    '- Clearly flag every planned test that is missing because its investigation failed, was skipped due to instability backoff, or otherwise returned no result.',
+    '- Do not pretend partial coverage is complete.',
+    '- Keep the plan concise and actionable.',
+    '- Return data matching the schema exactly.',
+    '',
+    `Instability backoff triggered: ${backedOff ? 'yes' : 'no'}`,
+    '',
+    'Repository / project context supplied by caller:',
+    repoContext || '(none supplied)',
+    '',
+    `Planned tests (${allTests.length}):`,
+    plannedPayload,
+    '',
+    `Completed investigations (${investigations.length}):`,
+    investigationPayload,
+    '',
+    `Missing / failed investigations (${missing.length}):`,
+    missingPayload,
+  ].join('\n')
+}
+
+phase('Validate inputs')
+
+const rawTests = asArray(args)
+const repoContext = args && !Array.isArray(args) && args.repoContext ? String(args.repoContext) : ''
+const requestedWaveSize = args && !Array.isArray(args) && Number.isInteger(args.waveSize) ? args.waveSize : 6
+const WAVE_SIZE = Math.max(6, Math.min(8, requestedWaveSize))
+
+const tests = rawTests.map(normalizeTest)
+
+if (tests.length === 0) {
+  return {
+    ok: false,
+    error: 'No tests provided. Pass args as { tests: [...] } or as an array of 18 flaky test descriptors.',
+    expectedArgsShape: {
+      tests: [
+        {
+          key: 'stable-id',
+          name: 'test name',
+          file: 'path/to/test_file',
+          failureLog: 'optional short failure excerpt or CI link',
+        },
+      ],
+      repoContext: 'optional project-specific notes',
+      waveSize: 'optional integer 6..8',
+    },
+  }
+}
+
+if (tests.length !== 18) {
+  log(`Warning: expected 18 flaky tests, received ${tests.length}. Continuing with provided set.`)
+}
+
+log(`Starting flaky-test triage for ${tests.length} tests in waves of ${WAVE_SIZE}.`)
+log('After launch, arm the ScheduleWakeup watchdog shown in this script comment to catch silent stalls.')
+
+function runInvestigation(test) {
+  return agent(buildInvestigationPrompt(test, repoContext), {
+    label: `triage:${test.key}`,
+    phase: 'Investigate',
+    schema: TEST_INVESTIGATION_SCHEMA,
+    effort: 'high',
+  })
+}
 
 phase('Investigate')
-log(`Triaging ${tests.length} flaky tests in ${waves.length} wave(s) of ${waveSize}.`)
+
+const waves = chunk(tests, WAVE_SIZE)
+const done = []
+let failed = []
+let unlaunched = []
+let backedOff = false
+let completedPrimaryWaves = 0
 
 for (let w = 0; w < waves.length; w++) {
+  phase(`Investigate wave ${w + 1}/${waves.length}`)
+
   const wave = waves[w]
-  const phaseTitle = `Investigate Wave ${w + 1}/${waves.length}`
-  phase(phaseTitle)
+  const batch = await parallel(wave.map(test => () => runInvestigation(test)))
 
-  for (const test of wave) launchedKeys.add(test.key)
-
-  const batch = await parallel(wave.map(test => () => runTriage(test, phaseTitle, 'triage')))
   let nulls = 0
-
   batch.forEach((result, i) => {
     if (result) {
       done.push(result)
@@ -1065,149 +870,156 @@ for (let w = 0; w < waves.length; w++) {
     }
   })
 
-  log(`Wave ${w + 1}/${waves.length}: ${batch.length - nulls}/${batch.length} succeeded; ${done.length}/${tests.length} total complete; ${failed.length} queued for retry.`)
+  completedPrimaryWaves += 1
+  log(`Wave ${w + 1}/${waves.length}: ${batch.length - nulls}/${batch.length} succeeded; total complete ${done.length}/${tests.length}; failed pending ${failed.length}.`)
 
   if (nulls / batch.length > 0.4) {
-    log(`instability: ${nulls}/${batch.length} failed this wave — backing off; return partial, resume later`)
-    instabilityBackoff = true
-    backoffWave = w + 1
+    backedOff = true
+    unlaunched = waves.slice(w + 1).flat()
+    log(`Instability: ${nulls}/${batch.length} failed this wave — backing off. Remaining ${unlaunched.length} tests will be flagged missing and recover cheaply on resume.`)
     break
   }
 }
 
-if (failed.length && !instabilityBackoff) {
-  phase('Retry')
-  const retryWave = failed.slice()
-  failed = []
+if (failed.length && !backedOff) {
+  phase('Retry failed investigations')
+  log(`Retrying ${failed.length} failed investigations after natural backoff from primary waves.`)
 
-  log(`Retrying ${retryWave.length} failed flaky-test investigation(s) after natural backoff.`)
-  const retried = await parallel(retryWave.map(test => () => runTriage(test, 'Retry', 'triage-retry')))
+  const retryTargets = failed
+  const retried = await parallel(retryTargets.map(test => () => runInvestigation(test)))
 
-  let retryNulls = 0
+  const stillFailed = []
   retried.forEach((result, i) => {
     if (result) {
       done.push(result)
     } else {
-      retryNulls += 1
-      failed.push(retryWave[i])
+      stillFailed.push(retryTargets[i])
     }
   })
 
-  log(`Retry recovered ${retried.length - retryNulls}/${retried.length}; still missing ${failed.length}.`)
-
-  if (retried.length && retryNulls / retried.length > 0.4) {
-    log(`instability: ${retryNulls}/${retried.length} failed in retry wave — returning partial results; resume later`)
-    instabilityBackoff = true
-    backoffWave = 'retry'
-  }
+  failed = stillFailed
+  log(`Retry wave recovered ${retried.filter(Boolean).length}; still missing ${failed.length}.`)
+} else if (failed.length && backedOff) {
+  log(`Skipping retry because instability backoff triggered; ${failed.length} failed tests will be flagged missing until resume.`)
 }
 
-const dedupedByKey = {}
-for (const result of done) {
-  if (result && result.key) dedupedByKey[result.key] = result
-}
-const orderedResults = Object.values(dedupedByKey).sort((a, b) => (a.key > b.key ? 1 : a.key < b.key ? -1 : 0))
+const haveKeys = new Set(done.map(result => result.key))
+const missingByCoverage = tests.filter(test => !haveKeys.has(test.key))
+const missingMap = new Map()
 
-const haveKeys = new Set(orderedResults.map(r => r.key))
-const missingInvestigations = tests
-  .filter(test => !haveKeys.has(test.key))
-  .map(test => ({
+for (const test of missingByCoverage) {
+  missingMap.set(test.key, {
     key: test.key,
     testName: test.testName,
-    reason: launchedKeys.has(test.key)
-      ? 'Subagent did not return a usable triage result.'
-      : 'Investigation was not launched because instability backoff stopped later waves.',
-  }))
-
-const undeterminedFromResults = orderedResults
-  .filter(r => !r.rootCauseDetermined || r.status === 'undetermined')
-  .map(r => ({
-    key: r.key,
-    testName: r.testName,
-    whyUndetermined: r.rootCauseSummary || 'Root cause was not determined by the triage subagent.',
-    recommendedNextSteps: r.followUpNeeded || [],
-  }))
-
-if (missingInvestigations.length) {
-  log(`partial: missing ${missingInvestigations.length}/${tests.length}: ${missingInvestigations.map(t => t.key).join(', ')}`)
+    location: test.location,
+    reason: 'no investigation result',
+  })
 }
 
-if (undeterminedFromResults.length) {
-  log(`undetermined root cause(s): ${undeterminedFromResults.map(t => t.key).join(', ')}`)
+for (const test of failed) {
+  missingMap.set(test.key, {
+    key: test.key,
+    testName: test.testName,
+    location: test.location,
+    reason: backedOff ? 'failed during instability window; retry deferred' : 'failed after retry',
+  })
 }
 
-function buildSynthesisPrompt() {
-  const payload = {
-    totalTests: tests.length,
-    investigatedCount: orderedResults.length,
-    expectedCount,
-    instabilityBackoff,
-    backoffWave,
-    results: orderedResults,
-    missingInvestigations,
-    undeterminedFromResults,
+for (const test of unlaunched) {
+  missingMap.set(test.key, {
+    key: test.key,
+    testName: test.testName,
+    location: test.location,
+    reason: 'not launched because instability backoff stopped new waves',
+  })
+}
+
+const missing = sortByKey([...missingMap.values()])
+
+if (missing.length) {
+  log(`Partial coverage: missing ${missing.length}/${tests.length} tests: ${missing.map(t => t.key).join(', ')}`)
+}
+
+phase('Synthesize prioritized fix plan')
+
+let synthesis = null
+if (done.length > 0 || missing.length > 0) {
+  synthesis = await agent(buildSynthesisPrompt(tests, done, missing, backedOff, repoContext), {
+    label: 'synthesize:prioritized-fix-plan',
+    phase: 'Synthesize prioritized fix plan',
+    schema: SYNTHESIS_SCHEMA,
+    effort: 'high',
+  })
+}
+
+const determinedCount = done.filter(result => result.rootCauseDetermined).length
+const undeterminedCount = done.filter(result => !result.rootCauseDetermined).length
+
+if (!synthesis) {
+  synthesis = {
+    summary: 'Synthesis agent did not return a result. Use the investigations and missing list directly.',
+    coverage: {
+      totalTests: tests.length,
+      investigated: done.length,
+      missingOrFailed: missing.length,
+      determinedRootCauses: determinedCount,
+      undeterminedRootCauses: undeterminedCount + missing.length,
+    },
+    prioritizedFixPlan: sortByKey(done).map((result, index) => ({
+      rank: index + 1,
+      key: result.key,
+      testName: result.testName,
+      priority: result.priority,
+      rootCauseDetermined: result.rootCauseDetermined,
+      recommendedAction: result.proposedFix,
+      whyNow: result.rootCauseDetermined ? result.rootCause : 'Root cause undetermined; prioritize diagnostic follow-up before code changes.',
+      files: result.fixFiles,
+      risk: result.risk,
+      estimatedEffort: result.estimatedEffort,
+      validation: result.validationPlan,
+    })),
+    undeterminedRootCauses: [
+      ...sortByKey(done)
+        .filter(result => !result.rootCauseDetermined)
+        .map(result => ({
+          key: result.key,
+          testName: result.testName,
+          status: result.rootCause || 'Root cause undetermined.',
+          nextDiagnosticStep: result.proposedFix || 'Collect more targeted failure data and reproduce under stress.',
+        })),
+      ...missing.map(test => ({
+        key: test.key,
+        testName: test.testName,
+        status: `No investigation result: ${test.reason}`,
+        nextDiagnosticStep: 'Resume the workflow or run a focused investigation for this test.',
+      })),
+    ],
+    crossCuttingThemes: [],
+    recommendedExecutionOrder: sortByKey(done).map(result => result.key),
+    validationStrategy: ['Re-run each fixed test repeatedly under the same CI/runtime conditions that exhibited flakiness.'],
   }
-
-  return `You are synthesizing a prioritized engineering fix plan from flaky-test triage results.
-
-Use only the evidence in the payload. Do not invent root causes for missing or undetermined tests.
-
-Requirements:
-- Produce a prioritized fix plan, highest impact and highest confidence first.
-- Group tests that share the same root cause or likely shared fix.
-- Clearly flag every test whose root cause could not be determined.
-- Clearly flag every test whose investigation is missing because a subagent failed, was skipped, or the workflow backed off.
-- Include validation strategy: targeted tests, repeated runs, order-randomization if relevant, and CI signal to monitor.
-- If results are partial, the plan must say it is partial and identify exactly what remains unknown.
-
-Payload:
-${stableStringify(payload)}`
-}
-
-phase('Synthesize')
-const synthesis = await agent(buildSynthesisPrompt(), {
-  label: 'synthesize-flaky-test-fix-plan',
-  phase: 'Synthesize',
-  schema: SYNTHESIS_SCHEMA,
-  model: args?.synthesisModel || undefined,
-  effort: args?.synthesisEffort || 'high',
-})
-
-const fallbackSynthesis = {
-  executiveSummary: synthesis
-    ? synthesis.executiveSummary
-    : `Synthesis agent did not return a result. ${orderedResults.length}/${tests.length} tests have triage results; ${missingInvestigations.length} investigations are missing; ${undeterminedFromResults.length} returned undetermined root causes.`,
-  prioritizedFixPlan: synthesis ? synthesis.prioritizedFixPlan : [],
-  clusters: synthesis ? synthesis.clusters : [],
-  undeterminedTests: synthesis ? synthesis.undeterminedTests : undeterminedFromResults,
-  missingInvestigations: synthesis ? synthesis.missingInvestigations : missingInvestigations,
-  validationStrategy: synthesis
-    ? synthesis.validationStrategy
-    : [
-        'Re-run each fixed flaky test repeatedly in isolation.',
-        'Run the affected test files as a group to detect order dependencies.',
-        'Run the relevant CI shard multiple times before closing the triage.',
-      ],
-  recommendedExecutionOrder: synthesis ? synthesis.recommendedExecutionOrder : [],
 }
 
 return {
-  workflow: 'flaky-test-triage',
+  ok: true,
   totalTests: tests.length,
-  completedInvestigations: orderedResults.length,
-  missingInvestigationCount: missingInvestigations.length,
-  undeterminedRootCauseCount: undeterminedFromResults.length,
-  instabilityBackoff,
-  backoffWave,
-  results: orderedResults,
-  missingInvestigations,
-  undeterminedFromResults,
-  synthesis: fallbackSynthesis,
-  resumeGuidance: instabilityBackoff || missingInvestigations.length
-    ? 'Resume this workflow with Workflow({ scriptPath, resumeFromRunId }) after the API window clears; completed triage agents will be cached and missing/null agents will rerun.'
-    : 'All provided tests received triage results.',
+  completedPrimaryWaves,
+  waveSize: WAVE_SIZE,
+  instabilityBackoffTriggered: backedOff,
+  coverage: {
+    investigated: done.length,
+    missing: missing.length,
+    rootCauseDetermined: determinedCount,
+    rootCauseUndeterminedFromCompletedInvestigations: undeterminedCount,
+  },
+  investigations: sortByKey(done),
+  missing,
+  prioritizedFixPlan: synthesis,
+  resumeGuidance: backedOff || missing.length
+    ? 'If this run stalled or backed off, stop the workflow task if still running, then resume with Workflow({ scriptPath, resumeFromRunId }). Completed investigations should be cached; null/missing agents can rerun.'
+    : 'All provided tests produced investigation results.',
 }
 ```
 
-> **GPT-5.5 judge:** The script meets most of the safety bar: it uses bounded waves of 6-8 instead of one giant fan-out, tolerates null subagent results, retries failed/null investigations once, accumulates completed results wave by wave, backs off when a wave has >40% failures, uses lean capped schemas, stable labels/prompts keyed by test, synthesizes partial results, and explicitly reports missing/undetermined investigations with resume guidance. The main weakness is that the ScheduleWakeup watchdog is only provided as a comment/instruction to the caller rather than being armed by the workflow itself, so hung parallel calls still rely on external setup. Also, completed work is accumulated in memory rather than explicitly checkpointed to durable storage, though cached agent labels/resume guidance mitigate this. Overall it is strongly safe-by-construction but not perfect.
+> **Claude judge:** The script demonstrates nearly all required safety properties: (1) bounded waves of 6-8 via chunk(); (2) per-agent null-tolerance with failed[] tracking and a retry wave; (3) results committed per wave into done[] before synthesis; (4) ScheduleWakeup watchdog present as a comment with instructions to arm immediately after launch; (5) no Date.now/Math.random, deterministic key generation; (6) lean capped schemas with maxItems constraints; (7) synthesis explicitly flags missing/partial coverage and tolerates partial input with a fallback synthesis object; (8) backoff triggers when >40% of a wave fails, stopping further waves. The only minor gap is the watchdog is a comment rather than an armed call, but the rubric explicitly allows this.
 

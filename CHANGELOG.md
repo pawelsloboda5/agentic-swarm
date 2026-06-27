@@ -9,6 +9,33 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Nothing yet._
 
+## [0.3.0] — 2026-06-27
+
+A rigor-and-trust release: the eval is rebuilt to be hard to fool, the docs drop the personal
+war-story in favor of the (now trustworthy) eval results, and there's explicit guidance on getting
+the most out of the skill.
+
+### Changed
+
+- **Eval rebuilt for rigor.** Fixes that make the numbers trustworthy: outputs are no longer
+  truncated (`max_tokens` / `max_completion_tokens` pinned — the earlier flaw that capped the
+  GPT-4.1 family mid-script and then unfairly scored the cut-off code); the non-reasoning models run
+  deterministically (temperature 0 + fixed seed); the reasoning models are averaged over 3 repeats;
+  and the judge is now an **independent, cross-family Claude model** (no self-preference from a GPT
+  judge grading GPT outputs). With truncation fixed the skill shows a large uplift on **every** model
+  — GPT-5.5 30%→94%, GPT-4.1-mini 22%→92%, GPT-4.1 19%→89%, GPT-5.4-mini 20%→77% (rubric) — and the
+  watchdog / backoff patterns jump 0%→75% / 0%→81%. Method documented in `evals/README.md`.
+- **Docs lead with the eval, not anecdotes.** Removed the personal "41-agent / ~2-hour stall"
+  war-story from the README, the skill, and the watchdog reference (and deleted
+  `skills/agentic-swarm/reference/origin.md`), reframing around the reproducible eval evidence.
+
+### Added
+
+- **README "Best used with"** — the skill shines under dynamic workflow orchestration; turn it on
+  with `/effort` at its top tier (ultracode) and pick a strong `/model`.
+- **`bun run report` / `make-transcripts.mjs`** — regenerates the results table and the per-model
+  transcripts (with the Claude judge's reasoning) in one step.
+
 ## [0.2.0] — 2026-06-27
 
 The trust-and-evidence release: the skill is now **measured**, the privacy guarantee is **enforced
@@ -92,6 +119,7 @@ Initial release.
 - **Docs & trust** — full `README.md`, plain-language `docs/PRIVACY.md`, `CONTRIBUTING.md`,
   this changelog, and the MIT `LICENSE`.
 
-[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/pawelsloboda5/agentic-swarm/releases/tag/v0.1.0

@@ -1,6 +1,6 @@
 # migration-swarm — `gpt-4.1-mini`
 
-> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: GPT-5.5.
+> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: Claude (claude-sonnet-4-6).
 
 **Task**
 
@@ -8,13 +8,12 @@
 
 ---
 
-## Baseline (no skill) — rubric 15%, patterns 25%
+## Baseline (no skill) — rubric 20%, patterns 25%
 
-````js
 ```js
 export const meta = {
-  name: 'migrate-fetchUser-to-getUser',
-  description: 'Migrate 35 call sites from fetchUser(id) to getUser({ id }) with type-check and report',
+  name: 'migration-swarm-fetchUser-to-getUser',
+  description: 'Migrate 35 call sites from fetchUser(id) to getUser({ id }) with type verification and reporting',
   phases: [
     { title: 'Migrate Call Sites' },
     { title: 'Verify Type Correctness' },
@@ -22,9 +21,9 @@ export const meta = {
   ],
 }
 
-const callSitesCount = 35
+const totalCallSites = 35
 
-// JSON Schema for migration verification result from each subagent
+// JSON Schema for migration result from each subagent
 const migrationResultSchema = {
   type: 'object',
   properties: {
@@ -38,57 +37,50 @@ const migrationResultSchema = {
 }
 
 phase('Migrate Call Sites')
+log(`Starting migration of ${totalCallSites} call sites from fetchUser(id) to getUser({ id })`)
 
-// Step 1: Run 35 isolated subagents to migrate each call site
-// Each subagent receives a prompt to migrate a specific call site from fetchUser(id) to getUser({ id })
-// and verify type correctness locally.
-// They return a structured result indicating success or failure and reason.
+// Run one isolated subagent per call site to perform migration and type check
 const migrationResults = await parallel(
-  Array.from({ length: callSitesCount }, (_, i) => async () => {
+  Array.from({ length: totalCallSites }, (_, i) => async () => {
     const callSiteId = i + 1
+    // Prompt instructs the subagent to migrate the specific call site and verify type correctness
     const prompt = `
-You are tasked with migrating a single call site in a codebase.
-
-Call site #${callSiteId} currently uses the deprecated API:
+You are migrating a single call site #${callSiteId} that uses the deprecated API:
   fetchUser(id)
 
-You must migrate it to use the new API:
+Migrate this call site to use the new API:
   getUser({ id })
 
-Requirements:
-- Perform the migration in isolation (do not assume other call sites).
-- Verify the migrated call site is type-correct.
-- If migration is successful and type-correct, respond with:
-  {
-    migrated: true,
-    needsManualAttention: false,
-    reason: "Migration successful and type-correct",
-    callSiteId: ${callSiteId}
-  }
-- If migration cannot be done automatically or type-check fails, respond with:
-  {
-    migrated: false,
-    needsManualAttention: true,
-    reason: "<explanation of why manual attention is needed>",
-    callSiteId: ${callSiteId}
-  }
+Ensure the migrated code is type-correct (e.g. argument shape, usage).
 
-Respond ONLY with a valid JSON object matching the schema described above.
+Respond with a JSON object with these fields:
+- migrated: true if migration succeeded and is type-correct, else false
+- needsManualAttention: true if migration failed or type check failed and manual fix is needed, else false
+- reason: a short explanation if manual attention is needed, or "Migration successful" if not
+- callSiteId: the call site number (${callSiteId})
+
+Example response:
+{
+  "migrated": true,
+  "needsManualAttention": false,
+  "reason": "Migration successful",
+  "callSiteId": ${callSiteId}
+}
 `
-    // Use a medium effort model for migration and type-check
+    // Run the subagent with isolation and schema validation
     const result = await agent(prompt, {
       label: `Migrate call site #${callSiteId}`,
       phase: 'Migrate Call Sites',
       schema: migrationResultSchema,
-      effort: 'medium',
       isolation: 'worktree',
+      effort: 'high',
     })
-    // If agent failed or skipped, treat as needing manual attention
-    if (!result) {
+    // If subagent failed or was skipped, mark as needing manual attention
+    if (result === null) {
       return {
         migrated: false,
         needsManualAttention: true,
-        reason: 'Agent failed or skipped migration',
+        reason: 'Subagent failed or skipped',
         callSiteId,
       }
     }
@@ -97,78 +89,52 @@ Respond ONLY with a valid JSON object matching the schema described above.
 )
 
 phase('Verify Type Correctness')
+log('Verifying type correctness of migrated call sites')
 
-// Step 2: Double-check type correctness for migrated call sites that reported success
-// Spawn subagents only for those that migrated successfully to confirm type correctness
-const migratedSites = migrationResults.filter(r => r && r.migrated)
+// We already asked subagents to verify type correctness, but do a sanity check here
+// Filter out null results just in case
+const verifiedResults = migrationResults.filter(r => r !== null)
 
-const verificationResults = await parallel(
-  migratedSites.map(({ callSiteId }) => async () => {
-    const prompt = `
-You have a migrated call site #${callSiteId} that uses:
-  getUser({ id })
+// Separate migrated and manual attention needed
+const migratedSites = verifiedResults.filter(r => r.migrated && !r.needsManualAttention)
+const manualAttentionSites = verifiedResults.filter(r => r.needsManualAttention)
 
-Verify that this call site is type-correct in the codebase context.
+// Compose a report string
+phase('Generate Report')
+log('Generating migration report')
 
-Respond with a JSON object:
-{
-  callSiteId: ${callSiteId},
-  typeCorrect: true,
-  reason: "Type check passed"
+const reportLines = []
+reportLines.push(`Migration Report for ${totalCallSites} call sites:`)
+reportLines.push(`\nSuccessfully migrated (${migratedSites.length}):`)
+for (const r of migratedSites) {
+  reportLines.push(`- Call site #${r.callSiteId}: ${r.reason}`)
+}
+reportLines.push(`\nNeed manual attention (${manualAttentionSites.length}):`)
+for (const r of manualAttentionSites) {
+  reportLines.push(`- Call site #${r.callSiteId}: ${r.reason}`)
 }
 
-or if type check fails:
+const report = reportLines.join('\n')
 
-{
-  callSiteId: ${callSiteId},
-  typeCorrect: false,
-  reason: "<explanation of type error>"
+log('Migration complete. Summary:')
+log(report)
+
+return {
+  migratedCount: migratedSites.length,
+  manualAttentionCount: manualAttentionSites.length,
+  details: verifiedResults,
+  report,
 }
-`
-    const schema = {
-      type: 'object',
-      properties: {
-        callSiteId: { type: 'integer' },
-        typeCorrect: { type: 'boolean' },
-        reason: { type: 'string' },
-      },
-      required: ['callSiteId', 'typeCorrect', 'reason'],
-      additionalProperties: false,
-    }
-    const res = await agent(prompt, {
-      label: `Verify type correctness call site #${callSiteId}`,
-      phase: 'Verify Type Correctness',
-      schema,
-      effort: 'medium',
-      isolation: 'worktree',
-    })
-    if (!res) {
-      return {
-        callSiteId,
-        typeCorrect: false,
-        reason: 'Agent failed or skipped type verification',
-      }
-    }
-    return res
-  }),
-)
+```
 
-// Merge verification results back into migration results
-for (const verification of verificationResults) {
-  if (!verification) continue
-  const idx = migrationResults.findIndex(r => r && r.callSiteId === verification.callSiteId)
-  if (idx !== -
-````
+> **Claude judge:** The script fans out all 35 agents in a single parallel() call (no bounded waves of 6-8), has no ScheduleWakeup watchdog, no per-wave result commits (single hard barrier before synthesis), no backoff on high failure rates, and only minimal null-tolerance (null check but no retry). It does have deterministic prompts (no Date.now/Math.random), a lean JSON schema, and synthesis that tolerates partial input and flags gaps.
 
-> **GPT-5.5 judge:** The workflow uses a single large parallel() fan-out over all 35 call sites and then another barrier-style parallel verification pass, with no bounded waves, no per-agent timeout/watchdog/ScheduleWakeup stall detection, no retry policy, and no per-wave commits or durable progress checkpoints. It does have structured lean JSON schemas and some null-tolerance after an agent returns, but that does not protect against a hung agent/connection deadlocking the whole run. There is no resume/cache-stable prompt strategy, no partial-input tolerant synthesis shown, and no high-failure-rate backoff. Overall it meets only a small fraction of the safety-by-construction criteria.
+## With skill — rubric 100%, patterns 94%
 
-## With skill — rubric 40%, patterns 75%
-
-````js
 ```js
 export const meta = {
   name: 'migration-swarm-fetchUser-to-getUser',
-  description: 'Migrate 35 call sites from fetchUser(id) to getUser({ id }) with verification and report',
+  description: 'Migrate 35 call sites from fetchUser(id) to getUser({id}) with type-check and report',
   phases: [
     { title: 'Migrate Call Sites' },
     { title: 'Verify Migration' },
@@ -176,119 +142,205 @@ export const meta = {
   ],
 }
 
-const WAVE_SIZE = 7 // ~6-8 per wave for safe concurrency
+const WAVE_SIZE = 6
 
-// The 35 call sites to migrate, each with a stable key and source snippet/context
-// For demo, keys are "site1".."site35"; in real use, keys would be file+line or unique id
+// Stable list of 35 call sites to migrate, each with a stable key and source snippet
+// (In real use, this would come from args or a DB; here we hardcode for example)
 const CALL_SITES = Array.from({ length: 35 }, (_, i) => ({
-  key: `site${i + 1}`,
-  // Minimal context for migration agent: original code snippet or location info
-  snippet: `// call site ${i + 1} uses fetchUser(id)`,
+  key: `callsite_${i + 1}`,
+  // Minimal example snippet; in real use, include file path, line number, code context
+  snippet: `// call site ${i + 1} code snippet using fetchUser(id)`,
 }))
 
-// Schema for migration result per call site
-const MIGRATION_SCHEMA = {
+// JSON Schema for migration result from each subagent
+const MIGRATION_RESULT_SCHEMA = {
   type: 'object',
   properties: {
     key: { type: 'string' },
     migratedCode: { type: 'string' }, // migrated snippet using getUser({ id })
-    verified: { type: 'boolean' },    // true if type-correct verified
-    issues: { type: 'string' },       // empty if none, else explanation for manual attention
+    typeCheckPassed: { type: 'boolean' },
+    issues: {
+      type: 'array',
+      items: { type: 'string' },
+      maxItems: 5,
+    },
   },
-  required: ['key', 'migratedCode', 'verified', 'issues'],
+  required: ['key', 'migratedCode', 'typeCheckPassed', 'issues'],
   additionalProperties: false,
 }
 
-// Schema for final synthesis report
+// JSON Schema for final synthesis report
 const REPORT_SCHEMA = {
   type: 'object',
   properties: {
-    migratedCount: { type: 'integer' },
-    manualAttentionCount: { type: 'integer' },
-    manualAttentionSites: {
+    migrated: {
+      type: 'array',
+      items: { type: 'string' },
+      maxItems: 35,
+    },
+    manualAttention: {
       type: 'array',
       items: {
         type: 'object',
         properties: {
           key: { type: 'string' },
-          issues: { type: 'string' },
+          reason: { type: 'string' },
         },
-        required: ['key', 'issues'],
+        required: ['key', 'reason'],
+        additionalProperties: false,
       },
+      maxItems: 35,
     },
     summary: { type: 'string' },
   },
-  required: ['migratedCount', 'manualAttentionCount', 'manualAttentionSites', 'summary'],
+  required: ['migrated', 'manualAttention', 'summary'],
   additionalProperties: false,
 }
 
-// Stable prompt builder for migration agent per call site
-function buildMigrationPrompt(site) {
-  return `You are migrating a call site from the deprecated API \`fetchUser(id)\` to the new API \`getUser({ id })\`.
-
-Call site key: ${site.key}
-Original snippet:
-${site.snippet}
-
-Task:
-1. Rewrite the snippet to use \`getUser({ id })\` instead of \`fetchUser(id)\`.
-2. Verify the migration is type-correct (assume TypeScript).
-3. If verified, set verified=true and issues="".
-4. If not verified, set verified=false and explain issues briefly.
-
-Return a JSON object with keys:
-- key: the call site key
-- migratedCode: the migrated snippet as a string
-- verified: boolean
-- issues: string (empty if none)
-
-Output ONLY the JSON object, no extra text.`
+// Build stable prompt for migrating one call site
+function buildMigrationPrompt(callsite) {
+  return `You are migrating a single call site from the deprecated API:
+  
+  Original call site snippet:
+  ${callsite.snippet}
+  
+  Task:
+  1. Rewrite the snippet to use the new API call getUser({ id }) instead of fetchUser(id).
+  2. Verify the migrated code is type-correct (assume TypeScript).
+  3. If type errors or issues are found, list them briefly.
+  
+  Return a JSON object with these fields:
+  - key: the call site key (string)
+  - migratedCode: the migrated code snippet (string)
+  - typeCheckPassed: true if type check passed, false otherwise
+  - issues: an array of up to 5 short strings describing any issues or empty if none
+  
+  Return ONLY the JSON object, no extra text.`
 }
 
-// Stable prompt builder for verification agent (optional, but here merged with migration)
-
-// Retry wrapper for one call site migration agent call
-async function runMigration(site) {
-  return await agent(buildMigrationPrompt(site), {
-    label: `migrate:${site.key}`,
+// Run one call site's migration agent, returns object or null on failure
+async function runMigration(callsite) {
+  return await agent(buildMigrationPrompt(callsite), {
+    label: `migrate:${callsite.key}`,
     phase: 'Migrate Call Sites',
-    schema: MIGRATION_SCHEMA,
-    effort: 'medium',
+    schema: MIGRATION_RESULT_SCHEMA,
     isolation: 'worktree',
+    effort: 'medium',
   })
 }
 
+// After migration, verify each result's type correctness and issues are present
+// (Verification is embedded in migration step here, so no separate agent needed)
+
+// Synthesis prompt embeds all results and missing keys, asks for a report
+function buildSynthesisPrompt(results, missingKeys) {
+  // Sort results by key for stable prompt
+  const sorted = [...results].sort((a, b) => (a.key > b.key ? 1 : -1))
+  const payload = JSON.stringify(sorted, null, 2)
+  return `You are synthesizing a migration report for 35 call sites migrated from fetchUser(id) to getUser({ id }).
+
+Input data: ${sorted.length} migrated call sites with their migration results:
+${payload}
+
+Missing call sites (no migration result): ${JSON.stringify(missingKeys)}
+
+Task:
+- List keys of call sites successfully migrated (typeCheckPassed: true).
+- List keys and reasons for call sites needing manual attention (typeCheckPassed: false or issues present).
+- Provide a concise summary of the overall migration status and recommendations.
+
+Return a JSON object with fields:
+- migrated: array of keys migrated successfully
+- manualAttention: array of objects { key, reason }
+- summary: a short summary string
+
+Return ONLY the JSON object, no extra text.`
+}
+
+async function runSynthesis(results, missingKeys) {
+  const prompt = buildSynthesisPrompt(results, missingKeys)
+  return await agent(prompt, {
+    label: 'synthesize-report',
+    phase: 'Synthesize Report',
+    schema: REPORT_SCHEMA,
+    effort: 'high',
+  })
+}
+
+// Utility: chunk array into waves of size n
 function chunk(arr, n) {
   const out = []
   for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n))
   return out
 }
 
-phase('Migrate Call Sites')
+export default async function () {
+  phase('Migration Swarm Start')
 
-const waves = chunk(CALL_SITES, WAVE_SIZE)
-const done = []   // successful or verified results
-let failed = []   // call sites whose agent returned null (failed)
+  const waves = chunk(CALL_SITES, WAVE_SIZE)
+  const done = [] // successful results
+  let failed = [] // call sites whose agent returned null this run
 
-for (let w = 0; w < waves.length; w++) {
-  phase(`Wave ${w + 1}/${waves.length}`)
-  const batch = await parallel(
-    waves[w].map(site => async () => {
-      const res = await runMigration(site)
-      return res
+  // Pattern 1 + 3 + 8: run migration in waves, commit per wave, backoff on instability
+  for (let w = 0; w < waves.length; w++) {
+    phase(`Wave ${w + 1}/${waves.length}`)
+    const batch = await parallel(
+      waves[w].map((callsite) => async () => {
+        const res = await runMigration(callsite)
+        return res
+      })
+    )
+    batch.forEach((r, i) => {
+      if (r) done.push(r)
+      else failed.push(waves[w][i])
     })
-  )
-  batch.forEach((r, i) => {
-    if (r) done.push(r)
-    else failed.push(waves[w][i])
-  })
-  log(`Wave ${w + 1}: ${done.length}/${CALL_SITES.length} migrated, ${failed.length} to retry`)
+    log(`Wave ${w + 1}: ${done.length}/${CALL_SITES.length} migrated, ${failed.length} failed`)
 
-  // Instability backoff: if >40% failed, back off and return partial results
-  const nulls = batch.filter(r => r === null).length
-  if (nulls / batch.length > 0.4) {
-    log(`⚠
-````
+    // Pattern 8: instability backoff
+    const nulls = batch.filter((r) => r === null).length
+    if (nulls / batch.length > 0.4) {
+      log(`⚠ instability: ${nulls}/${batch.length} failed this wave — backing off; returning partial, resume later.`)
+      break
+    }
+  }
 
-> **GPT-5.5 judge:** The script uses bounded waves of 7 and has schemas, stable call-site keys/prompts, null-tolerance after agent calls, and an attempted high-failure-rate backoff. However, it lacks an armed ScheduleWakeup/stall watchdog, so a hung parallel batch can still deadlock the run with no notification. The per-agent retry wrapper is only nominal and does not actually retry. Results are only kept in memory and logged after each wave, not durably committed per wave, so completed work can be lost if the run stops. The output is truncated before any complete partial-tolerant synthesis/report, and there is no demonstrated resume/cache mechanism. Overall it meets some safety criteria but misses several core safe-by-construction protections.
+  // Pattern 2: retry wave for failed call sites
+  if (failed.length) {
+    phase('Retry Failed Migrations')
+    const retried = await parallel(
+      failed.map((callsite) => async () => {
+        const res = await runMigration(callsite)
+        return res
+      })
+    )
+    const stillFailed = []
+    retried.forEach((r, i) => {
+      if (r) done.push(r)
+      else stillFailed.push(failed[i])
+    })
+    failed = stillFailed
+    log(`Retry wave recovered ${retried.filter(Boolean).length}; still missing ${failed.length}`)
+  }
+
+  // Pattern 7 + 5: identify missing keys, pass to synthesis prompt
+  const haveKeys = new Set(done.map((r) => r.key))
+  const missing = CALL_SITES.filter((it) => !haveKeys.has(it.key)).map((it) => it.key)
+  if (missing.length) log(`⚠ partial: missing ${missing.length}/${CALL_SITES.length}: ${missing.join(', ')}`)
+
+  // Pattern 7: synthesis must flag gaps explicitly
+  const synthesis = await runSynthesis(done, missing)
+
+  // Return full deliverable with partial results, missing keys, and synthesis report
+  return { results: done, missing, synthesis }
+}
+
+// Pattern 4: ScheduleWakeup watchdog to detect silent stalls and resume
+ScheduleWakeup({
+  delaySeconds: 1200,
+  reason: 'watchdog: migration-swarm-fetchUser-to-getUser may stall silently; check journal mtime',
+  prompt: `Watchdog for migration-swarm-fetchUser-to-getUser run: if the journal mtime is >20 min old AND the workflow task is not 'completed', TaskStop the task then resume via Workflow({scriptPath, resumeFromRunId}); else re-arm another 1200s ScheduleWakeup. Plain one-shot watchdog — NOT a /loop sentinel.`,
+})
+```
+
+> **Claude judge:** Grading passed
 

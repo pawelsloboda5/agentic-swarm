@@ -83,13 +83,16 @@ const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : nu
 const pct = (x) => (x == null ? "—" : `${Math.round(x * 100)}%`);
 
 const models = Object.keys(agg).sort();
-const nTasks = models.length ? Math.round(rows.length / (models.length * 2)) : 0;
+const taskKey = (row) => row?.testCase?.description || JSON.stringify(row?.vars || {});
+const distinctTasks = new Set(rows.map(taskKey)).size || 1;
+const reps = Math.max(1, Math.round(rows.length / (models.length * 2 * distinctTasks)));
 const evalId = data?.evalId || "n/a";
 
 let md = "# Eval results — safe-swarm skill uplift\n\n";
-md += `> ${rows.length} results · ${models.length} models · ${nTasks} fan-out tasks · 2 variants ` +
-  "(baseline vs with-skill) · judge: GPT-5.5\n";
-md += "> Headline = the GPT-5.5 `llm-rubric` (0–1): how safe-by-construction the generated Workflow " +
+md += `> ${rows.length} results · ${models.length} models · ${distinctTasks} fan-out tasks ` +
+  `× ${reps} rep${reps > 1 ? "s" : ""} · 2 variants (baseline vs with-skill) · ` +
+  "judge: Claude (claude-sonnet-4-6)\n";
+md += "> Headline = the Claude `llm-rubric` (0–1): how safe-by-construction the generated Workflow " +
   "script is.\n";
 md += `> Run \`${evalId}\` · regenerate with \`bun run table\`. Numbers shift run-to-run (LLM sampling).\n\n`;
 md += "## Skill uplift (rubric score: baseline → with-skill)\n\n";

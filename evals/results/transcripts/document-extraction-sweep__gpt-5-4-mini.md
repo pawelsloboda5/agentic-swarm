@@ -1,6 +1,6 @@
 # document-extraction-sweep — `gpt-5.4-mini`
 
-> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: GPT-5.5.
+> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: Claude (claude-sonnet-4-6).
 
 **Task**
 
@@ -8,368 +8,347 @@
 
 ---
 
-## Baseline (no skill) — rubric 22%, patterns 25%
+## Baseline (no skill) — rubric 20%, patterns 31%
 
 ```js
 export const meta = {
   name: 'document-extraction-sweep',
-  description: 'Extract structured entities from many contract documents and aggregate them into a deduplicated provenance-rich dataset.',
+  description:
+    'Extract people, organizations, dates, and monetary amounts from contract documents and aggregate into a deduplicated dataset with per-document provenance.',
   phases: [
     { title: 'Plan' },
-    { title: 'Extract' },
-    { title: 'Normalize' },
-    { title: 'Deduplicate' },
-    { title: 'Assemble' },
+    { title: 'Extract Documents' },
+    { title: 'Normalize and Deduplicate' },
+    { title: 'Assemble Provenance Dataset' },
   ],
 }
 
-const input = args ?? {}
+const input = args || {}
 const documents = Array.isArray(input.documents) ? input.documents : []
-const entityTypes = input.entityTypes ?? ['people', 'organizations', 'dates', 'monetary_amounts']
+const maxDocs = Math.min(documents.length, 200)
 
-if (documents.length === 0) {
-  log('No documents provided. Returning an empty extraction result.')
+if (maxDocs === 0) {
+  log('No documents provided. Returning empty extraction dataset.')
+  return {
+    documents: [],
+    entities: {
+      people: [],
+      organizations: [],
+      dates: [],
+      monetaryAmounts: [],
+    },
+  }
 }
 
 phase('Plan')
+log(`Preparing extraction sweep for ${maxDocs} document(s).`)
 
-const docSchema = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    documentId: { type: 'string' },
-    sourceName: { type: 'string' },
-    entities: {
+const plan = await agent(
+  `You are planning an information extraction sweep across up to 200 contract documents.
+Task:
+1) Inspect the provided document list and define a robust extraction strategy for four entity types: people, organizations, dates, monetary amounts.
+2) Prefer conservative extraction: only include entities clearly evidenced in the text.
+3) Preserve per-document provenance for every extracted entity occurrence.
+4) Normalize dates to ISO-8601 where possible, and monetary amounts to a structured representation with currency when present.
+5) Deduplicate entities globally by normalized value, while retaining all source-document occurrences.
+6) Return a concise extraction plan with any edge cases to watch for.
+
+Documents are provided as an array of objects in args.documents, each with at least id and text/content fields.`,
+  {
+    label: 'plan-extraction',
+    phase: 'Plan',
+    effort: 'medium',
+    schema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        people: { type: 'array', items: { $ref: '#/$defs/entity' } },
-        organizations: { type: 'array', items: { $ref: '#/$defs/entity' } },
-        dates: { type: 'array', items: { $ref: '#/$defs/dateEntity' } },
-        monetary_amounts: { type: 'array', items: { $ref: '#/$defs/moneyEntity' } },
+        strategy: { type: 'array', items: { type: 'string' } },
+        edgeCases: { type: 'array', items: { type: 'string' } },
       },
-      required: ['people', 'organizations', 'dates', 'monetary_amounts'],
-    },
-    extractionNotes: { type: 'array', items: { type: 'string' } },
-  },
-  required: ['documentId', 'sourceName', 'entities', 'extractionNotes'],
-  $defs: {
-    entity: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        value: { type: 'string' },
-        normalizedValue: { type: 'string' },
-        confidence: { type: 'number' },
-        evidence: { type: 'array', items: { type: 'string' } },
-      },
-      required: ['value', 'normalizedValue', 'confidence', 'evidence'],
-    },
-    dateEntity: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        value: { type: 'string' },
-        normalizedValue: { type: 'string' },
-        confidence: { type: 'number' },
-        evidence: { type: 'array', items: { type: 'string' } },
-      },
-      required: ['value', 'normalizedValue', 'confidence', 'evidence'],
-    },
-    moneyEntity: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        value: { type: 'string' },
-        normalizedValue: { type: 'string' },
-        currency: { type: 'string' },
-        confidence: { type: 'number' },
-        evidence: { type: 'array', items: { type: 'string' } },
-      },
-      required: ['value', 'normalizedValue', 'currency', 'confidence', 'evidence'],
+      required: ['strategy', 'edgeCases'],
     },
   },
-}
-
-const globalSchema = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    deduplicatedEntities: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        people: { type: 'array', items: { type: 'object' } },
-        organizations: { type: 'array', items: { type: 'object' } },
-        dates: { type: 'array', items: { type: 'object' } },
-        monetary_amounts: { type: 'array', items: { type: 'object' } },
-      },
-      required: ['people', 'organizations', 'dates', 'monetary_amounts'],
-    },
-    provenanceIndex: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          documentId: { type: 'string' },
-          sourceName: { type: 'string' },
-          entityType: { type: 'string' },
-          canonicalValue: { type: 'string' },
-          mentions: {
-            type: 'array',
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                rawValue: { type: 'string' },
-                normalizedValue: { type: 'string' },
-                confidence: { type: 'number' },
-                evidence: { type: 'array', items: { type: 'string' } },
-              },
-              required: ['rawValue', 'normalizedValue', 'confidence', 'evidence'],
-            },
-          },
-        },
-        required: ['documentId', 'sourceName', 'entityType', 'canonicalValue', 'mentions'],
-      },
-    },
-    summary: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        documentsProcessed: { type: 'number' },
-        documentsSucceeded: { type: 'number' },
-        documentsFailed: { type: 'number' },
-        entityCounts: {
-          type: 'object',
-          additionalProperties: { type: 'number' },
-        },
-      },
-      required: ['documentsProcessed', 'documentsSucceeded', 'documentsFailed', 'entityCounts'],
-    },
-  },
-  required: ['deduplicatedEntities', 'provenanceIndex', 'summary'],
-}
-
-phase('Extract')
-
-const extractionResults = await pipeline(
-  documents,
-  async (doc) => {
-    const prompt = `Extract structured entities from this contract document.
-
-Return JSON matching the schema exactly.
-
-Document metadata:
-- documentId: ${doc.documentId}
-- sourceName: ${doc.sourceName ?? ''}
-- entityTypes: ${entityTypes.join(', ')}
-
-Instructions:
-- Extract all person names, organization names, dates, and monetary amounts.
-- For each entity, provide:
-  - value: the exact text span as found in the document
-  - normalizedValue: a canonical normalized form
-  - confidence: a number from 0 to 1
-  - evidence: short quotes or pointers from the document text that justify the extraction
-- For monetary amounts, include currency when inferable.
-- If a type has no entities, return an empty array.
-- Prefer conservative extraction; do not invent entities.
-- Preserve provenance to this document only.`;
-
-    const result = await agent(prompt, {
-      label: `extract:${doc.documentId}`,
-      phase: 'Extract',
-      schema: docSchema,
-      effort: 'high',
-    })
-
-    if (!result) return null
-    return result
-  },
-  async (prev, originalDoc) => {
-    if (!prev) return null
-
-    const normalizeText = (s) => String(s ?? '').trim().replace(/\s+/g, ' ')
-    const canonicalizeDate = (s) => normalizeText(s).toLowerCase()
-    const canonicalizeMoney = (s, currency) => `${normalizeText(currency).toUpperCase()}:${normalizeText(s).toLowerCase()}`
-    const canonicalizeName = (s) => normalizeText(s).toLowerCase()
-    const canonicalizeOrg = (s) => normalizeText(s).toLowerCase()
-
-    const entities = prev.entities ?? {}
-    const normalized = {
-      documentId: prev.documentId ?? originalDoc.documentId,
-      sourceName: prev.sourceName ?? originalDoc.sourceName ?? '',
-      entities: {
-        people: (entities.people ?? []).map((e) => ({
-          rawValue: e.value,
-          canonicalValue: canonicalizeName(e.normalizedValue || e.value),
-          normalizedValue: normalizeText(e.normalizedValue || e.value),
-          confidence: e.confidence,
-          evidence: e.evidence ?? [],
-        })),
-        organizations: (entities.organizations ?? []).map((e) => ({
-          rawValue: e.value,
-          canonicalValue: canonicalizeOrg(e.normalizedValue || e.value),
-          normalizedValue: normalizeText(e.normalizedValue || e.value),
-          confidence: e.confidence,
-          evidence: e.evidence ?? [],
-        })),
-        dates: (entities.dates ?? []).map((e) => ({
-          rawValue: e.value,
-          canonicalValue: canonicalizeDate(e.normalizedValue || e.value),
-          normalizedValue: normalizeText(e.normalizedValue || e.value),
-          confidence: e.confidence,
-          evidence: e.evidence ?? [],
-        })),
-        monetary_amounts: (entities.monetary_amounts ?? []).map((e) => ({
-          rawValue: e.value,
-          canonicalValue: canonicalizeMoney(e.normalizedValue || e.value, e.currency ?? ''),
-          normalizedValue: normalizeText(e.normalizedValue || e.value),
-          currency: normalizeText(e.currency ?? '').toUpperCase(),
-          confidence: e.confidence,
-          evidence: e.evidence ?? [],
-        })),
-      },
-      extractionNotes: prev.extractionNotes ?? [],
-    }
-
-    return normalized
-  }
 )
 
-phase('Normalize')
-
-const successfulDocs = extractionResults.filter(Boolean)
-const failedDocs = documents.length - successfulDocs.length
-
-const allMentions = []
-for (const doc of successfulDocs) {
-  for (const mention of doc.entities.people ?? []) {
-    allMentions.push({
-      documentId: doc.documentId,
-      sourceName: doc.sourceName,
-      entityType: 'people',
-      canonicalValue: mention.canonicalValue,
-      rawValue: mention.rawValue,
-      normalizedValue: mention.normalizedValue,
-      confidence: mention.confidence,
-      evidence: mention.evidence,
-    })
+const normalizedDocuments = documents.slice(0, maxDocs).map((doc, index) => {
+  const id =
+    doc && typeof doc.id === 'string' && doc.id.trim()
+      ? doc.id.trim()
+      : `doc-${String(index + 1).padStart(4, '0')}`
+  const text =
+    doc && typeof doc.text === 'string'
+      ? doc.text
+      : doc && typeof doc.content === 'string'
+        ? doc.content
+        : doc && typeof doc.body === 'string'
+          ? doc.body
+          : ''
+  return {
+    id,
+    text,
+    index,
   }
-  for (const mention of doc.entities.organizations ?? []) {
-    allMentions.push({
-      documentId: doc.documentId,
-      sourceName: doc.sourceName,
-      entityType: 'organizations',
-      canonicalValue: mention.canonicalValue,
-      rawValue: mention.rawValue,
-      normalizedValue: mention.normalizedValue,
-      confidence: mention.confidence,
-      evidence: mention.evidence,
-    })
-  }
-  for (const mention of doc.entities.dates ?? []) {
-    allMentions.push({
-      documentId: doc.documentId,
-      sourceName: doc.sourceName,
-      entityType: 'dates',
-      canonicalValue: mention.canonicalValue,
-      rawValue: mention.rawValue,
-      normalizedValue: mention.normalizedValue,
-      confidence: mention.confidence,
-      evidence: mention.evidence,
-    })
-  }
-  for (const mention of doc.entities.monetary_amounts ?? []) {
-    allMentions.push({
-      documentId: doc.documentId,
-      sourceName: doc.sourceName,
-      entityType: 'monetary_amounts',
-      canonicalValue: mention.canonicalValue,
-      rawValue: mention.rawValue,
-      normalizedValue: mention.normalizedValue,
-      confidence: mention.confidence,
-      evidence: mention.evidence,
-    })
-  }
-}
-
-phase('Deduplicate')
-
-const dedupePrompt = `Deduplicate and consolidate entity mentions from contract documents into canonical entities.
-
-Rules:
-- Merge only when values clearly refer to the same real-world entity.
-- Preserve all source mentions for provenance.
-- Keep confidence values and evidence arrays.
-- Output JSON matching the schema exactly.
-- Do not omit any provenance mention.
-- Separate entity types strictly: people, organizations, dates, monetary_amounts.
-
-Input mentions:
-${JSON.stringify(allMentions)}`
-
-const deduped = await agent(dedupePrompt, {
-  label: 'dedupe:global',
-  phase: 'Deduplicate',
-  schema: globalSchema,
-  effort: 'high',
 })
 
-phase('Assemble')
+phase('Extract Documents')
+log('Launching per-document extraction agents.')
 
-const result = deduped ?? {
-  deduplicatedEntities: {
-    people: [],
-    organizations: [],
-    dates: [],
-    monetary_amounts: [],
-  },
-  provenanceIndex: [],
+const extracted = await parallel(
+  normalizedDocuments.map((doc) => async () => {
+    const result = await agent(
+      `Extract structured entities from this contract document.
+
+Return only entities that are explicitly supported by the text.
+
+Document ID: ${doc.id}
+
+Extraction rules:
+- people: individual human names, excluding organizations and roles unless clearly a person's name.
+- organizations: company names, agencies, institutions, law firms, etc.
+- dates: any explicit date/time reference relevant to the contract; normalize if possible.
+- monetaryAmounts: any explicit money values, fees, payments, penalties, consideration, totals.
+- Preserve provenance for each occurrence using the document ID and a short source quote/snippet.
+- If a field is absent, return an empty array.
+- Be careful not to duplicate the same occurrence within the same document.
+
+Return a structured object with arrays for each entity type. For dates, include originalText and normalizedValue when possible. For monetary amounts, include originalText, normalizedValue, and currency when possible.`,
+      {
+        label: `extract-${doc.id}`,
+        phase: 'Extract Documents',
+        effort: 'medium',
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            people: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  name: { type: 'string' },
+                  provenance: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      documentId: { type: 'string' },
+                      quote: { type: 'string' },
+                    },
+                    required: ['documentId', 'quote'],
+                  },
+                },
+                required: ['name', 'provenance'],
+              },
+            },
+            organizations: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  name: { type: 'string' },
+                  provenance: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      documentId: { type: 'string' },
+                      quote: { type: 'string' },
+                    },
+                    required: ['documentId', 'quote'],
+                  },
+                },
+                required: ['name', 'provenance'],
+              },
+            },
+            dates: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  originalText: { type: 'string' },
+                  normalizedValue: { type: ['string', 'null'] },
+                  provenance: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      documentId: { type: 'string' },
+                      quote: { type: 'string' },
+                    },
+                    required: ['documentId', 'quote'],
+                  },
+                },
+                required: ['originalText', 'normalizedValue', 'provenance'],
+              },
+            },
+            monetaryAmounts: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  originalText: { type: 'string' },
+                  normalizedValue: { type: ['string', 'null'] },
+                  currency: { type: ['string', 'null'] },
+                  provenance: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      documentId: { type: 'string' },
+                      quote: { type: 'string' },
+                    },
+                    required: ['documentId', 'quote'],
+                  },
+                },
+                required: ['originalText', 'normalizedValue', 'currency', 'provenance'],
+              },
+            },
+          },
+          required: ['people', 'organizations', 'dates', 'monetaryAmounts'],
+        },
+      },
+    )
+    return { doc, result }
+  }),
+)
+
+phase('Normalize and Deduplicate')
+log('Normalizing extracted values and building global deduplication keys.')
+
+const peopleMap = new Map()
+const organizationsMap = new Map()
+const datesMap = new Map()
+const moneyMap = new Map()
+
+function normText(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+}
+
+function keyForPeople(name) {
+  return normText(name).toLowerCase()
+}
+
+function keyForOrgs(name) {
+  return normText(name).toLowerCase()
+}
+
+function keyForDate(item) {
+  const normalized = normText(item.normalizedValue || item.originalText)
+  return normalized.toLowerCase()
+}
+
+function keyForMoney(item) {
+  const amount = normText(item.normalizedValue || item.originalText)
+  const currency = normText(item.currency || '').toUpperCase()
+  return `${currency}|${amount}`.toLowerCase()
+}
+
+function addOccurrence(map, key, record, provenance) {
+  if (!key) return
+  if (!map.has(key)) {
+    map.set(key, { record, occurrences: [] })
+  }
+  map.get(key).occurrences.push(provenance)
+}
+
+for (const item of extracted) {
+  if (!item || !item.result || !item.doc) continue
+  const documentId = item.doc.id
+
+  for (const p of item.result.people || []) {
+    const name = normText(p.name)
+    if (!name) continue
+    addOccurrence(
+      peopleMap,
+      keyForPeople(name),
+      { name },
+      { documentId, quote: normText(p.provenance && p.provenance.quote) },
+    )
+  }
+
+  for (const o of item.result.organizations || []) {
+    const name = normText(o.name)
+    if (!name) continue
+    addOccurrence(
+      organizationsMap,
+      keyForOrgs(name),
+      { name },
+      { documentId, quote: normText(o.provenance && o.provenance.quote) },
+    )
+  }
+
+  for (const d of item.result.dates || []) {
+    const originalText = normText(d.originalText)
+    if (!originalText) continue
+    const normalizedValue = d.normalizedValue == null ? null : normText(d.normalizedValue)
+    addOccurrence(
+      datesMap,
+      keyForDate({ originalText, normalizedValue }),
+      { originalText, normalizedValue },
+      { documentId, quote: normText(d.provenance && d.provenance.quote) },
+    )
+  }
+
+  for (const m of item.result.monetaryAmounts || []) {
+    const originalText = normText(m.originalText)
+    if (!originalText) continue
+    const normalizedValue = m.normalizedValue == null ? null : normText(m.normalizedValue)
+    const currency = m.currency == null ? null : normText(m.currency).toUpperCase()
+    addOccurrence(
+      moneyMap,
+      keyForMoney({ originalText, normalizedValue, currency }),
+      { originalText, normalizedValue, currency },
+      { documentId, quote: normText(m.provenance && m.provenance.quote) },
+    )
+  }
+}
+
+phase('Assemble Provenance Dataset')
+log('Assembling final deduplicated entity dataset with provenance across documents.')
+
+function mapToArray(map) {
+  return Array.from(map.values()).map((entry) => ({
+    ...entry.record,
+    occurrences: entry.occurrences,
+    sourceDocuments: Array.from(
+      new Set(entry.occurrences.map((occ) => occ.documentId).filter(Boolean)),
+    ),
+  }))
+}
+
+const finalDataset = {
   summary: {
-    documentsProcessed: documents.length,
-    documentsSucceeded: successfulDocs.length,
-    documentsFailed: failedDocs,
-    entityCounts: {
-      people: 0,
-      organizations: 0,
-      dates: 0,
-      monetary_amounts: 0,
+    documentsProcessed: maxDocs,
+    extractionPlan: plan,
+    counts: {
+      people: peopleMap.size,
+      organizations: organizationsMap.size,
+      dates: datesMap.size,
+      monetaryAmounts: moneyMap.size,
     },
   },
+  documents: normalizedDocuments.map((d) => ({ id: d.id })),
+  entities: {
+    people: mapToArray(peopleMap),
+    organizations: mapToArray(organizationsMap),
+    dates: mapToArray(datesMap),
+    monetaryAmounts: mapToArray(moneyMap),
+  },
 }
 
-if (deduped) {
-  const counts = {
-    people: Array.isArray(deduped.deduplicatedEntities?.people) ? deduped.deduplicatedEntities.people.length : 0,
-    organizations: Array.isArray(deduped.deduplicatedEntities?.organizations) ? deduped.deduplicatedEntities.organizations.length : 0,
-    dates: Array.isArray(deduped.deduplicatedEntities?.dates) ? deduped.deduplicatedEntities.dates.length : 0,
-    monetary_amounts: Array.isArray(deduped.deduplicatedEntities?.monetary_amounts) ? deduped.deduplicatedEntities.monetary_amounts.length : 0,
-  }
-
-  result.summary = {
-    documentsProcessed: documents.length,
-    documentsSucceeded: successfulDocs.length,
-    documentsFailed: failedDocs,
-    entityCounts: counts,
-  }
-}
-
-log(`Processed ${documents.length} documents; succeeded ${successfulDocs.length}; failed ${failedDocs}.`)
-
-return result
+return finalDataset
 ```
 
-> **GPT-5.5 judge:** The script uses a single pipeline over all documents with no bounded waves, no ScheduleWakeup/watchdog, no per-agent retry or try/catch around agent failures, no per-wave durable commits, no resume/cache-stable prompts, and no high-failure-rate backoff. It has some partial-result awareness via null filtering, failed-doc counts, strict schemas, and a fallback if global dedupe returns null, but a hung extraction or thrown error could still stall or abort the whole run, and completed work is only assembled after the global barrier. Overall it meets only a small fraction of the safe-by-construction bar.
+> **Claude judge:** The script fans out all 200 documents in a single unbounded parallel() call with no wave batching, no stall watchdog, and no per-agent retry, meaning one hung connection deadlocks the entire run and no partial results are committed until all agents complete. Only minor mitigations are present: null-tolerance in the aggregation loop and deterministic prompts.
 
-## With skill — rubric 65%, patterns 75%
+## With skill — rubric 82%, patterns 75%
 
 ```js
 export const meta = {
   name: 'document-extraction-sweep',
-  description: 'Extract structured entities from contract documents and aggregate a deduplicated dataset with provenance.',
+  description: 'Extract structured entities from 200 contract documents and aggregate a deduplicated provenance-rich dataset',
   phases: [
     { title: 'Plan' },
     { title: 'Extract' },
@@ -379,98 +358,36 @@ export const meta = {
   ],
 }
 
-const WAVE_SIZE = 8
+const docs = Array.isArray(args?.documents) ? args.documents : []
+if (!docs.length) {
+  throw new Error('args.documents must be a non-empty array of 200 contract document descriptors')
+}
 
-const DOCUMENT_SCHEMA = {
+const ENTITY_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['document_id', 'people', 'organizations', 'dates', 'monetary_amounts'],
+  required: ['document_id', 'entities'],
   properties: {
     document_id: { type: 'string' },
-    people: {
+    entities: {
       type: 'array',
-      maxItems: 20,
+      maxItems: 40,
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['name', 'provenance'],
+        required: ['type', 'value', 'normalized', 'provenance'],
         properties: {
-          name: { type: 'string' },
-          title: { type: 'string' },
-          provenance: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['quote', 'location'],
-            properties: {
-              quote: { type: 'string' },
-              location: { type: 'string' },
-            },
-          },
-        },
-      },
-    },
-    organizations: {
-      type: 'array',
-      maxItems: 20,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['name', 'provenance'],
-        properties: {
-          name: { type: 'string' },
-          role: { type: 'string' },
-          provenance: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['quote', 'location'],
-            properties: {
-              quote: { type: 'string' },
-              location: { type: 'string' },
-            },
-          },
-        },
-      },
-    },
-    dates: {
-      type: 'array',
-      maxItems: 20,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['value', 'provenance'],
-        properties: {
+          type: { type: 'string', enum: ['person', 'organization', 'date', 'money'] },
           value: { type: 'string' },
-          label: { type: 'string' },
+          normalized: { type: 'string' },
           provenance: {
             type: 'object',
             additionalProperties: false,
-            required: ['quote', 'location'],
+            required: ['document_id', 'source_ref', 'evidence'],
             properties: {
-              quote: { type: 'string' },
-              location: { type: 'string' },
-            },
-          },
-        },
-      },
-    },
-    monetary_amounts: {
-      type: 'array',
-      maxItems: 20,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['value', 'provenance'],
-        properties: {
-          value: { type: 'string' },
-          currency: { type: 'string' },
-          context: { type: 'string' },
-          provenance: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['quote', 'location'],
-            properties: {
-              quote: { type: 'string' },
-              location: { type: 'string' },
+              document_id: { type: 'string' },
+              source_ref: { type: 'string' },
+              evidence: { type: 'string' },
             },
           },
         },
@@ -479,285 +396,215 @@ const DOCUMENT_SCHEMA = {
   },
 }
 
-const AGGREGATED_SCHEMA = {
+const DEDUP_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['documents_processed', 'people', 'organizations', 'dates', 'monetary_amounts', 'missing_documents', 'notes'],
+  required: ['dataset', 'statistics'],
   properties: {
-    documents_processed: { type: 'integer' },
-    people: {
+    dataset: {
       type: 'array',
+      maxItems: 5000,
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['name', 'sources'],
+        required: ['type', 'canonical', 'variants', 'documents'],
         properties: {
-          name: { type: 'string' },
-          normalized_name: { type: 'string' },
-          sources: {
+          type: { type: 'string', enum: ['person', 'organization', 'date', 'money'] },
+          canonical: { type: 'string' },
+          variants: { type: 'array', maxItems: 20, items: { type: 'string' } },
+          documents: {
             type: 'array',
+            maxItems: 200,
             items: {
               type: 'object',
               additionalProperties: false,
-              required: ['document_id', 'quote', 'location'],
+              required: ['document_id', 'provenances'],
               properties: {
                 document_id: { type: 'string' },
-                quote: { type: 'string' },
-                location: { type: 'string' },
+                provenances: {
+                  type: 'array',
+                  maxItems: 20,
+                  items: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['source_ref', 'evidence'],
+                    properties: {
+                      source_ref: { type: 'string' },
+                      evidence: { type: 'string' },
+                    },
+                  },
+                },
               },
             },
           },
         },
       },
     },
-    organizations: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['name', 'sources'],
-        properties: {
-          name: { type: 'string' },
-          normalized_name: { type: 'string' },
-          sources: {
-            type: 'array',
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              required: ['document_id', 'quote', 'location'],
-              properties: {
-                document_id: { type: 'string' },
-                quote: { type: 'string' },
-                location: { type: 'string' },
-              },
-            },
-          },
-        },
+    statistics: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['documents_processed', 'documents_missing', 'raw_entities', 'deduplicated_entities'],
+      properties: {
+        documents_processed: { type: 'integer' },
+        documents_missing: { type: 'array', items: { type: 'string' } },
+        raw_entities: { type: 'integer' },
+        deduplicated_entities: { type: 'integer' },
       },
     },
-    dates: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['value', 'sources'],
-        properties: {
-          value: { type: 'string' },
-          label: { type: 'string' },
-          sources: {
-            type: 'array',
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              required: ['document_id', 'quote', 'location'],
-              properties: {
-                document_id: { type: 'string' },
-                quote: { type: 'string' },
-                location: { type: 'string' },
-              },
-            },
-          },
-        },
-      },
-    },
-    monetary_amounts: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['value', 'sources'],
-        properties: {
-          value: { type: 'string' },
-          currency: { type: 'string' },
-          context: { type: 'string' },
-          sources: {
-            type: 'array',
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              required: ['document_id', 'quote', 'location'],
-              properties: {
-                document_id: { type: 'string' },
-                quote: { type: 'string' },
-                location: { type: 'string' },
-              },
-            },
-          },
-        },
-      },
-    },
-    missing_documents: { type: 'array', items: { type: 'string' } },
-    notes: { type: 'array', items: { type: 'string' } },
   },
 }
 
-const ITEMS = Array.isArray(args?.documents) ? args.documents : Array.isArray(args) ? args : []
+const WAVE_SIZE = 7
 const chunk = (arr, n) => {
   const out = []
   for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n))
   return out
 }
 
-const normalize = (s) => String(s ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
+const stableDocId = (doc) => String(doc.id ?? doc.document_id ?? doc.key ?? doc.name ?? doc.path)
+const docRef = (doc) => String(doc.path ?? doc.url ?? doc.source ?? doc.name ?? stableDocId(doc))
 
-function buildPrompt(doc) {
-  const text = doc.text ?? doc.content ?? ''
-  const id = doc.document_id ?? doc.id ?? doc.key ?? doc.path ?? doc.name ?? String(doc)
+function extractPrompt(doc) {
+  const id = stableDocId(doc)
+  const ref = docRef(doc)
   return [
     `Extract structured entities from this contract document.`,
+    `Return only entities of type person, organization, date, or money.`,
+    `Provide per-entity provenance with a short evidence snippet and a source reference.`,
+    `Be precise and conservative: extract only entities explicitly supported by the text.`,
+    `Deduplicate repeated mentions within the same document where safe, but keep one provenance entry per unique mention.`,
     `Document ID: ${id}`,
-    `Return ONLY JSON matching the schema.`,
-    `Rules:`,
-    `- Extract people, organizations, dates, and monetary amounts.`,
-    `- Preserve per-document provenance for every extracted item.`,
-    `- Provenance must include a short supporting quote and a location string (page/section/clause if available).`,
-    `- Prefer exact surface forms from the source.`,
-    `- Keep outputs lean: no long explanations, no duplicate mentions, no invented entities.`,
-    `- If none found for a category, return an empty array.`,
-    `Document text:`,
-    text,
-  ].join('\n\n')
+    `Source reference: ${ref}`,
+    `If the document is unreadable or missing, return an empty entities array and note the issue in evidence.`,
+    `Output must match the schema exactly.`,
+    `Document content:`,
+    String(doc.text ?? doc.content ?? doc.body ?? ''),
+  ].join('\n')
 }
 
-function buildAggregationPrompt(extracted, missingDocs) {
-  const payload = JSON.stringify(
-    extracted
-      .slice()
-      .sort((a, b) => String(a.document_id).localeCompare(String(b.document_id)))
-  )
-  const missing = JSON.stringify(missingDocs.slice().sort())
+function dedupPrompt(rawResults, missingDocs) {
+  const payload = {
+    raw_results: rawResults,
+    missing_documents: missingDocs,
+  }
   return [
-    `Deduplicate and aggregate the extracted entities into a single dataset.`,
-    `You are given per-document extraction objects with provenance already attached.`,
-    `Merge exact and near-exact duplicates conservatively.`,
-    `Keep provenance from all contributing documents.`,
-    `If the same entity appears in multiple documents, include multiple source records.`,
-    `Normalize obvious casing/spacing variants, but do not over-merge ambiguous names.`,
-    `Return ONLY JSON matching the schema.`,
-    `Missing documents: ${missing}`,
-    `Extracted dataset: ${payload}`,
-  ].join('\n\n')
+    `Deduplicate entity extractions across all documents into one consolidated dataset.`,
+    `Canonicalize obvious variants only when strongly justified by the evidence.`,
+    `Preserve per-document provenance for every grouped entity.`,
+    `Do not invent entities not present in the raw results.`,
+    `Explicitly include any missing documents in statistics.documents_missing.`,
+    `Return the dataset and summary statistics only.`,
+    `Input JSON:`,
+    JSON.stringify(payload),
+  ].join('\n')
 }
 
-function mergeDedup(results) {
-  const people = new Map()
-  const orgs = new Map()
-  const dates = new Map()
-  const amounts = new Map()
-
-  const pushSource = (map, key, item, source) => {
-    if (!map.has(key)) map.set(key, { item, sources: [] })
-    map.get(key).sources.push(source)
-  }
-
-  for (const doc of results) {
-    if (!doc) continue
-    const docId = doc.document_id
-    for (const p of doc.people ?? []) {
-      const key = normalize(p.name)
-      pushSource(people, key, { name: p.name, normalized_name: p.name.trim() }, { document_id: docId, quote: p.provenance?.quote ?? '', location: p.provenance?.location ?? '' })
-    }
-    for (const o of doc.organizations ?? []) {
-      const key = normalize(o.name)
-      pushSource(orgs, key, { name: o.name, normalized_name: o.name.trim() }, { document_id: docId, quote: o.provenance?.quote ?? '', location: o.provenance?.location ?? '' })
-    }
-    for (const d of doc.dates ?? []) {
-      const key = normalize(d.value)
-      pushSource(dates, key, { value: d.value, label: d.label ?? '' }, { document_id: docId, quote: d.provenance?.quote ?? '', location: d.provenance?.location ?? '' })
-    }
-    for (const m of doc.monetary_amounts ?? []) {
-      const key = normalize(`${m.value}|${m.currency ?? ''}`)
-      pushSource(amounts, key, { value: m.value, currency: m.currency ?? '', context: m.context ?? '' }, { document_id: docId, quote: m.provenance?.quote ?? '', location: m.provenance?.location ?? '' })
-    }
-  }
-
-  const materialize = (map) =>
-    [...map.values()]
-      .map(({ item, sources }) => ({ ...item, sources }))
-      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
-
-  return {
-    documents_processed: results.filter(Boolean).length,
-    people: materialize(people),
-    organizations: materialize(orgs),
-    dates: materialize(dates),
-    monetary_amounts: materialize(amounts),
-  }
+function docKey(doc) {
+  return stableDocId(doc)
 }
 
 phase('Extract')
 
-const waves = chunk(ITEMS, WAVE_SIZE)
-const extracted = []
+const waves = chunk(docs, WAVE_SIZE)
+const done = []
 let failed = []
 
-function runDocument(doc) {
-  const id = doc.document_id ?? doc.id ?? doc.key ?? doc.path ?? doc.name ?? String(doc)
-  return agent(buildPrompt(doc), {
-    label: `doc:${id}`,
-    phase: 'Extract',
-    schema: DOCUMENT_SCHEMA,
-    effort: 'medium',
-  })
-}
-
 for (let w = 0; w < waves.length; w++) {
-  phase(`Wave ${w + 1}/${waves.length}`)
-  const batch = await parallel(waves[w].map((doc) => () => runDocument(doc)))
+  phase(`Extract wave ${w + 1}/${waves.length}`)
+  const batch = await parallel(
+    waves[w].map((doc) => () =>
+      agent(extractPrompt(doc), {
+        label: `extract:${docKey(doc)}`,
+        phase: 'Extract',
+        schema: ENTITY_SCHEMA,
+        model: 'claude-4.1',
+        effort: 'medium',
+      })
+    )
+  )
+
   batch.forEach((r, i) => {
-    if (r) extracted.push(r)
+    if (r) done.push(r)
     else failed.push(waves[w][i])
   })
-  log(`Wave ${w + 1}: ${extracted.length}/${ITEMS.length} extracted, ${failed.length} to retry`)
+
+  log(`wave ${w + 1}: ${done.length}/${docs.length} documents extracted, ${failed.length} pending retry`)
+
   const nulls = batch.filter((r) => r === null).length
-  if (batch.length && nulls / batch.length > 0.4) {
-    log(`instability: ${nulls}/${batch.length} failed this wave — backing off; return partial, resume later`)
+  if (nulls / batch.length > 0.4) {
+    log(`instability: ${nulls}/${batch.length} failed this wave — backing off; returning partial, resume later`)
     break
   }
 }
 
 if (failed.length) {
   phase('Retry')
-  const retried = await parallel(failed.map((doc) => () => runDocument(doc)))
+  const retried = await parallel(
+    failed.map((doc) => () =>
+      agent(extractPrompt(doc), {
+        label: `extract:${docKey(doc)}`,
+        phase: 'Retry',
+        schema: ENTITY_SCHEMA,
+        model: 'claude-4.1',
+        effort: 'medium',
+      })
+    )
+  )
+
   const stillFailed = []
   retried.forEach((r, i) => {
-    if (r) extracted.push(r)
+    if (r) done.push(r)
     else stillFailed.push(failed[i])
   })
   failed = stillFailed
-  log(`Retry wave recovered ${retried.filter(Boolean).length}; still missing ${failed.length}`)
+  log(`retry recovered ${retried.filter(Boolean).length}; still missing ${failed.length}`)
 }
 
-const haveIds = new Set(extracted.map((r) => String(r.document_id)))
-const missingDocuments = ITEMS
-  .map((doc) => String(doc.document_id ?? doc.id ?? doc.key ?? doc.path ?? doc.name ?? doc))
-  .filter((id) => !haveIds.has(id))
-
-if (missingDocuments.length) log(`partial: missing ${missingDocuments.length}/${ITEMS.length} documents`)
+const haveDocs = new Set(done.map((r) => r.document_id))
+const missing = docs.map(docKey).filter((id) => !haveDocs.has(id))
+if (missing.length) log(`partial extraction: missing ${missing.length}/${docs.length} documents`)
 
 phase('Deduplicate')
-const locallyDeduped = mergeDedup(extracted)
+
+const dedup = await agent(dedupPrompt(done, missing), {
+  label: 'dedup',
+  phase: 'Deduplicate',
+  schema: DEDUP_SCHEMA,
+  model: 'claude-4.1',
+  effort: 'high',
+})
 
 phase('Synthesize')
-const synthesis = await agent(
-  buildAggregationPrompt(extracted, missingDocuments),
-  { label: 'aggregate', phase: 'Synthesize', schema: AGGREGATED_SCHEMA, effort: 'high' }
+
+const synthesisPayload = JSON.stringify({
+  documents: docs.map((doc) => ({
+    document_id: docKey(doc),
+    source_ref: docRef(doc),
+  })),
+  extracted_documents: done.map((r) => r.document_id).sort(),
+  missing_documents: missing.slice().sort(),
+  raw_result_count: done.reduce((n, r) => n + (Array.isArray(r.entities) ? r.entities.length : 0), 0),
+  deduplicated_count: dedup?.statistics?.deduplicated_entities ?? null,
+})
+
+const summary = await agent(
+  [
+    `Produce a concise completion summary for this contract-document extraction sweep.`,
+    `State how many documents were processed, how many were missing or failed, and how many deduplicated entities were produced.`,
+    `Flag that missing documents imply partial coverage if any are absent.`,
+    `Input JSON:`,
+    synthesisPayload,
+  ].join('\n'),
+  { label: 'summary', phase: 'Synthesize', model: 'claude-4.1', effort: 'low' }
 )
 
 return {
-  results: extracted,
-  deduplicated: synthesis ?? {
-    ...locallyDeduped,
-    missing_documents: missingDocuments,
-    notes: [
-      synthesis === null
-        ? 'Aggregation synthesis failed; returning locally deduplicated dataset.'
-        : 'Aggregation synthesized successfully.',
-    ],
-  },
-  missing_documents: missingDocuments,
+  raw_results: done,
+  missing_documents: missing,
+  deduplicated_dataset: dedup,
+  summary,
 }
 ```
 
-> **GPT-5.5 judge:** The script uses bounded waves of 8, handles null results, retries failed documents, caps per-document schema outputs, backs off on high wave failure rates, and the final synthesis/fallback explicitly reports missing documents. However, it lacks an armed ScheduleWakeup/stall watchdog, so one hung agent/connection inside a wave can still block the awaited parallel() forever with no notification. It also does not durably commit per-wave results or provide resume/cache-stable prompts, so completed work in a hung wave or crashed run can be lost or trapped behind the wave barrier. Overall it avoids the worst unbounded fan-out pattern but misses key safe-by-construction protections for hangs and resumability.
+> **Claude judge:** The script implements bounded waves (size 7), per-agent null-tolerance with a dedicated retry phase, incremental per-wave result commits, deterministic prompts, capped schemas, explicit gap-flagging in synthesis, and a >40% failure-rate backoff break. The only missing safety property is an armed stall watchdog (ScheduleWakeup or timeout), meaning a single hung agent connection could deadlock an entire wave indefinitely without notification.
 

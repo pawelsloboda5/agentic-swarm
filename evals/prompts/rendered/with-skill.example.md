@@ -83,24 +83,24 @@ description: >-
   swarm is safe by construction, not after it stalls.
 ---
 
-# Agentic Swarm — run parallel subagents without the 2-hour stall
+# Agentic Swarm — run parallel subagents without the silent stall
 
-This skill encodes the post-mortem of a real **41-agent research swarm** (full origin story in
-`reference/origin.md`). That swarm **did** eventually succeed (18/19 sub-areas), but only after
-**two stops, a ~2-hour silent stall, and 17 agent failures**, with **3 agents left hung**. The
-point of this skill is that the *next* swarm pays none of that tax.
+This skill makes large parallel-subagent fan-outs (the Claude Code `Workflow` tool) **safe by
+construction**. It isn't a vibe: a reproducible, independently-judged eval (a cross-family Claude
+judge scoring orchestration scripts written by models from GPT-5.5 down to GPT-4.1) shows the
+skill **markedly improves how safely models orchestrate swarms** — see [`evals/`](../../evals/)
+for the numbers and the full method. Every pattern below exists to defeat one failure mode:
 
 **The one thing to internalize:** the Workflow harness notifies you on **completion**,
-**never on stall**. A hung connection inside one giant `pipeline()`/`parallel()` barrier
-makes the whole workflow `await` forever — no synthesis, no completion event, no
-notification. The only thing that caught it last time was a manual watchdog. So we build
-the watchdog in **by default**, and we shrink the blast radius so a bad window damages one
-wave, not everything.
+**never on stall**. A hung connection inside one giant `pipeline()`/`parallel()` barrier makes the
+whole workflow `await` forever — no synthesis, no completion event, no notification. A manual
+watchdog is the only thing that catches it. So we build the watchdog in **by default**, and we
+shrink the blast radius so a bad window damages one wave, not everything.
 
 ## Emit these two — they are the most-forgotten, and they are what save the run
 
 Most swarm scripts get waves and retries right but **silently drop the two patterns that
-actually prevent the 2-hour stall.** Your orchestration is **not complete** until BOTH are
+actually prevent the silent stall.** Your orchestration is **not complete** until BOTH are
 present in what you hand back — emit them every time, even when the task didn't ask:
 
 **1. The stall watchdog (Pattern 4).** The harness never notifies on a stall, so this is the
@@ -147,7 +147,7 @@ The full assembled script wiring both into the wave loop is `reference/safe-swar
 
 The dominant failure was `API Error: Connection closed mid-response` — the model API
 stream dropping mid-generation. It is **environmental/transient, not a logic bug**:
-different agents failed each run (3 → 4 → 13), and the **heaviest agents failed most** (the
+the set of failing agents varies from run to run, and the **heaviest agents fail most** (the
 ones doing the most `WebFetch`/`WebSearch` with the longest structured outputs spend the
 longest on the wire, so they have the highest drop probability). Two distinct bad outcomes:
 
@@ -155,7 +155,7 @@ longest on the wire, so they have the highest drop probability). Two distinct ba
    `.filter(Boolean)` and retry the nulls later.
 2. **The killer — a hung connection** that never resolves *or* rejects. `agent()` never
    returns (not even `null`), so any barrier `await`-ing it deadlocks forever. This is the
-   2-hour stall. Every pattern below exists to make this survivable.
+   silent stall. Every pattern below exists to make this survivable.
 
 ---
 
@@ -195,11 +195,11 @@ copy it and fill in your items, prompts, and schema.
 
 Each pattern is **problem → rule → snippet**. They compose into the template.
 
-### Pattern 1 — Bound the blast radius: waves of 6–8, not one 41-agent pipeline
+### Pattern 1 — Bound the blast radius: waves of 6–8, not one giant pipeline
 
-**Problem.** The original ran one `pipeline()` over 19 sub-areas (38 agents) then synthesized
-*after* it. `pipeline()` returns only after **all** items finish (an implicit barrier at the
-end) — so 3 hung items deadlocked the entire workflow. A bad API window hit *everything* at once.
+**Problem.** Run one `pipeline()` over all items and synthesize *after* it and you have built a
+single implicit barrier: `pipeline()` returns only once **every** item finishes — so a few hung
+items deadlock the entire workflow, and a bad API window hits *everything* at once.
 
 **Rule.** Chunk items into waves of 6–8. Await each wave separately and accumulate results.
 A bad window then damages **one wave**, and you can react between waves.
@@ -286,7 +286,7 @@ const batch = await pipeline(
 ### Pattern 4 — Always arm a ScheduleWakeup watchdog (the non-negotiable one)
 
 **Problem.** The harness only fires a notification on **completion**. A silent stall fires
-nothing. Last time, a manual watchdog was the *only* signal in 2 hours.
+nothing. A manual watchdog is the *only* signal you get during a stall.
 
 **Rule.** Right after launching the swarm, arm a one-shot `ScheduleWakeup` (≥1200 s). When it
 fires, run the **journal-mtime staleness check**: if the journal hasn't grown in N minutes and
@@ -324,9 +324,9 @@ PY
 
 ### Pattern 5 — Checkpoint + resume; keep finder prompts stable, make synthesis re-run
 
-**Problem.** Resume is what saved the run (32 cached agents reused across 2 stops, zero
-completed work lost). But resume's cache is keyed by the **`(prompt, opts)` hash** — and that
-cuts both ways.
+**Problem.** Resume is the recovery mechanism: on relaunch, completed agents return from cache,
+so zero completed work is lost. But resume's cache is keyed by the **`(prompt, opts)` hash** — and
+that cuts both ways.
 
 **Rule, two halves:**
 - **Finder/worker agents → stable prompts** so resume serves them from cache. No `Date.now()`,
@@ -353,9 +353,8 @@ const synthesis = await agent(
 
 ### Pattern 6 — Keep per-agent outputs lean
 
-**Problem.** Heavy JSON per agent = longer streams = more drops, **and** the 58 results last
-run summed to ~885 KB (biggest single 32 KB), blowing the `.output` file's **~192 KB**
-truncation cap.
+**Problem.** Heavy JSON per agent = longer streams = more drops, **and** many fat results can
+sum to hundreds of KB, blowing the `.output` file's **~192 KB** truncation cap.
 
 **Rule.** Cap array sizes and keep evidence short in the **prompt and schema**. Ask for **≤8
 items, ≤3 evidence URLs each, one-line rationales** — not inline walls of text. Long evidence
@@ -389,7 +388,7 @@ return { results: done, missing, synthesis }
 ### Pattern 8 — Detect instability and back off
 
 **Problem.** Hammering the next wave during a connection-error spike just burns agents into
-the same bad window (last run's failures came in a 13-failure storm).
+the same bad window (connection-error failures tend to arrive in storms).
 
 **Rule.** After each wave, measure the `null`-rate. If it's high (e.g. > 40 %), it's a spike:
 **stop launching new waves**, return partial + the remaining items, and resume **later** — the
@@ -448,8 +447,7 @@ dependency here — it's pure-stdlib Python).
   the work IS done. So that diff counts **recovered-by-retry agents too**. The **authoritative
   coverage check** is to dedupe the *deliverable* by its own **content key** (e.g. `result.key` /
   `result.subarea`) and diff that against your **planned item list** — which is exactly what the
-  extractor's `--group-by` view lets you do. (Origin run: 61 started, 58 resulted → 3 truly hung,
-  because no retry wave had run yet.)
+  extractor's `--group-by` view lets you do.
 
 Run the bundled extractor (it auto-globs the journal, dedups by `key`, lists the result-less
 agents, and writes a UTF-8 merge — encoding-safe):
@@ -502,12 +500,12 @@ PY
 ## "Before" (what NOT to do) vs "after"
 
 ```js
-// BEFORE — the one-barrier shape that stalled for 2 hours:
+// BEFORE — the one-barrier shape that deadlocks silently:
 const results = await pipeline(SUBAREAS,                       // 19 items, 38 agents, ONE barrier
   sa    => agent(discoverPrompt(sa), { schema: CANDIDATES_SCHEMA }),
   cands => agent(verifyPrompt(cands), { schema: VERDICTS_SCHEMA }))   // no timeout, no retry, no waves
 const [gov, foundation] = await parallel([...])                // synthesis ONLY after the big barrier
-//                                                                ^ 3 hung items => never gets here
+//                                                                ^ a few hung items => never gets here
 
 // AFTER — see reference/safe-swarm-template.js: waves of 6-8, runItem() retry wrapper,
 // per-wave commit into `done`, instability backoff, synthesis embeds `done`+`missing`,
@@ -521,7 +519,6 @@ const [gov, foundation] = await parallel([...])                // synthesis ONLY
 | `reference/safe-swarm-template.js` | **Start here to build.** The full copy-paste workflow script implementing all 8 patterns — fill in items, prompts, schema. |
 | `reference/watchdog.md` | The complete `ScheduleWakeup` watchdog + journal-staleness check, the stop/resume decision tree, and a background-shell fallback watchdog. |
 | `reference/extract_journal.py` | The runnable journal parser: dedup by key, list result-less agents, write a UTF-8 merge. Use for final extraction and for resume diagnosis. |
-| `reference/origin.md` | The anonymized post-mortem this skill distills — the failure signature, the 8 lessons, and what saved the run. Read for the full evidence and "why". |
 
 
 --- end skill ---

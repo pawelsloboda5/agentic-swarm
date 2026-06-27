@@ -7,10 +7,13 @@ import { requireKey, EVALS_DIR } from "./_env.mjs";
 requireKey("OPENAI_API_KEY");
 
 const passthrough = process.argv.slice(2);
-const args = ["eval", "-c", "promptfooconfig.yaml", "-o", "results/latest.json", ...passthrough];
+// Run via npx so it resolves the local promptfoo whether invoked through `npm run` or directly
+// (npx is on PATH with no spaces; a resolved node_modules/.bin path can contain spaces that
+// break shell invocation on Windows).
+const args = ["promptfoo", "eval", "-c", "promptfooconfig.yaml", "-o", "results/latest.json", ...passthrough];
 
-console.log("> promptfoo " + args.join(" "));
-const r = spawnSync("promptfoo", args, { cwd: EVALS_DIR, stdio: "inherit", shell: true });
+console.log("> npx " + args.join(" "));
+const r = spawnSync("npx", args, { cwd: EVALS_DIR, stdio: "inherit", shell: true });
 if (r.error) {
   console.error("Failed to launch promptfoo. Did you run `bun install` (or `npm install`) in evals/?");
   console.error(String(r.error.message || r.error));

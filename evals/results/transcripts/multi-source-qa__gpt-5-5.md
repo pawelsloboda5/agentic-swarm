@@ -1,6 +1,6 @@
 # multi-source-qa — `gpt-5.5`
 
-> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: GPT-5.5.
+> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: Claude (claude-sonnet-4-6).
 
 **Task**
 
@@ -8,754 +8,862 @@
 
 ---
 
-## Baseline (no skill) — rubric 25%, patterns 38%
+## Baseline (no skill) — rubric 32%, patterns 69%
 
 ```js
 export const meta = {
   name: 'multi-source-auth-qa',
-  description: 'Read 33 authentication design docs and pull requests, dedupe changes, and synthesize a cited timeline.',
+  description: 'Read 33 design docs and pull requests, dedupe authentication-system changes, and synthesize a cited timeline.',
   phases: [
-    { title: 'Collect sources' },
+    { title: 'Discover sources' },
     { title: 'Read sources' },
     { title: 'Dedupe changes' },
     { title: 'Synthesize timeline' },
-    { title: 'Audit answer' },
+    { title: 'Verify answer' },
   ],
 }
 
-const question =
-  args?.question ||
-  'How did our authentication system change over the last year?'
+const QUESTION =
+  args?.question || 'How did our authentication system change over the last year?'
 
-const timeframe =
-  args?.timeframe ||
+const TIME_WINDOW =
   args?.timeWindow ||
-  'the last year'
+  'the last year / last 12 months; if exact current date is unavailable, infer the covered one-year period from source dates and state that inference'
 
-const asOf =
-  args?.asOfDate ||
-  args?.asOf ||
-  'the current conversation date'
+const EXPECTED_SOURCE_COUNT = args?.expectedSourceCount || 33
+const USE_ALL_PROVIDED_SOURCES = args?.useAllSources === true
 
-const expectedSourceCount =
-  Number.isInteger(args?.expectedSourceCount) && args.expectedSourceCount > 0
-    ? args.expectedSourceCount
-    : 33
-
-function pad2(n) {
-  return String(n).padStart(2, '0')
-}
-
-function inferKind(value) {
-  const s = String(value || '').toLowerCase()
-  if (s.includes('pull') || s.includes('/pull/') || s.includes('pr') || /^#?\d+$/.test(s)) {
-    return 'pull_request'
-  }
-  if (s.includes('rfc') || s.includes('design') || s.includes('doc') || s.endsWith('.md')) {
-    return 'design_doc'
-  }
-  return 'unknown'
-}
-
-function sourceLocator(raw) {
-  if (typeof raw === 'string') return raw
-  return (
-    raw?.locator ||
-    raw?.location ||
-    raw?.path ||
-    raw?.url ||
-    raw?.href ||
-    raw?.pr ||
-    raw?.pullRequest ||
-    raw?.number ||
-    raw?.id ||
-    ''
-  )
+function slug(value) {
+  return String(value || 'source')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48) || 'source'
 }
 
 function normalizeSource(raw, index) {
-  const locator = sourceLocator(raw)
+  if (typeof raw === 'string') {
+    return {
+      id: `S${String(index + 1).padStart(2, '0')}-${slug(raw)}`,
+      type: 'unknown',
+      title: raw,
+      locator: raw,
+    }
+  }
+
+  const type = raw?.type || raw?.kind || (raw?.prNumber || raw?.pullRequest ? 'pull_request' : 'design_doc')
   const title =
-    typeof raw === 'string'
-      ? raw
-      : raw?.title || raw?.name || raw?.summary || String(locator || `Source ${index + 1}`)
+    raw?.title ||
+    raw?.name ||
+    raw?.path ||
+    raw?.url ||
+    raw?.locator ||
+    raw?.prNumber ||
+    `source ${index + 1}`
 
   return {
-    id:
-      typeof raw === 'object' && raw?.id
-        ? String(raw.id)
-        : `S${pad2(index + 1)}`,
-    kind:
-      typeof raw === 'object' && (raw?.kind || raw?.type)
-        ? String(raw.kind || raw.type)
-        : inferKind(locator || title),
-    title: String(title || `Source ${index + 1}`),
-    locator: String(locator || title || ''),
-    notes:
-      typeof raw === 'object' && raw?.notes
-        ? String(raw.notes)
-        : '',
+    id: raw?.id || `S${String(index + 1).padStart(2, '0')}-${slug(title)}`,
+    type,
+    title,
+    locator: raw?.locator || raw?.path || raw?.url || raw?.ref || raw?.prNumber || title,
+    path: raw?.path || null,
+    url: raw?.url || null,
+    ref: raw?.ref || null,
+    prNumber: raw?.prNumber || raw?.number || null,
+    date: raw?.date || raw?.publishedDate || raw?.mergedDate || raw?.createdAt || null,
+    notes: raw?.notes || raw?.whyIncluded || null,
   }
 }
 
-function coerceProvidedSources(value) {
-  if (!value) return []
-  if (Array.isArray(value)) return value.map(normalizeSource)
-  if (typeof value === 'string') {
-    return value
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map(normalizeSource)
+function normalizeProvidedSources(inputArgs) {
+  const direct = Array.isArray(inputArgs?.sources) ? inputArgs.sources : []
+  const docs = Array.isArray(inputArgs?.designDocs) ? inputArgs.designDocs : []
+  const prs = Array.isArray(inputArgs?.pullRequests) ? inputArgs.pullRequests : []
+  const combined = direct.length ? direct : [...docs, ...prs]
+
+  let normalized = combined.map(normalizeSource)
+
+  if (!USE_ALL_PROVIDED_SOURCES && normalized.length > EXPECTED_SOURCE_COUNT) {
+    normalized = normalized.slice(0, EXPECTED_SOURCE_COUNT)
   }
-  return []
+
+  return normalized
 }
 
-const sourceDescriptorSchema = {
-  type: 'object',
-  required: ['id', 'kind', 'title', 'locator'],
-  additionalProperties: false,
-  properties: {
-    id: { type: 'string' },
-    kind: {
-      type: 'string',
-      enum: ['design_doc', 'pull_request', 'unknown'],
-    },
-    title: { type: 'string' },
-    locator: { type: 'string' },
-    notes: { type: 'string' },
-  },
+function chunk(items, size) {
+  const chunks = []
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size))
+  }
+  return chunks
+}
+
+function compactJson(value) {
+  return JSON.stringify(value, null, 2)
 }
 
 const discoverySchema = {
   type: 'object',
-  required: ['sources', 'selectionRationale'],
   additionalProperties: false,
+  required: ['sources', 'searchSummary', 'timeWindowUsed'],
   properties: {
-    selectionRationale: { type: 'string' },
+    timeWindowUsed: { type: 'string' },
+    searchSummary: { type: 'string' },
     sources: {
       type: 'array',
-      minItems: args?.requireExactly33 === false ? 1 : expectedSourceCount,
-      maxItems: expectedSourceCount,
-      items: sourceDescriptorSchema,
+      minItems: 1,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'type', 'title', 'locator', 'whyIncluded'],
+        properties: {
+          id: { type: 'string' },
+          type: { type: 'string', enum: ['design_doc', 'pull_request', 'unknown'] },
+          title: { type: 'string' },
+          locator: { type: 'string' },
+          path: { type: ['string', 'null'] },
+          url: { type: ['string', 'null'] },
+          ref: { type: ['string', 'null'] },
+          prNumber: { type: ['string', 'number', 'null'] },
+          date: { type: ['string', 'null'] },
+          whyIncluded: { type: 'string' },
+        },
+      },
     },
   },
 }
 
-phase('Collect sources')
-
-let sources = coerceProvidedSources(args?.sources)
-
-if (sources.length === 0) {
-  log(`No source list was provided; discovering ${expectedSourceCount} authentication design docs and pull requests.`)
-
-  const discovered = await agent(
-    `You are preparing evidence for a multi-source QA workflow.
-
-Question: ${question}
-Timeframe to investigate: ${timeframe}
-As-of reference: ${asOf}
-
-Find the ${expectedSourceCount} most relevant source documents and pull requests that should be read to answer how the authentication system changed over the requested timeframe.
-
-Source selection rules:
-- Prefer primary sources: design docs, RFCs, architecture decision records, pull requests, release PRs, and migration PRs.
-- Include both design intent and implementation changes where possible.
-- Focus on authentication: login, session management, tokens, OAuth/OIDC/SAML, MFA, passwordless/passkeys, identity providers, RBAC/authorization only where it directly changed auth flows, account recovery, service-to-service auth, secrets/credential handling, and auth observability/security controls.
-- If more than ${expectedSourceCount} candidates exist, choose the ${expectedSourceCount} with the strongest evidence value.
-- Return stable locators: file paths for docs; PR numbers/URLs/titles for pull requests.
-- Do not summarize the contents yet. Only return the source list.
-
-Return exactly ${expectedSourceCount} sources unless impossible.`,
-    {
-      label: 'discover-auth-sources',
-      phase: 'Collect sources',
-      effort: 'high',
-      schema: discoverySchema,
-    },
-  )
-
-  sources = (discovered?.sources || []).map(normalizeSource)
-} else {
-  log(`Using ${sources.length} source(s) supplied in args.sources.`)
-}
-
-if (sources.length !== expectedSourceCount) {
-  log(`Expected ${expectedSourceCount} sources, but proceeding with ${sources.length}. The final answer will disclose this coverage.`)
-}
-
-const readSchema = {
+const sourceExtractionSchema = {
   type: 'object',
+  additionalProperties: false,
   required: [
     'sourceId',
     'sourceTitle',
-    'sourceKind',
+    'sourceType',
     'sourceLocator',
     'readStatus',
     'sourceDate',
+    'overallSummary',
     'changes',
-    'readerNotes',
+    'notRelevantReason',
+    'warnings',
   ],
-  additionalProperties: false,
   properties: {
     sourceId: { type: 'string' },
     sourceTitle: { type: 'string' },
-    sourceKind: { type: 'string' },
+    sourceType: { type: 'string' },
     sourceLocator: { type: 'string' },
-    readStatus: {
-      type: 'string',
-      enum: ['read', 'not_found', 'not_relevant', 'ambiguous', 'error'],
-    },
-    sourceDate: {
-      type: 'string',
-      description: 'Best available date for the source, such as doc date, PR created/merged date, or unknown.',
-    },
-    authorsOrOwners: {
-      type: 'array',
-      items: { type: 'string' },
-    },
+    readStatus: { type: 'string', enum: ['read', 'partially_read', 'not_found', 'inaccessible'] },
+    sourceDate: { type: ['string', 'null'] },
+    overallSummary: { type: 'string' },
+    notRelevantReason: { type: ['string', 'null'] },
+    warnings: { type: 'array', items: { type: 'string' } },
     changes: {
       type: 'array',
       items: {
         type: 'object',
+        additionalProperties: false,
         required: [
           'localChangeId',
-          'changeTitle',
-          'changeSummary',
-          'changeType',
-          'authArea',
-          'effectiveDate',
-          'status',
+          'date',
+          'title',
+          'category',
+          'components',
+          'before',
+          'after',
+          'rationale',
+          'userOrSystemImpact',
+          'implementationStatus',
           'evidence',
-          'dedupeHint',
+          'citations',
           'confidence',
         ],
-        additionalProperties: false,
         properties: {
           localChangeId: { type: 'string' },
-          changeTitle: { type: 'string' },
-          changeSummary: { type: 'string' },
-          changeType: {
+          date: { type: ['string', 'null'] },
+          title: { type: 'string' },
+          category: {
             type: 'string',
             enum: [
-              'new_capability',
-              'behavior_change',
-              'migration',
-              'deprecation',
+              'login',
+              'session',
+              'token',
+              'oauth_oidc_saml',
+              'mfa',
+              'password',
+              'authorization',
+              'identity_model',
+              'service_to_service_auth',
+              'account_recovery',
+              'audit_logging',
+              'migration_deprecation',
               'security_hardening',
-              'operational_change',
-              'bugfix_or_regression_fix',
-              'documentation_only',
-              'unknown',
+              'developer_platform',
+              'other',
             ],
           },
-          authArea: {
+          components: { type: 'array', items: { type: 'string' } },
+          before: { type: 'string' },
+          after: { type: 'string' },
+          rationale: { type: 'string' },
+          userOrSystemImpact: { type: 'string' },
+          implementationStatus: {
             type: 'string',
-            description: 'Subsystem, e.g. sessions, MFA, OIDC, login UI, token service, account recovery.',
+            enum: ['proposed', 'accepted', 'implemented', 'partially_implemented', 'reverted', 'unknown'],
           },
-          effectiveDate: {
-            type: 'string',
-            description: 'Best available date or range. Use unknown if not present.',
-          },
-          status: {
-            type: 'string',
-            enum: ['proposed', 'approved', 'implemented', 'rolled_out', 'reverted', 'superseded', 'unknown'],
-          },
-          evidence: {
+          evidence: { type: 'string' },
+          citations: {
             type: 'array',
             minItems: 1,
             items: {
               type: 'object',
-              required: ['citation', 'quoteOrParaphrase'],
               additionalProperties: false,
+              required: ['sourceId', 'locator', 'quote'],
               properties: {
-                citation: {
-                  type: 'string',
-                  description: 'Precise citation, including source id and locator where possible, e.g. S04: docs/auth/rfc.md#session-rotation or S18: PR #1234.',
-                },
-                quoteOrParaphrase: { type: 'string' },
+                sourceId: { type: 'string' },
+                locator: { type: 'string' },
+                quote: { type: 'string' },
               },
             },
           },
-          dedupeHint: {
-            type: 'string',
-            description: 'Canonical wording useful for merging this with the same change from another source.',
-          },
-          confidence: {
-            type: 'string',
-            enum: ['high', 'medium', 'low'],
-          },
+          confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
         },
       },
     },
-    readerNotes: { type: 'string' },
   },
 }
 
-phase('Read sources')
-log(`Spawning one reader agent per source (${sources.length} total).`)
-
-const readResults = await parallel(
-  sources.map((source, index) => async () => {
-    return await agent(
-      `You are source reader ${source.id}. Read this one source directly and extract only authentication-system changes relevant to the question.
-
-Question: ${question}
-Timeframe: ${timeframe}
-As-of reference: ${asOf}
-
-Assigned source:
-${JSON.stringify(source, null, 2)}
-
-Instructions:
-- Read the assigned design doc or pull request as the primary source.
-- If the locator is a PR number/title/URL, inspect PR metadata, description, changed files, review discussion if available, and merge/close status if available.
-- If the locator is a design doc path/title, inspect the document and any immediately linked design appendix only when needed to interpret the source.
-- Do not use unrelated sources as evidence. If contextual lookup is necessary, mention it in readerNotes, not as evidence.
-- Extract concrete changes to the authentication system, not generic project management notes.
-- Include changes that were proposed, approved, implemented, rolled out, deprecated, reverted, or superseded.
-- Prefer exact dates; otherwise use month/quarter/range; otherwise "unknown".
-- Every extracted change must include at least one citation anchored to this source.
-- If the source has no auth-relevant changes, return readStatus "not_relevant" with an empty changes array.
-- If the source cannot be located, return readStatus "not_found" with an empty changes array.
-- Keep each change summary concise but specific enough for cross-source deduplication.
-- Return at most 12 changes from this source, prioritizing the most consequential.`,
-      {
-        label: `read-${source.id}`,
-        phase: 'Read sources',
-        effort: 'medium',
-        schema: readSchema,
-      },
-    )
-  }),
-)
-
-const normalizedReadResults = readResults.map((result, index) => {
-  if (result) return result
-  const source = sources[index]
-  return {
-    sourceId: source.id,
-    sourceTitle: source.title,
-    sourceKind: source.kind,
-    sourceLocator: source.locator,
-    readStatus: 'error',
-    sourceDate: 'unknown',
-    authorsOrOwners: [],
-    changes: [],
-    readerNotes: 'Reader agent returned null or failed after runtime retries.',
-  }
-})
-
-const relevantChangeCount = normalizedReadResults.reduce(
-  (sum, result) => sum + (Array.isArray(result.changes) ? result.changes.length : 0),
-  0,
-)
-
-const readFailures = normalizedReadResults.filter((result) =>
-  ['not_found', 'ambiguous', 'error'].includes(result.readStatus),
-)
-
-log(`Readers returned ${relevantChangeCount} candidate auth change(s). ${readFailures.length} source(s) had read issues.`)
-
 const dedupeSchema = {
   type: 'object',
-  required: ['canonicalChanges', 'droppedAsNotAuthRelevant', 'dedupeNotes'],
   additionalProperties: false,
+  required: ['canonicalChanges', 'duplicateGroups', 'conflicts', 'dedupeSummary'],
   properties: {
+    dedupeSummary: { type: 'string' },
     canonicalChanges: {
       type: 'array',
       items: {
         type: 'object',
-        required: [
-          'changeId',
-          'title',
-          'timelineDate',
-          'sortKey',
-          'summary',
-          'authAreas',
-          'changeTypes',
-          'status',
-          'impact',
-          'sourceEvidence',
-          'mergedLocalChanges',
-          'confidence',
-        ],
         additionalProperties: false,
+        required: [
+          'canonicalId',
+          'date',
+          'title',
+          'category',
+          'components',
+          'before',
+          'after',
+          'rationale',
+          'impact',
+          'implementationStatus',
+          'sourceChangeRefs',
+          'citations',
+          'confidence',
+          'dedupeNotes',
+        ],
         properties: {
-          changeId: { type: 'string' },
+          canonicalId: { type: 'string' },
+          date: { type: ['string', 'null'] },
           title: { type: 'string' },
-          timelineDate: {
-            type: 'string',
-            description: 'Human-facing date/range for the timeline.',
-          },
-          sortKey: {
-            type: 'string',
-            description: 'Sortable approximate key such as YYYY-MM-DD, YYYY-MM, YYYY-QN, or unknown-late. Use stable lexical ordering.',
-          },
-          summary: { type: 'string' },
-          authAreas: {
-            type: 'array',
-            items: { type: 'string' },
-          },
-          changeTypes: {
-            type: 'array',
-            items: { type: 'string' },
-          },
-          status: {
-            type: 'string',
-            enum: ['proposed', 'approved', 'implemented', 'rolled_out', 'reverted', 'superseded', 'mixed', 'unknown'],
-          },
-          impact: {
-            type: 'string',
-            enum: ['high', 'medium', 'low', 'unknown'],
-          },
-          sourceEvidence: {
+          category: { type: 'string' },
+          components: { type: 'array', items: { type: 'string' } },
+          before: { type: 'string' },
+          after: { type: 'string' },
+          rationale: { type: 'string' },
+          impact: { type: 'string' },
+          implementationStatus: { type: 'string' },
+          sourceChangeRefs: { type: 'array', items: { type: 'string' } },
+          citations: {
             type: 'array',
             minItems: 1,
             items: {
               type: 'object',
-              required: ['sourceId', 'citations', 'evidenceSummary'],
               additionalProperties: false,
+              required: ['sourceId', 'locator', 'quote'],
               properties: {
                 sourceId: { type: 'string' },
-                citations: {
-                  type: 'array',
-                  minItems: 1,
-                  items: { type: 'string' },
-                },
-                evidenceSummary: { type: 'string' },
+                locator: { type: 'string' },
+                quote: { type: 'string' },
               },
             },
           },
-          mergedLocalChanges: {
-            type: 'array',
-            items: {
-              type: 'object',
-              required: ['sourceId', 'localChangeId'],
-              additionalProperties: false,
-              properties: {
-                sourceId: { type: 'string' },
-                localChangeId: { type: 'string' },
-              },
-            },
-          },
-          confidence: {
-            type: 'string',
-            enum: ['high', 'medium', 'low'],
-          },
+          confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+          dedupeNotes: { type: 'string' },
         },
       },
     },
-    droppedAsNotAuthRelevant: {
+    duplicateGroups: {
       type: 'array',
       items: {
         type: 'object',
-        required: ['sourceId', 'localChangeId', 'reason'],
         additionalProperties: false,
+        required: ['canonicalId', 'mergedSourceChangeRefs', 'reason'],
         properties: {
-          sourceId: { type: 'string' },
-          localChangeId: { type: 'string' },
+          canonicalId: { type: 'string' },
+          mergedSourceChangeRefs: { type: 'array', items: { type: 'string' } },
           reason: { type: 'string' },
         },
       },
     },
-    dedupeNotes: { type: 'string' },
+    conflicts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['topic', 'sourceChangeRefs', 'description', 'recommendedTreatment'],
+        properties: {
+          topic: { type: 'string' },
+          sourceChangeRefs: { type: 'array', items: { type: 'string' } },
+          description: { type: 'string' },
+          recommendedTreatment: { type: 'string' },
+        },
+      },
+    },
   },
 }
 
-phase('Dedupe changes')
-log('Deduplicating semantically overlapping changes across sources.')
-
-const deduped = await agent(
-  `You are the deduplication lead for a multi-source authentication history QA task.
-
-Question: ${question}
-Timeframe: ${timeframe}
-As-of reference: ${asOf}
-
-You will receive per-source extracted changes. Merge duplicates across design docs and PRs into canonical timeline events.
-
-Deduplication rules:
-- Merge changes that describe the same underlying auth-system change, even if one source is a design proposal and another is the implementation PR.
-- Do not merge merely related changes if they happened at different times or changed different behavior.
-- Preserve all source evidence on the canonical change.
-- Prefer implementation/rollout dates over proposal dates for timelineDate when answering "how did the system change"; mention proposal-to-rollout progression in the summary if important.
-- If a proposal was superseded, reverted, or only partially implemented, keep that nuance.
-- Drop items that are clearly not authentication changes, but record why.
-- Assign stable IDs C01, C02, ... in approximate chronological order using sortKey.
-- Keep sourceEvidence citations exactly traceable to the source readers' citations.
-
-Per-source extracted changes:
-${JSON.stringify(normalizedReadResults, null, 2)}`,
-  {
-    label: 'dedupe-auth-changes',
-    phase: 'Dedupe changes',
-    effort: 'high',
-    schema: dedupeSchema,
-  },
-)
-
-const canonicalChanges = deduped?.canonicalChanges || []
-log(`Dedupe produced ${canonicalChanges.length} canonical auth change(s).`)
-
-phase('Synthesize timeline')
-
-const sourceCoverage = normalizedReadResults.map((result) => ({
-  sourceId: result.sourceId,
-  title: result.sourceTitle,
-  kind: result.sourceKind,
-  locator: result.sourceLocator,
-  status: result.readStatus,
-  sourceDate: result.sourceDate,
-  changeCount: Array.isArray(result.changes) ? result.changes.length : 0,
-  notes: result.readerNotes,
-}))
-
-const draftAnswer = await agent(
-  `You are writing the final answer to this multi-source QA question:
-
-"${question}"
-
-Timeframe: ${timeframe}
-As-of reference: ${asOf}
-
-Use only the canonical deduplicated changes and source coverage below. Produce a concise, cited timeline explaining how the authentication system changed.
-
-Canonical deduplicated changes:
-${JSON.stringify(canonicalChanges, null, 2)}
-
-Source coverage:
-${JSON.stringify(sourceCoverage, null, 2)}
-
-Writing requirements:
-- Start with a direct 2-4 sentence answer summarizing the overall evolution.
-- Then provide a chronological timeline. Each timeline item must include:
-  - date or date range,
-  - what changed,
-  - why it mattered,
-  - status if not fully rolled out or if superseded/reverted,
-  - citations in square brackets using source IDs and locators from sourceEvidence.
-- After the timeline, add a short "Themes" section grouping the changes into 3-6 larger shifts.
-- Add a short "Coverage and caveats" section that states how many sources were read, how many had read issues, and any important uncertainty.
-- Do not invent citations. Every factual claim about a change must be supported by canonical sourceEvidence.
-- If dates are uncertain, say so rather than guessing.
-- Prefer readable Markdown.`,
-  {
-    label: 'synthesize-cited-auth-timeline',
-    phase: 'Synthesize timeline',
-    effort: 'high',
-  },
-)
-
-const auditSchema = {
+const synthesisSchema = {
   type: 'object',
-  required: ['pass', 'majorIssues', 'minorIssues', 'requiredFixes'],
   additionalProperties: false,
+  required: ['markdown', 'timeline', 'caveats', 'coverageSummary'],
   properties: {
-    pass: { type: 'boolean' },
-    majorIssues: {
+    markdown: { type: 'string' },
+    coverageSummary: { type: 'string' },
+    caveats: { type: 'array', items: { type: 'string' } },
+    timeline: {
       type: 'array',
-      items: { type: 'string' },
-    },
-    minorIssues: {
-      type: 'array',
-      items: { type: 'string' },
-    },
-    requiredFixes: {
-      type: 'array',
-      items: { type: 'string' },
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['date', 'title', 'summary', 'citations'],
+        properties: {
+          date: { type: ['string', 'null'] },
+          title: { type: 'string' },
+          summary: { type: 'string' },
+          citations: { type: 'array', items: { type: 'string' } },
+        },
+      },
     },
   },
 }
 
-phase('Audit answer')
-log('Auditing draft for citation coverage, dedupe fidelity, and unsupported claims.')
-
-const audit = await agent(
-  `You are auditing a final QA answer for citation fidelity and evidence consistency.
-
-Question: ${question}
-
-Draft answer:
-${draftAnswer || ''}
-
-Canonical deduplicated changes:
-${JSON.stringify(canonicalChanges, null, 2)}
-
-Source coverage:
-${JSON.stringify(sourceCoverage, null, 2)}
-
-Audit criteria:
-- Every timeline item must be supported by citations present in canonical sourceEvidence.
-- The answer must not introduce auth changes absent from canonicalChanges.
-- The answer must not hide important caveats, source read failures, reversions, supersessions, or uncertainty.
-- Dedupe fidelity: merged changes should not be split into duplicate timeline entries, and distinct changes should not be conflated.
-- The answer should directly answer how the authentication system changed over the requested timeframe.
-
-Set pass=false if any major issue requires rewriting.`,
-  {
-    label: 'audit-cited-auth-timeline',
-    phase: 'Audit answer',
-    effort: 'medium',
-    schema: auditSchema,
+const verificationSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['verdict', 'issues', 'correctedMarkdown', 'verificationSummary'],
+  properties: {
+    verdict: { type: 'string', enum: ['approved', 'approved_with_caveats', 'needs_corrections'] },
+    verificationSummary: { type: 'string' },
+    issues: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['severity', 'claim', 'problem', 'fix'],
+        properties: {
+          severity: { type: 'string', enum: ['critical', 'major', 'minor'] },
+          claim: { type: 'string' },
+          problem: { type: 'string' },
+          fix: { type: 'string' },
+        },
+      },
+    },
+    correctedMarkdown: { type: 'string' },
   },
-)
+}
 
-let finalAnswer = draftAnswer || ''
+let sources = normalizeProvidedSources(args || {})
 
-if (audit && audit.pass === false && audit.requiredFixes.length > 0) {
-  log(`Audit requested ${audit.requiredFixes.length} fix(es); revising final answer.`)
+if (!sources.length) {
+  phase('Discover sources')
+  log(`No source manifest supplied; asking an agent to discover ${EXPECTED_SOURCE_COUNT} authentication-related design docs and pull requests.`)
 
-  finalAnswer = await agent(
-    `Revise the draft answer to fix the audit findings. Use only the canonical deduplicated changes and source coverage.
+  const discovered = await agent(
+    `You are preparing evidence for a multi-source QA answer.
 
-Question: ${question}
-Timeframe: ${timeframe}
-As-of reference: ${asOf}
+Question: ${QUESTION}
+Time window: ${TIME_WINDOW}
+Target source count: ${EXPECTED_SOURCE_COUNT}
 
-Draft answer:
-${draftAnswer || ''}
+Find the ${EXPECTED_SOURCE_COUNT} most relevant source artifacts about how the authentication system changed in this period. Prefer a balanced mix of design docs and pull requests. Use repository search, available PR metadata, changelog references, design-doc directories, and local tooling as available.
 
-Audit findings:
-${JSON.stringify(audit, null, 2)}
+Return only sources that a later agent can read directly. For each source, provide a stable id, type, title, locator, optional path/url/ref/PR number/date, and why it matters.
 
-Canonical deduplicated changes:
-${JSON.stringify(canonicalChanges, null, 2)}
+If you cannot find exactly ${EXPECTED_SOURCE_COUNT}, return the best available set and explain in searchSummary.`,
+    {
+      label: 'discover auth design docs and PRs',
+      phase: 'Discover sources',
+      schema: discoverySchema,
+      effort: 'high',
+      isolation: 'worktree',
+    },
+  )
+
+  sources = (discovered?.sources || []).map(normalizeSource)
+
+  if (!USE_ALL_PROVIDED_SOURCES && sources.length > EXPECTED_SOURCE_COUNT) {
+    sources = sources.slice(0, EXPECTED_SOURCE_COUNT)
+  }
+}
+
+const sourceWarnings = []
+if (sources.length !== EXPECTED_SOURCE_COUNT) {
+  sourceWarnings.push(
+    `Expected ${EXPECTED_SOURCE_COUNT} sources but will process ${sources.length}.`,
+  )
+}
+log(`Processing ${sources.length} source(s) for: ${QUESTION}`)
+
+let finalResult
+
+if (!sources.length) {
+  finalResult = {
+    question: QUESTION,
+    timeWindow: TIME_WINDOW,
+    sourceCount: 0,
+    answer:
+      `# Authentication-system changes\n\nI could not answer because no design docs or pull requests were provided or discovered for the requested analysis.`,
+    warnings: sourceWarnings,
+  }
+} else {
+  phase('Read sources')
+
+  const readResults = await parallel(
+    sources.map((source, index) => async () => {
+      return agent(
+        `You are one reader in a multi-source QA workflow.
+
+Question to support: ${QUESTION}
+Time window: ${TIME_WINDOW}
+
+Read exactly this source and extract only authentication-system changes relevant to the question.
+
+Source ${index + 1} of ${sources.length}:
+${compactJson(source)}
+
+Instructions:
+- Inspect the actual source content, not just the title.
+- For pull requests, inspect the description, merged/closed date if available, relevant diff, migration notes, tests, and discussion that clarify auth behavior.
+- For design docs, inspect decision records, status, alternatives, rollout/migration sections, and dates.
+- Extract concrete changes to authentication, identity, sessions, tokens, MFA, OAuth/OIDC/SAML, service-to-service auth, authorization boundaries only where they affect authn/auth system design, security hardening, recovery, audit logging, or migrations/deprecations.
+- Do not include unrelated authorization/product changes unless they directly changed authentication behavior or architecture.
+- For every change, include at least one citation with a precise locator and a short exact quote.
+- If the source is not relevant or cannot be read, return an empty changes array and explain why.
+- Use sourceId exactly as provided: ${source.id}.`,
+        {
+          label: `read ${source.id}`,
+          phase: 'Read sources',
+          schema: sourceExtractionSchema,
+          effort: 'medium',
+          isolation: 'worktree',
+        },
+      )
+    }),
+  )
+
+  const failedReads = []
+  const extractions = []
+
+  for (let i = 0; i < readResults.length; i += 1) {
+    const result = readResults[i]
+    if (!result) {
+      failedReads.push({
+        sourceId: sources[i].id,
+        title: sources[i].title,
+        locator: sources[i].locator,
+        reason: 'Reader agent returned null.',
+      })
+    } else {
+      extractions.push(result)
+      if (result.readStatus !== 'read') {
+        failedReads.push({
+          sourceId: result.sourceId,
+          title: result.sourceTitle,
+          locator: result.sourceLocator,
+          reason: result.readStatus,
+        })
+      }
+    }
+  }
+
+  const changeRecords = []
+  for (const extraction of extractions) {
+    for (const change of extraction.changes || []) {
+      const ref = `${extraction.sourceId}:${change.localChangeId}`
+      changeRecords.push({
+        ref,
+        sourceId: extraction.sourceId,
+        sourceTitle: extraction.sourceTitle,
+        sourceType: extraction.sourceType,
+        sourceLocator: extraction.sourceLocator,
+        sourceDate: extraction.sourceDate,
+        localChangeId: change.localChangeId,
+        date: change.date,
+        title: change.title,
+        category: change.category,
+        components: change.components,
+        before: change.before,
+        after: change.after,
+        rationale: change.rationale,
+        impact: change.userOrSystemImpact,
+        implementationStatus: change.implementationStatus,
+        evidence: change.evidence,
+        citations: change.citations,
+        confidence: change.confidence,
+      })
+    }
+  }
+
+  log(`Read ${extractions.length}/${sources.length} source(s); extracted ${changeRecords.length} candidate auth change(s).`)
+
+  phase('Dedupe changes')
+
+  let deduped
+
+  if (!changeRecords.length) {
+    deduped = {
+      canonicalChanges: [],
+      duplicateGroups: [],
+      conflicts: [],
+      dedupeSummary: 'No relevant authentication changes were extracted from the readable sources.',
+    }
+  } else {
+    const dedupeChunks = chunk(changeRecords, 45)
+
+    const chunkDedupeResults = await parallel(
+      dedupeChunks.map((records, chunkIndex) => async () => {
+        return agent(
+          `You are deduplicating extracted authentication changes.
+
+Question: ${QUESTION}
+Time window: ${TIME_WINDOW}
+Chunk ${chunkIndex + 1} of ${dedupeChunks.length}
+
+Candidate changes:
+${compactJson(records)}
+
+Task:
+- Merge records that describe the same underlying authentication-system change, even if one is from a design doc and another from the implementing PR.
+- Do not merge changes that are merely related but happened at different times, affected different mechanisms, or represent proposal vs implementation unless the evidence clearly shows they are the same change.
+- Preserve the strongest concrete before/after description.
+- Keep citations from multiple sources when they support the same canonical change.
+- Record conflicts where sources disagree about behavior, dates, status, or scope.
+- Use canonical ids like C${String(chunkIndex + 1).padStart(2, '0')}-001, C${String(chunkIndex + 1).padStart(2, '0')}-002, etc.`,
+          {
+            label: `dedupe chunk ${chunkIndex + 1}`,
+            phase: 'Dedupe changes',
+            schema: dedupeSchema,
+            effort: 'high',
+          },
+        )
+      }),
+    )
+
+    const canonicalSeed = []
+    const duplicateGroups = []
+    const conflicts = []
+    const missingDedupeChunks = []
+
+    for (let i = 0; i < chunkDedupeResults.length; i += 1) {
+      const result = chunkDedupeResults[i]
+      if (!result) {
+        missingDedupeChunks.push(i + 1)
+      } else {
+        canonicalSeed.push(...(result.canonicalChanges || []))
+        duplicateGroups.push(...(result.duplicateGroups || []))
+        conflicts.push(...(result.conflicts || []))
+      }
+    }
+
+    if (canonicalSeed.length <= 45) {
+      const global = await agent(
+        `You are performing final global deduplication for a multi-source authentication timeline.
+
+Question: ${QUESTION}
+Time window: ${TIME_WINDOW}
+
+Previously deduplicated canonical candidates:
+${compactJson(canonicalSeed)}
+
+Previously identified duplicate groups:
+${compactJson(duplicateGroups)}
+
+Previously identified conflicts:
+${compactJson(conflicts)}
+
+Missing dedupe chunks, if any:
+${compactJson(missingDedupeChunks)}
+
+Task:
+- Deduplicate across chunks into one final canonical list.
+- Preserve all useful citations.
+- Sort canonical changes chronologically where dates are available; keep undated but relevant changes near their best inferred period.
+- Keep conflicts that matter to the final answer.
+- Use final canonical ids AUTH-001, AUTH-002, etc.`,
+        {
+          label: 'global dedupe',
+          phase: 'Dedupe changes',
+          schema: dedupeSchema,
+          effort: 'high',
+        },
+      )
+
+      deduped =
+        global || {
+          canonicalChanges: canonicalSeed,
+          duplicateGroups,
+          conflicts,
+          dedupeSummary:
+            'Global dedupe agent failed; using chunk-level deduplicated results.',
+        }
+    } else {
+      const secondPassChunks = chunk(canonicalSeed, 45)
+      const secondPassResults = await parallel(
+        secondPassChunks.map((records, chunkIndex) => async () => {
+          return agent(
+            `Second-pass dedupe for authentication changes.
+
+Question: ${QUESTION}
+Time window: ${TIME_WINDOW}
+Second-pass chunk ${chunkIndex + 1} of ${secondPassChunks.length}
+
+Canonical candidates:
+${compactJson(records)}
+
+Merge duplicates across prior chunks. Preserve citations and conflicts. Use ids P${String(chunkIndex + 1).padStart(2, '0')}-001, P${String(chunkIndex + 1).padStart(2, '0')}-002, etc.`,
+            {
+              label: `second-pass dedupe ${chunkIndex + 1}`,
+              phase: 'Dedupe changes',
+              schema: dedupeSchema,
+              effort: 'high',
+            },
+          )
+        }),
+      )
+
+      const secondSeed = []
+      const secondDuplicates = [...duplicateGroups]
+      const secondConflicts = [...conflicts]
+
+      for (const result of secondPassResults) {
+        if (result) {
+          secondSeed.push(...(result.canonicalChanges || []))
+          secondDuplicates.push(...(result.duplicateGroups || []))
+          secondConflicts.push(...(result.conflicts || []))
+        }
+      }
+
+      const global = await agent(
+        `Final global dedupe for a large multi-source authentication timeline.
+
+Question: ${QUESTION}
+Time window: ${TIME_WINDOW}
+
+Canonical candidates after second pass:
+${compactJson(secondSeed)}
+
+Duplicate evidence:
+${compactJson(secondDuplicates)}
+
+Conflict evidence:
+${compactJson(secondConflicts)}
+
+Produce the final deduplicated canonical change list with ids AUTH-001, AUTH-002, etc. Preserve citations and meaningful conflicts.`,
+        {
+          label: 'final global dedupe',
+          phase: 'Dedupe changes',
+          schema: dedupeSchema,
+          effort: 'high',
+        },
+      )
+
+      deduped =
+        global || {
+          canonicalChanges: secondSeed,
+          duplicateGroups: secondDuplicates,
+          conflicts: secondConflicts,
+          dedupeSummary:
+            'Final global dedupe agent failed; using second-pass deduplicated results.',
+        }
+    }
+  }
+
+  log(`Deduped to ${deduped.canonicalChanges.length} canonical authentication change(s).`)
+
+  phase('Synthesize timeline')
+
+  const synthesis = await agent(
+    `You are writing the final answer to a multi-source QA question.
+
+Question: ${QUESTION}
+Time window: ${TIME_WINDOW}
+
+Final deduplicated authentication changes:
+${compactJson(deduped.canonicalChanges)}
+
+Conflicts to handle carefully:
+${compactJson(deduped.conflicts)}
 
 Source coverage:
-${JSON.stringify(sourceCoverage, null, 2)}
+${compactJson({
+  requestedSourceCount: EXPECTED_SOURCE_COUNT,
+  processedSourceCount: sources.length,
+  readableExtractionCount: extractions.length,
+  failedReads,
+  sourceWarnings,
+})}
 
-Revision requirements:
-- Fix every required audit issue.
-- Preserve a clear cited chronological timeline.
-- Do not add unsupported claims.
-- Keep citations traceable to sourceEvidence.
-- Include source coverage/caveats.`,
+Write a clear, cited answer in Markdown.
+
+Requirements:
+- Start with a direct 2-4 sentence answer summarizing how the authentication system changed.
+- Then provide a chronological timeline.
+- Each timeline bullet must include date/period, the change, before/after, impact, status if known, and citations.
+- Use citation format like [S01-auth-doc §Migration Plan] or [S14-login-pr diff: auth/session.ts].
+- Cite every material claim using the provided citation locators and quotes.
+- Do not invent facts beyond the deduplicated changes.
+- Explicitly mention caveats: unreadable sources, missing dates, conflicts, proposal-vs-implementation uncertainty.
+- End with cross-cutting themes: e.g. centralization, token/session hardening, MFA changes, migration/deprecation, service-to-service auth, etc., but only if supported by evidence.`,
     {
-      label: 'revise-audited-auth-timeline',
-      phase: 'Audit answer',
+      label: 'synthesize cited timeline',
+      phase: 'Synthesize timeline',
+      schema: synthesisSchema,
       effort: 'high',
     },
   )
+
+  phase('Verify answer')
+
+  let verified = null
+  if (synthesis?.markdown) {
+    verified = await agent(
+      `You are the verification pass for a cited multi-source QA answer.
+
+Question: ${QUESTION}
+
+Draft answer:
+${synthesis.markdown}
+
+Allowed evidence: final deduplicated authentication changes:
+${compactJson(deduped.canonicalChanges)}
+
+Known conflicts:
+${compactJson(deduped.conflicts)}
+
+Coverage limitations:
+${compactJson({
+  requestedSourceCount: EXPECTED_SOURCE_COUNT,
+  processedSourceCount: sources.length,
+  failedReads,
+  sourceWarnings,
+})}
+
+Check whether every material claim in the draft is supported by the allowed evidence and citations.
+
+Return:
+- approved if no substantive problems.
+- approved_with_caveats if only caveats/wording limitations remain.
+- needs_corrections if claims are unsupported, overbroad, missing caveats, or citations do not support them.
+
+If corrections are needed, provide correctedMarkdown that fixes the answer while preserving the requested structure and citations. If approved, correctedMarkdown should equal the draft.`,
+      {
+        label: 'verify citations and claims',
+        phase: 'Verify answer',
+        schema: verificationSchema,
+        effort: 'medium',
+      },
+    )
+  }
+
+  const answerMarkdown =
+    verified?.correctedMarkdown ||
+    synthesis?.markdown ||
+    `# Authentication-system changes\n\nNo final synthesis could be produced. ${deduped.dedupeSummary}`
+
+  finalResult = {
+    question: QUESTION,
+    timeWindow: TIME_WINDOW,
+    requestedSourceCount: EXPECTED_SOURCE_COUNT,
+    processedSourceCount: sources.length,
+    readFailureCount: failedReads.length,
+    extractedCandidateChangeCount: changeRecords.length,
+    canonicalChangeCount: deduped.canonicalChanges.length,
+    answer: answerMarkdown,
+    qa: verified || {
+      verdict: 'needs_corrections',
+      verificationSummary: 'Verification did not run or returned null.',
+      issues: [],
+    },
+    caveats: [
+      ...sourceWarnings,
+      ...(synthesis?.caveats || []),
+      ...(failedReads.length
+        ? [`${failedReads.length} source(s) were not fully read; see readFailures.`]
+        : []),
+    ],
+    readFailures: failedReads,
+    canonicalChanges: deduped.canonicalChanges,
+    conflicts: deduped.conflicts,
+  }
 }
 
-log('Multi-source authentication QA workflow complete.')
-
-const workflowResult = {
-  answer: finalAnswer,
-  sourceCountExpected: expectedSourceCount,
-  sourceCountRead: sources.length,
-  candidateChangeCount: relevantChangeCount,
-  canonicalChangeCount: canonicalChanges.length,
-  readIssues: readFailures.map((result) => ({
-    sourceId: result.sourceId,
-    title: result.sourceTitle,
-    status: result.readStatus,
-    notes: result.readerNotes,
-  })),
-  audit: audit || null,
-  sources: sourceCoverage,
-  canonicalChanges,
-}
-
-workflowResult
+finalResult
 ```
 
-> **GPT-5.5 judge:** The script has some safety features: structured/capped schemas, per-source null/error normalization after parallel completes, and final synthesis/coverage caveats that can disclose read issues. However, it uses one large unbounded parallel() over all sources, has no bounded waves, no per-wave commits, no armed ScheduleWakeup/stall watchdog, no timeout or explicit retry strategy around individual agents, no resume/cache-stable execution beyond stable source locators, and no backoff when failures spike. A hung reader could deadlock the whole read phase with no notification, and completed work is not committed until the single hard barrier returns. This misses most of the safety-by-construction bar for large fan-out orchestration.
+> **Claude judge:** The script fans out all 33 source reads in a single unbounded parallel() call with no wave-size cap, no stall watchdog, and no per-wave commit before synthesis, meaning one hung agent can stall the entire pipeline indefinitely with no notification. Null-tolerance is present but there is no retry or backoff, and the single hard barrier before deduplication means all completed work waits on the slowest/hung agent.
 
-## With skill — rubric 84%, patterns 100%
+## With skill — rubric 92%, patterns 94%
 
 ```js
 export const meta = {
   name: 'multi-source-auth-qa',
-  description: 'Read 33 design docs and PRs to answer how authentication changed over the last year, dedupe changes, and synthesize a cited timeline.',
+  description: 'Read 33 design docs/PRs with per-source agents, dedupe authentication changes, and synthesize a cited timeline.',
   phases: [
-    { title: 'Initialize' },
+    { title: 'Prepare' },
     { title: 'Read sources' },
-    { title: 'Retry source reads' },
-    { title: 'Dedupe changes' },
-    { title: 'Synthesize timeline' },
+    { title: 'Retry reads' },
+    { title: 'Dedupe' },
+    { title: 'Synthesize cited timeline' },
   ],
 }
 
-// After launching this workflow, arm an external stall watchdog from the surrounding agent:
-// ScheduleWakeup({ delaySeconds: 1200, reason: "watchdog: swarm wf_<id> may stall silently; check journal mtime",
-//   prompt: "Watchdog for run wf_<id>: if the journal mtime is >20 min old AND the workflow task is not 'completed', TaskStop the task then resume via Workflow({scriptPath, resumeFromRunId}); else re-arm another 1200s ScheduleWakeup. Plain one-shot watchdog — NOT a /loop sentinel." })
+const WAVE_SIZE = 6
+const READ_EFFORT = args.readEffort || 'medium'
+const DEDUPE_EFFORT = args.dedupeEffort || 'high'
+const SYNTH_EFFORT = args.synthEffort || 'high'
 
-phase('Initialize')
+const WATCHDOG_TO_ARM_AFTER_LAUNCH = `ScheduleWakeup({
+  delaySeconds: 1200,
+  reason: "watchdog: auth QA swarm <runId> may stall silently; check journal mtime",
+  prompt: "Watchdog for auth QA workflow run <runId> (task <taskId>, scriptPath <scriptPath>): if the workflow task is not completed and the journal mtime is older than 20 min, TaskStop the task then resume with Workflow({ scriptPath: \\"<scriptPath>\\", resumeFromRunId: \\"<runId>\\" }); otherwise re-arm another 1200s ScheduleWakeup. Plain one-shot watchdog -- NOT a /loop sentinel."
+})`
 
-const WAVE_SIZE = Number.isInteger(args?.waveSize) && args.waveSize >= 3 && args.waveSize <= 8 ? args.waveSize : 6
-const FAILURE_BACKOFF_THRESHOLD = 0.4
-const MAX_CHANGES_PER_SOURCE = Number.isInteger(args?.maxChangesPerSource) && args.maxChangesPerSource > 0
-  ? Math.min(args.maxChangesPerSource, 8)
-  : 6
-const DEDUPE_BATCH_SIZE = Number.isInteger(args?.dedupeBatchSize) && args.dedupeBatchSize >= 25
-  ? Math.min(args.dedupeBatchSize, 80)
-  : 60
+phase('Prepare')
+log('After launching this workflow, arm this one-shot stall watchdog from the surrounding agent:')
+log(WATCHDOG_TO_ARM_AFTER_LAUNCH)
 
-function slugify(value) {
-  return String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/https?:\/\//g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 80) || 'source'
+if (!args || !Array.isArray(args.sources)) {
+  throw new Error(
+    'Expected args.sources to be an array of 33 source descriptors. Each descriptor should include a stable key/id and enough information for a subagent to read it: path, url, prNumber, title, repo, and/or content.'
+  )
 }
 
-function inferSourceType(ref) {
-  const s = String(ref || '').trim()
-  if (/^https?:\/\//i.test(s)) return 'url'
-  if (/^(pr[:#-]?)?\d+$/i.test(s) || /^#\d+$/.test(s)) return 'pull_request'
-  if (/\bpull\s*request\b|\bpr\b/i.test(s)) return 'pull_request'
-  return 'design_doc'
+if (args.sources.length !== 33) {
+  log(`Warning: expected 33 sources, received ${args.sources.length}. Continuing with provided sources.`)
 }
 
-function normalizeOneSource(raw, index) {
-  if (typeof raw === 'string') {
-    const ref = raw.trim()
-    return {
-      key: slugify(ref),
-      type: inferSourceType(ref),
-      ref,
-      title: ref,
-      notes: '',
-      ordinal: index + 1,
-    }
-  }
+const QUESTION =
+  args.question ||
+  'How did our authentication system change over the last year?'
 
-  const ref = raw?.ref ?? raw?.url ?? raw?.path ?? raw?.file ?? raw?.pr ?? raw?.number ?? raw?.id ?? raw?.title ?? `source-${index + 1}`
-  const title = raw?.title ?? raw?.name ?? String(ref)
-  return {
-    key: slugify(raw?.key ?? raw?.id ?? raw?.sourceKey ?? title ?? ref),
-    type: raw?.type ?? inferSourceType(ref),
-    ref: String(ref),
-    title: String(title),
-    notes: raw?.notes ? String(raw.notes) : '',
-    ordinal: index + 1,
-  }
-}
+const TIME_WINDOW =
+  args.timeWindow ||
+  (args.windowStart && args.windowEnd
+    ? `${args.windowStart} through ${args.windowEnd}`
+    : 'the last year relative to the project/current launch context; if the exact anchor date is unavailable, infer the anchor from source dates and state that explicitly')
 
-function normalizeSources(inputArgs) {
-  const raw = []
-  if (Array.isArray(inputArgs?.sources)) raw.push(...inputArgs.sources)
-  if (Array.isArray(inputArgs?.designDocs)) raw.push(...inputArgs.designDocs)
-  if (Array.isArray(inputArgs?.docs)) raw.push(...inputArgs.docs)
-  if (Array.isArray(inputArgs?.pullRequests)) raw.push(...inputArgs.pullRequests)
-  if (Array.isArray(inputArgs?.prs)) raw.push(...inputArgs.prs)
-
-  const seen = new Map()
-  const out = []
-  raw.forEach((item, index) => {
-    const src = normalizeOneSource(item, index)
-    const base = src.key
-    const count = seen.get(base) || 0
-    seen.set(base, count + 1)
-    if (count > 0) src.key = `${base}-${count + 1}`
-    out.push(src)
-  })
-  return out
-}
+const AUTH_SCOPE =
+  args.authScope ||
+  'Authentication only: login/sign-in, account creation, identity providers, SSO/SAML/OIDC/OAuth, MFA/passkeys/WebAuthn, passwords, sessions, cookies, refresh/access tokens, API keys when used for authentication, service-to-service authentication, device trust, risk-based or step-up authentication, auth-related migrations, and security hardening. Mention authorization only when it is coupled to an authentication change.'
 
 function chunk(arr, n) {
   const out = []
@@ -763,40 +871,70 @@ function chunk(arr, n) {
   return out
 }
 
-function compactSourceForPrompt(src) {
-  return {
-    key: src.key,
-    type: src.type,
-    ref: src.ref,
-    title: src.title,
-    notes: src.notes,
-    ordinal: src.ordinal,
-  }
+function str(v, fallback = '') {
+  return v === undefined || v === null ? fallback : String(v)
 }
 
-function sortByKey(arr, keyFn) {
-  return [...arr].sort((a, b) => {
-    const ak = keyFn(a)
-    const bk = keyFn(b)
-    return ak > bk ? 1 : ak < bk ? -1 : 0
-  })
+function keyBaseForSource(source, index) {
+  return str(
+    source.key ||
+      source.id ||
+      source.sourceKey ||
+      source.prNumber ||
+      source.pr ||
+      source.path ||
+      source.url ||
+      source.title ||
+      `source-${String(index + 1).padStart(2, '0')}`
+  )
 }
+
+function labelSafe(s) {
+  return str(s)
+    .replace(/[^A-Za-z0-9_.:/#-]+/g, '-')
+    .slice(0, 80)
+}
+
+function compareKey(a, b) {
+  return a.key > b.key ? 1 : a.key < b.key ? -1 : 0
+}
+
+function normalizeSources(inputSources) {
+  const seen = {}
+  const normalized = inputSources.map((source, index) => {
+    const base = keyBaseForSource(source, index)
+    seen[base] = (seen[base] || 0) + 1
+    const key = seen[base] === 1 ? base : `${base}#${seen[base]}`
+    return {
+      key,
+      ordinal: index + 1,
+      title: str(source.title || source.name || source.subject || key),
+      kind: str(source.kind || source.type || (source.prNumber || source.pr ? 'pull_request' : 'design_doc')),
+      locator: str(source.path || source.url || source.prNumber || source.pr || source.id || key),
+      original: source,
+    }
+  })
+  return normalized.sort(compareKey)
+}
+
+const SOURCES = normalizeSources(args.sources)
+const ALL_SOURCE_KEYS = SOURCES.map(s => s.key)
 
 const CITATION_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['sourceKey', 'locator', 'quote'],
+  required: ['sourceKey', 'locator', 'url', 'quote'],
   properties: {
     sourceKey: { type: 'string' },
     locator: {
       type: 'string',
-      maxLength: 220,
-      description: 'Stable locator such as section heading, PR number, file path, commit, or comment reference.',
+      description: 'Precise location: doc heading, section, PR number, file path, line range, commit, or comment locator.',
     },
+    url: { type: 'string', description: 'URL if available; otherwise empty string.' },
     quote: {
       type: 'string',
-      maxLength: 320,
-      description: 'Short supporting quote or paraphrased evidence snippet. Do not include long excerpts.',
+      maxLength: 280,
+      description: 'Short supporting quote or paraphrase from the source; no long excerpts.',
     },
   },
 }
@@ -804,190 +942,220 @@ const CITATION_SCHEMA = {
 const SOURCE_READ_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['sourceKey', 'sourceType', 'sourceTitle', 'coverage', 'changes'],
+  required: [
+    'sourceKey',
+    'sourceTitle',
+    'sourceKind',
+    'readStatus',
+    'relevance',
+    'sourceSummary',
+    'changes',
+    'confidence',
+    'warnings',
+  ],
   properties: {
     sourceKey: { type: 'string' },
-    sourceType: { type: 'string', enum: ['design_doc', 'pull_request', 'url', 'other'] },
-    sourceTitle: { type: 'string', maxLength: 180 },
-    coverage: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['readStatus', 'summary', 'assumptions'],
-      properties: {
-        readStatus: { type: 'string', enum: ['read', 'partially_read', 'not_found', 'not_accessible', 'not_relevant'] },
-        summary: { type: 'string', maxLength: 500 },
-        assumptions: {
-          type: 'array',
-          maxItems: 5,
-          items: { type: 'string', maxLength: 180 },
-        },
-      },
+    sourceTitle: { type: 'string' },
+    sourceKind: { type: 'string' },
+    readStatus: {
+      type: 'string',
+      enum: ['read', 'partially-read', 'not-accessible'],
+    },
+    relevance: {
+      type: 'string',
+      enum: ['has-auth-changes', 'mentions-auth-no-change', 'not-auth-related', 'unclear'],
+    },
+    sourceSummary: {
+      type: 'string',
+      maxLength: 700,
+      description: 'Brief source-specific summary focused only on authentication relevance.',
     },
     changes: {
       type: 'array',
-      maxItems: MAX_CHANGES_PER_SOURCE,
+      maxItems: 6,
       items: {
         type: 'object',
         additionalProperties: false,
         required: [
           'localChangeId',
           'date',
-          'component',
-          'changeType',
+          'datePrecision',
           'title',
-          'before',
-          'after',
+          'changeType',
+          'authAreas',
+          'description',
           'impact',
+          'dedupeHints',
           'citations',
           'confidence',
-          'duplicateHints',
         ],
         properties: {
           localChangeId: {
             type: 'string',
-            maxLength: 120,
-            description: 'Stable id scoped to this source, e.g. sourceKey:c01.',
+            description: 'Stable ID unique within this source, e.g. SRC-1.',
           },
           date: {
             type: 'string',
-            maxLength: 32,
-            description: 'Best date for the change, ideally YYYY-MM-DD; YYYY-MM is acceptable if day is unknown.',
+            description: 'Best known date for the change, decision, merge, rollout, or design milestone. Use ISO date if possible.',
           },
-          component: {
+          datePrecision: {
             type: 'string',
-            maxLength: 100,
-            description: 'Authentication subsystem/component affected.',
+            enum: ['day', 'month', 'quarter', 'year', 'unknown'],
           },
+          title: { type: 'string', maxLength: 160 },
           changeType: {
             type: 'string',
             enum: [
-              'architecture',
-              'login_flow',
-              'mfa',
-              'sessions',
-              'tokens',
-              'oauth_oidc_saml',
-              'passwords',
-              'identity_proofing',
-              'service_auth',
-              'secrets_keys',
-              'risk_detection',
-              'migration_deprecation',
-              'policy',
-              'observability',
-              'other',
+              'added',
+              'removed',
+              'modified',
+              'deprecated',
+              'migrated',
+              'hardened',
+              'documented',
+              'rolled-back',
+              'unknown',
             ],
           },
-          title: { type: 'string', maxLength: 160 },
-          before: { type: 'string', maxLength: 360 },
-          after: { type: 'string', maxLength: 360 },
-          impact: { type: 'string', maxLength: 360 },
+          authAreas: {
+            type: 'array',
+            maxItems: 6,
+            items: { type: 'string' },
+          },
+          description: {
+            type: 'string',
+            maxLength: 900,
+            description: 'What changed, before/after if known, and the auth behavior affected.',
+          },
+          impact: {
+            type: 'string',
+            maxLength: 500,
+            description: 'User/developer/security/operational impact.',
+          },
+          dedupeHints: {
+            type: 'array',
+            maxItems: 6,
+            items: {
+              type: 'string',
+              maxLength: 120,
+              description: 'Names, feature flags, PR numbers, systems, endpoints, migrations, or terms that help merge duplicate mentions.',
+            },
+          },
           citations: {
             type: 'array',
             minItems: 1,
-            maxItems: 3,
+            maxItems: 4,
             items: CITATION_SCHEMA,
           },
-          confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
-          duplicateHints: {
-            type: 'array',
-            maxItems: 4,
-            items: {
-              type: 'string',
-              maxLength: 140,
-              description: 'Names of PRs/docs/features/flags/endpoints likely referring to the same change.',
-            },
+          confidence: {
+            type: 'string',
+            enum: ['high', 'medium', 'low'],
           },
         },
       },
     },
-  },
-}
-
-const CANONICAL_CHANGE_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: [
-    'canonicalId',
-    'date',
-    'sortDate',
-    'component',
-    'changeType',
-    'title',
-    'summary',
-    'before',
-    'after',
-    'impact',
-    'sourceKeys',
-    'localChangeIds',
-    'citations',
-    'confidence',
-  ],
-  properties: {
-    canonicalId: { type: 'string', maxLength: 140 },
-    date: { type: 'string', maxLength: 48 },
-    sortDate: {
+    confidence: {
       type: 'string',
-      maxLength: 32,
-      description: 'Sortable date string, preferably YYYY-MM-DD; use YYYY-MM-00 or YYYY-00-00 for partial dates.',
+      enum: ['high', 'medium', 'low'],
     },
-    component: { type: 'string', maxLength: 100 },
-    changeType: {
-      type: 'string',
-      enum: [
-        'architecture',
-        'login_flow',
-        'mfa',
-        'sessions',
-        'tokens',
-        'oauth_oidc_saml',
-        'passwords',
-        'identity_proofing',
-        'service_auth',
-        'secrets_keys',
-        'risk_detection',
-        'migration_deprecation',
-        'policy',
-        'observability',
-        'other',
-      ],
-    },
-    title: { type: 'string', maxLength: 180 },
-    summary: { type: 'string', maxLength: 520 },
-    before: { type: 'string', maxLength: 420 },
-    after: { type: 'string', maxLength: 420 },
-    impact: { type: 'string', maxLength: 420 },
-    sourceKeys: {
+    warnings: {
       type: 'array',
-      minItems: 1,
-      maxItems: 20,
-      items: { type: 'string' },
+      maxItems: 5,
+      items: { type: 'string', maxLength: 180 },
     },
-    localChangeIds: {
-      type: 'array',
-      minItems: 1,
-      maxItems: 30,
-      items: { type: 'string' },
-    },
-    citations: {
-      type: 'array',
-      minItems: 1,
-      maxItems: 6,
-      items: CITATION_SCHEMA,
-    },
-    confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
   },
 }
 
 const DEDUPE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['canonicalChanges', 'dedupeNotes'],
+  required: ['scope', 'sourceKeysCovered', 'canonicalChanges', 'dedupeNotes'],
   properties: {
+    scope: { type: 'string' },
+    sourceKeysCovered: {
+      type: 'array',
+      items: { type: 'string' },
+    },
     canonicalChanges: {
       type: 'array',
-      maxItems: 140,
-      items: CANONICAL_CHANGE_SCHEMA,
+      maxItems: 80,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: [
+          'canonicalId',
+          'date',
+          'datePrecision',
+          'title',
+          'changeType',
+          'authAreas',
+          'summary',
+          'impact',
+          'sourceKeys',
+          'mergedLocalChangeIds',
+          'citations',
+          'confidence',
+        ],
+        properties: {
+          canonicalId: {
+            type: 'string',
+            description: 'Stable human-readable canonical ID, e.g. AUTH-2025-03-PASSKEYS.',
+          },
+          date: { type: 'string' },
+          datePrecision: {
+            type: 'string',
+            enum: ['day', 'month', 'quarter', 'year', 'unknown'],
+          },
+          title: { type: 'string', maxLength: 180 },
+          changeType: {
+            type: 'string',
+            enum: [
+              'added',
+              'removed',
+              'modified',
+              'deprecated',
+              'migrated',
+              'hardened',
+              'documented',
+              'rolled-back',
+              'unknown',
+            ],
+          },
+          authAreas: {
+            type: 'array',
+            maxItems: 8,
+            items: { type: 'string' },
+          },
+          summary: {
+            type: 'string',
+            maxLength: 900,
+            description: 'Deduped before/after summary.',
+          },
+          impact: {
+            type: 'string',
+            maxLength: 600,
+          },
+          sourceKeys: {
+            type: 'array',
+            minItems: 1,
+            items: { type: 'string' },
+          },
+          mergedLocalChangeIds: {
+            type: 'array',
+            items: { type: 'string' },
+          },
+          citations: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 8,
+            items: CITATION_SCHEMA,
+          },
+          confidence: {
+            type: 'string',
+            enum: ['high', 'medium', 'low'],
+          },
+        },
+      },
     },
     dedupeNotes: {
       type: 'array',
@@ -1000,481 +1168,508 @@ const DEDUPE_SCHEMA = {
 const TIMELINE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['answerMarkdown', 'assumptions', 'timeline', 'themes', 'sourceCoverage', 'gaps', 'confidence'],
+  required: [
+    'question',
+    'timeWindow',
+    'executiveAnswer',
+    'timeline',
+    'themes',
+    'deduplicationSummary',
+    'sourceCoverage',
+    'caveats',
+    'openQuestions',
+  ],
   properties: {
-    answerMarkdown: {
+    question: { type: 'string' },
+    timeWindow: { type: 'string' },
+    executiveAnswer: {
       type: 'string',
-      maxLength: 7000,
-      description: 'Concise final answer with cited timeline and interpretation.',
-    },
-    assumptions: {
-      type: 'array',
-      maxItems: 8,
-      items: { type: 'string', maxLength: 240 },
+      maxLength: 1800,
+      description: 'Direct answer to how authentication changed over the last year.',
     },
     timeline: {
       type: 'array',
-      maxItems: 80,
+      maxItems: 60,
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['date', 'title', 'whatChanged', 'citations'],
+        required: [
+          'date',
+          'datePrecision',
+          'title',
+          'whatChanged',
+          'whyItMatters',
+          'authAreas',
+          'changeType',
+          'citations',
+          'confidence',
+        ],
         properties: {
-          date: { type: 'string', maxLength: 48 },
+          date: { type: 'string' },
+          datePrecision: {
+            type: 'string',
+            enum: ['day', 'month', 'quarter', 'year', 'unknown'],
+          },
           title: { type: 'string', maxLength: 180 },
-          whatChanged: { type: 'string', maxLength: 700 },
+          whatChanged: { type: 'string', maxLength: 1000 },
+          whyItMatters: { type: 'string', maxLength: 650 },
+          authAreas: {
+            type: 'array',
+            maxItems: 8,
+            items: { type: 'string' },
+          },
+          changeType: {
+            type: 'string',
+            enum: [
+              'added',
+              'removed',
+              'modified',
+              'deprecated',
+              'migrated',
+              'hardened',
+              'documented',
+              'rolled-back',
+              'unknown',
+            ],
+          },
           citations: {
             type: 'array',
             minItems: 1,
-            maxItems: 6,
+            maxItems: 8,
             items: CITATION_SCHEMA,
+          },
+          confidence: {
+            type: 'string',
+            enum: ['high', 'medium', 'low'],
           },
         },
       },
     },
     themes: {
       type: 'array',
-      maxItems: 10,
+      maxItems: 8,
       items: {
         type: 'object',
         additionalProperties: false,
         required: ['theme', 'summary', 'supportingChangeIds'],
         properties: {
-          theme: { type: 'string', maxLength: 120 },
-          summary: { type: 'string', maxLength: 520 },
+          theme: { type: 'string', maxLength: 140 },
+          summary: { type: 'string', maxLength: 700 },
           supportingChangeIds: {
             type: 'array',
-            maxItems: 12,
             items: { type: 'string' },
           },
         },
       },
     },
+    deduplicationSummary: {
+      type: 'string',
+      maxLength: 900,
+    },
     sourceCoverage: {
-      type: 'array',
-      maxItems: 40,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['sourceKey', 'status', 'notes'],
-        properties: {
-          sourceKey: { type: 'string' },
-          status: { type: 'string', enum: ['used', 'read_no_relevant_changes', 'missing_or_failed'] },
-          notes: { type: 'string', maxLength: 260 },
+      type: 'object',
+      additionalProperties: false,
+      required: [
+        'totalSourcesPlanned',
+        'sourcesAnalyzed',
+        'sourcesWithAuthChanges',
+        'sourcesWithoutAuthChanges',
+        'missingSourceKeys',
+        'partial',
+      ],
+      properties: {
+        totalSourcesPlanned: { type: 'number' },
+        sourcesAnalyzed: { type: 'number' },
+        sourcesWithAuthChanges: { type: 'number' },
+        sourcesWithoutAuthChanges: { type: 'number' },
+        missingSourceKeys: {
+          type: 'array',
+          items: { type: 'string' },
         },
+        partial: { type: 'boolean' },
       },
     },
-    gaps: {
+    caveats: {
       type: 'array',
-      maxItems: 12,
-      items: { type: 'string', maxLength: 320 },
+      maxItems: 10,
+      items: { type: 'string', maxLength: 300 },
     },
-    confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+    openQuestions: {
+      type: 'array',
+      maxItems: 10,
+      items: { type: 'string', maxLength: 300 },
+    },
   },
 }
 
-const sources = normalizeSources(args)
-if (!sources.length) {
-  throw new Error(
-    'No sources provided. Pass args.sources, args.designDocs/docs, and/or args.pullRequests/prs as 33 design doc / PR references.'
-  )
-}
-
-if (sources.length !== 33) {
-  log(`Expected 33 sources; received ${sources.length}. Continuing with provided source set.`)
-}
-
-const timeWindow = args?.timeWindow
-  ? String(args.timeWindow)
-  : 'the last year covered by the provided design docs and PR timestamps; state the inferred bounds explicitly if needed'
-
-log(`Preparing to read ${sources.length} sources in waves of ${WAVE_SIZE}.`)
-
-function buildSourcePrompt(src) {
-  return `You are one worker in a multi-source QA swarm.
-
-Question: "How did our authentication system change over the last year?"
-
-Read exactly this source and extract only changes relevant to authentication.
-
-Source:
-${JSON.stringify(compactSourceForPrompt(src), null, 2)}
-
-Time window:
-${timeWindow}
-
-Instructions:
-- Use available repository / PR / document tools to inspect the referenced source.
-- If this is a design doc, read the document and any directly referenced sections needed to understand auth changes.
-- If this is a pull request, inspect the PR description, diff, linked issue/docs when available, and relevant comments.
-- Focus on authentication: login, MFA, sessions, token issuance/validation, OAuth/OIDC/SAML, password flows, service-to-service auth, auth-related secrets/keys, risk checks, auth observability, migrations/deprecations, and policy that affects authentication behavior.
-- Exclude pure authorization/RBAC changes unless they directly alter authentication behavior or identity/session establishment.
-- Return at most ${MAX_CHANGES_PER_SOURCE} relevant changes.
-- Keep outputs lean. Do not paste long document excerpts. Provide short evidence snippets and stable locators.
-- Every change needs at least one citation from this source.
-- If the source is inaccessible or has no relevant authentication changes, return an empty changes array and explain in coverage.
-- The returned sourceKey MUST be exactly "${src.key}".
-- Make localChangeId stable and scoped to the source, e.g. "${src.key}:c01".
-
-Return only data matching the schema.`
-}
-
-async function runSource(src) {
-  const result = await agent(buildSourcePrompt(src), {
-    label: `read:${src.key}`,
-    phase: 'Read sources',
-    schema: SOURCE_READ_SCHEMA,
-    effort: 'medium',
-  })
-
-  if (!result) return null
-
-  return {
-    ...result,
-    sourceKey: src.key,
-    sourceType: result.sourceType || src.type,
-    sourceTitle: result.sourceTitle || src.title,
+async function safeAgent(prompt, opts) {
+  try {
+    return await agent(prompt, opts)
+  } catch (err) {
+    log(`Agent threw in ${opts && opts.label ? opts.label : 'unlabeled-agent'}; treating as null.`)
+    return null
   }
 }
 
-const done = []
-let failed = []
-let deferred = []
-let instabilityDetected = false
+function sourceReadPrompt(src) {
+  return `You are one source-reading QA agent in a multi-source authentication history workflow.
 
-const waves = chunk(sources, WAVE_SIZE)
+Question to answer later:
+${QUESTION}
 
-phase('Read sources')
-for (let w = 0; w < waves.length; w++) {
-  const wave = waves[w]
-  log(`Read wave ${w + 1}/${waves.length}: ${wave.map(s => s.key).join(', ')}`)
+Time window:
+${TIME_WINDOW}
 
-  const batch = await parallel(wave.map(src => () => runSource(src)))
+Authentication scope:
+${AUTH_SCOPE}
+
+Your assignment:
+Read exactly this one source descriptor and extract only authentication-system changes relevant to the question. Use available repository tools, PR tools, local files, and/or embedded source content as appropriate. If this is a pull request, inspect the PR description and relevant changed files/comments when available. If this is a design doc, inspect the decision sections, timelines, status, and linked PRs only when needed to understand this source.
+
+Source descriptor JSON:
+${JSON.stringify(src)}
+
+Rules:
+- Return data only in the schema.
+- Do not invent changes. If the source is inaccessible, say readStatus="not-accessible" and return no changes.
+- If the source mentions authentication but records no actual change, use relevance="mentions-auth-no-change".
+- Prefer changes within the stated time window. Include a boundary item only if it is needed to explain the year-over-year change, and make the date uncertainty explicit.
+- Deduplication happens later, but include dedupeHints such as PR numbers, feature flags, migration names, service names, endpoints, protocols, and identity-provider names.
+- Each change must include at least one precise citation with sourceKey="${src.key}". Use short quotes/paraphrases only.
+- Return at most 6 changes; pick the most consequential/auth-relevant ones.`
+}
+
+function readSource(src) {
+  return safeAgent(sourceReadPrompt(src), {
+    label: `read:${labelSafe(src.key)}`,
+    phase: 'Read sources',
+    schema: SOURCE_READ_SCHEMA,
+    effort: READ_EFFORT,
+  })
+}
+
+const sourceResults = []
+let failedSources = []
+let deferredSources = []
+let instabilityBackoff = false
+
+const sourceWaves = chunk(SOURCES, WAVE_SIZE)
+
+for (let w = 0; w < sourceWaves.length; w++) {
+  phase(`Read sources wave ${w + 1}/${sourceWaves.length}`)
+  const wave = sourceWaves[w]
+  const batch = await parallel(wave.map(src => () => readSource(src)))
 
   let nulls = 0
   batch.forEach((result, i) => {
-    if (result) {
-      done.push(result)
-    } else {
+    if (result) sourceResults.push(result)
+    else {
       nulls += 1
-      failed.push(wave[i])
+      failedSources.push(wave[i])
     }
   })
 
-  log(`Read wave ${w + 1}: ${batch.length - nulls}/${batch.length} ok; ${failed.length} source(s) queued for retry.`)
+  log(
+    `Read wave ${w + 1}/${sourceWaves.length}: ${batch.length - nulls}/${batch.length} returned; ` +
+      `${sourceResults.length}/${SOURCES.length} sources analyzed so far.`
+  )
 
-  if (nulls / batch.length > FAILURE_BACKOFF_THRESHOLD) {
-    const remaining = waves.slice(w + 1).flat()
-    deferred.push(...remaining)
-    instabilityDetected = true
-    log(`instability: ${nulls}/${batch.length} failed this wave — backing off; return partial, resume later`)
+  if (nulls / batch.length > 0.4) {
+    const remaining = sourceWaves.slice(w + 1).flat()
+    deferredSources = deferredSources.concat(remaining)
+    instabilityBackoff = true
+    log(
+      `instability: ${nulls}/${batch.length} failed this wave -- backing off; ` +
+        `deferring ${remaining.length} unread sources and continuing with partial synthesis.`
+    )
     break
   }
 }
 
-if (failed.length && !instabilityDetected) {
-  phase('Retry source reads')
-  const retryWaves = chunk(failed, WAVE_SIZE)
-  failed = []
+if (failedSources.length && !instabilityBackoff) {
+  phase('Retry reads')
+  const retryWaves = chunk(failedSources, WAVE_SIZE)
+  const stillFailed = []
 
-  for (let rw = 0; rw < retryWaves.length; rw++) {
-    const wave = retryWaves[rw]
-    log(`Retry wave ${rw + 1}/${retryWaves.length}: ${wave.map(s => s.key).join(', ')}`)
-
-    const batch = await parallel(wave.map(src => () => runSource(src)))
+  for (let w = 0; w < retryWaves.length; w++) {
+    const wave = retryWaves[w]
+    const batch = await parallel(wave.map(src => () => readSource(src)))
 
     let nulls = 0
     batch.forEach((result, i) => {
-      if (result) {
-        done.push(result)
-      } else {
+      if (result) sourceResults.push(result)
+      else {
         nulls += 1
-        failed.push(wave[i])
+        stillFailed.push(wave[i])
       }
     })
 
-    log(`Retry wave ${rw + 1}: recovered ${batch.length - nulls}/${batch.length}; still missing ${failed.length}.`)
+    log(
+      `Retry wave ${w + 1}/${retryWaves.length}: recovered ${batch.length - nulls}/${batch.length}; ` +
+        `${sourceResults.length}/${SOURCES.length} sources analyzed total.`
+    )
 
-    if (nulls / batch.length > FAILURE_BACKOFF_THRESHOLD) {
-      const untriedRetrySources = retryWaves.slice(rw + 1).flat()
-      failed.push(...untriedRetrySources)
-      instabilityDetected = true
-      log(`instability: ${nulls}/${batch.length} failed this retry wave — backing off; return partial, resume later`)
+    if (nulls / batch.length > 0.4) {
+      const remainingRetry = retryWaves.slice(w + 1).flat()
+      deferredSources = deferredSources.concat(remainingRetry)
+      instabilityBackoff = true
+      log(
+        `instability: ${nulls}/${batch.length} failed in retry wave -- backing off; ` +
+          `deferring ${remainingRetry.length} retry sources.`
+      )
       break
     }
   }
+
+  failedSources = stillFailed
 }
 
-const bestResultBySource = new Map()
-for (const result of done) {
-  if (!bestResultBySource.has(result.sourceKey)) bestResultBySource.set(result.sourceKey, result)
-}
-const sourceResults = sortByKey([...bestResultBySource.values()], r => r.sourceKey)
-
-const readSourceKeys = new Set(sourceResults.map(r => r.sourceKey))
-const missingSources = sources
-  .filter(src => !readSourceKeys.has(src.key))
-  .map(src => ({
-    key: src.key,
-    type: src.type,
-    ref: src.ref,
-    title: src.title,
-    reason: deferred.some(d => d.key === src.key) ? 'deferred_after_instability_backoff' : 'read_failed',
-  }))
-
-if (missingSources.length) {
-  log(`partial: missing ${missingSources.length}/${sources.length} sources: ${missingSources.map(s => s.key).join(', ')}`)
+const haveSourceKeys = new Set(sourceResults.map(r => r.sourceKey))
+const missingSourceKeys = ALL_SOURCE_KEYS.filter(key => !haveSourceKeys.has(key))
+if (missingSourceKeys.length) {
+  log(`partial: missing ${missingSourceKeys.length}/${SOURCES.length} source reads: ${missingSourceKeys.join(', ')}`)
 }
 
-const rawChanges = []
-for (const result of sourceResults) {
-  const changes = Array.isArray(result.changes) ? result.changes : []
-  changes.forEach((change, index) => {
-    const localChangeId = change.localChangeId || `${result.sourceKey}:c${String(index + 1).padStart(2, '0')}`
-    rawChanges.push({
-      ...change,
-      localChangeId,
-      sourceKey: result.sourceKey,
-      sourceTitle: result.sourceTitle,
-      citations: (change.citations || []).slice(0, 3).map(c => ({
-        sourceKey: result.sourceKey,
-        locator: c.locator || result.sourceTitle || result.sourceKey,
-        quote: c.quote || '',
-      })),
-    })
-  })
-}
+const sortedSourceResults = sourceResults
+  .slice()
+  .sort((a, b) => (a.sourceKey > b.sourceKey ? 1 : a.sourceKey < b.sourceKey ? -1 : 0))
 
-rawChanges.sort((a, b) => {
-  const ak = `${a.date || ''}|${a.component || ''}|${a.title || ''}|${a.sourceKey || ''}|${a.localChangeId || ''}`
-  const bk = `${b.date || ''}|${b.component || ''}|${b.title || ''}|${b.sourceKey || ''}|${b.localChangeId || ''}`
-  return ak > bk ? 1 : ak < bk ? -1 : 0
-})
-
-log(`Extracted ${rawChanges.length} raw authentication change mention(s) from ${sourceResults.length} readable source(s).`)
-
-function fallbackCanonicalFromRaw(change) {
-  const canonicalId = slugify(`${change.date || 'unknown'}-${change.component || 'auth'}-${change.title || change.localChangeId}`)
+function sourceResultLean(result) {
   return {
-    canonicalId,
-    date: change.date || 'unknown',
-    sortDate: normalizeSortDate(change.date || ''),
-    component: change.component || 'authentication',
-    changeType: change.changeType || 'other',
-    title: change.title || 'Authentication change',
-    summary: change.impact || change.after || change.before || 'Authentication-related change extracted from source.',
-    before: change.before || 'Not specified in source.',
-    after: change.after || 'Not specified in source.',
-    impact: change.impact || 'Impact not specified in source.',
-    sourceKeys: [change.sourceKey],
-    localChangeIds: [change.localChangeId],
-    citations: change.citations && change.citations.length
-      ? change.citations.slice(0, 3)
-      : [{ sourceKey: change.sourceKey, locator: change.sourceTitle || change.sourceKey, quote: 'Source referenced this authentication change.' }],
-    confidence: change.confidence || 'low',
+    sourceKey: result.sourceKey,
+    sourceTitle: result.sourceTitle,
+    sourceKind: result.sourceKind,
+    readStatus: result.readStatus,
+    relevance: result.relevance,
+    sourceSummary: result.sourceSummary,
+    changes: (result.changes || []).map(change => ({
+      localChangeId: `${result.sourceKey}:${change.localChangeId}`,
+      date: change.date,
+      datePrecision: change.datePrecision,
+      title: change.title,
+      changeType: change.changeType,
+      authAreas: change.authAreas || [],
+      description: change.description,
+      impact: change.impact,
+      dedupeHints: change.dedupeHints || [],
+      citations: change.citations || [],
+      confidence: change.confidence,
+    })),
+    confidence: result.confidence,
+    warnings: result.warnings || [],
   }
 }
 
-function normalizeSortDate(date) {
-  const s = String(date || '').trim()
-  const mDay = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
-  if (mDay) return `${mDay[1]}-${mDay[2]}-${mDay[3]}`
-  const mMonth = s.match(/^(\d{4})-(\d{2})/)
-  if (mMonth) return `${mMonth[1]}-${mMonth[2]}-00`
-  const mYear = s.match(/^(\d{4})/)
-  if (mYear) return `${mYear[1]}-00-00`
-  return '9999-99-99'
-}
+function dedupeShardPrompt(shardId, shardResults) {
+  return `You are a deduplication agent for a multi-source authentication QA workflow.
 
-function buildDedupePrompt(changes, scopeLabel) {
-  return `Dedupe authentication change mentions for the multi-source QA answer.
-
-Question: "How did our authentication system change over the last year?"
-Scope: ${scopeLabel}
-Time window: ${timeWindow}
-
-Input change mentions:
-${JSON.stringify(changes, null, 2)}
-
-Instructions:
-- Merge duplicate and near-duplicate mentions of the same actual authentication change across design docs and PRs.
-- Common duplicate pattern: design doc proposes a change, PR implements it, follow-up PR migrates or cleans up the same change.
-- Do NOT merge merely related changes if they changed different authentication behavior or happened at meaningfully different stages.
-- Preserve citations from all supporting sources, capped to the strongest 6.
-- Preserve localChangeIds from all merged mentions.
-- Prefer specific shipped PR dates over vague design-doc dates when describing implementation; mention design/proposal dates in summary if useful.
-- canonicalId must be stable and human-readable.
-- sortDate must be sortable: YYYY-MM-DD, or YYYY-MM-00 / YYYY-00-00 for partial dates.
-- Keep summaries concise; output only schema data.`
-}
-
-let dedupeNotes = []
-let canonicalChanges = []
-
-phase('Dedupe changes')
-
-if (rawChanges.length === 0) {
-  canonicalChanges = []
-  dedupeNotes.push('No relevant authentication changes were extracted from readable sources.')
-} else {
-  const dedupeBatches = chunk(rawChanges, DEDUPE_BATCH_SIZE)
-  log(`Dedupe pass 1: ${dedupeBatches.length} batch(es).`)
-
-  const batchDedupeResults = await parallel(dedupeBatches.map((changes, i) => () =>
-    agent(buildDedupePrompt(changes, `batch ${i + 1}/${dedupeBatches.length}`), {
-      label: `dedupe:batch-${i + 1}`,
-      phase: 'Dedupe changes',
-      schema: DEDUPE_SCHEMA,
-      effort: 'high',
-    })
-  ))
-
-  let interim = []
-  batchDedupeResults.forEach((result, i) => {
-    if (result) {
-      interim.push(...(result.canonicalChanges || []))
-      dedupeNotes.push(...(result.dedupeNotes || []))
-    } else {
-      dedupeNotes.push(`Dedupe batch ${i + 1} failed; used one-canonical-change-per-raw-change fallback for that batch.`)
-      interim.push(...dedupeBatches[i].map(fallbackCanonicalFromRaw))
-    }
-  })
-
-  interim = sortByKey(interim, c => `${normalizeSortDate(c.sortDate || c.date)}|${c.canonicalId || c.title}`)
-
-  if (dedupeBatches.length > 1 || interim.length !== rawChanges.length) {
-    log(`Dedupe pass 2: final cross-batch merge over ${interim.length} canonical candidate(s).`)
-    const finalDedupe = await agent(buildDedupePrompt(interim, 'final cross-batch canonical merge'), {
-      label: 'dedupe:final',
-      phase: 'Dedupe changes',
-      schema: DEDUPE_SCHEMA,
-      effort: 'high',
-    })
-
-    if (finalDedupe) {
-      canonicalChanges = finalDedupe.canonicalChanges || []
-      dedupeNotes.push(...(finalDedupe.dedupeNotes || []))
-    } else {
-      canonicalChanges = interim
-      dedupeNotes.push('Final cross-batch dedupe failed; using pass-1 canonical candidates.')
-    }
-  } else {
-    canonicalChanges = interim
-  }
-}
-
-canonicalChanges = sortByKey(canonicalChanges, c => `${normalizeSortDate(c.sortDate || c.date)}|${c.canonicalId || c.title}`)
-
-const coverageForPrompt = sources.map(src => {
-  const result = bestResultBySource.get(src.key)
-  if (!result) {
-    const missing = missingSources.find(m => m.key === src.key)
-    return {
-      sourceKey: src.key,
-      title: src.title,
-      status: 'missing_or_failed',
-      notes: missing?.reason || 'not read',
-    }
-  }
-  const changeCount = Array.isArray(result.changes) ? result.changes.length : 0
-  return {
-    sourceKey: src.key,
-    title: src.title,
-    status: changeCount > 0 ? 'used' : 'read_no_relevant_changes',
-    notes: result.coverage?.summary || `${changeCount} relevant change(s) extracted`,
-  }
-})
-
-function buildSynthesisPrompt() {
-  return `Synthesize the final answer for the user.
-
-Question: "How did our authentication system change over the last year?"
+Question:
+${QUESTION}
 
 Time window:
-${timeWindow}
+${TIME_WINDOW}
 
-Canonical deduped authentication changes, sorted for stability:
-${JSON.stringify(canonicalChanges, null, 2)}
+Task:
+Deduplicate authentication changes within this shard of source-read results. Merge mentions of the same underlying change across docs/PRs. Preserve citations from all supporting sources. Do not over-merge separate changes just because they touch the same auth area.
 
-Source coverage:
-${JSON.stringify(coverageForPrompt, null, 2)}
+Shard ID: ${shardId}
 
-Missing or failed sources:
-${JSON.stringify(missingSources, null, 2)}
+Shard source-read results JSON:
+${JSON.stringify(shardResults.map(sourceResultLean))}
 
-Dedupe notes:
-${JSON.stringify(dedupeNotes.slice(0, 20), null, 2)}
+Rules:
+- Return canonicalChanges only for actual authentication-system changes.
+- Multiple sources may cite the same canonical change; merge them.
+- Keep citations concise and useful.
+- sourceKeysCovered must list every sourceKey in this shard.
+- canonicalId should be stable and descriptive, based on date/title/system, not on array position.`
+}
+
+phase('Dedupe')
+const dedupeInputShards = chunk(sortedSourceResults, 8)
+let shardDedupeResults = []
+
+if (dedupeInputShards.length) {
+  const shardBatch = await parallel(
+    dedupeInputShards.map((shard, i) => () =>
+      safeAgent(dedupeShardPrompt(`shard-${i + 1}`, shard), {
+        label: `dedupe:shard-${i + 1}`,
+        phase: 'Dedupe',
+        schema: DEDUPE_SCHEMA,
+        effort: DEDUPE_EFFORT,
+      })
+    )
+  )
+  shardDedupeResults = shardBatch.filter(Boolean)
+  const shardNulls = shardBatch.filter(r => r === null).length
+  if (shardNulls) {
+    log(`Dedupe shard warning: ${shardNulls}/${shardBatch.length} shard dedupe agents returned null; global dedupe will use remaining shard data plus raw reads.`)
+  }
+} else {
+  log('No source reads returned; skipping shard dedupe and producing partial empty synthesis.')
+}
+
+function globalDedupePrompt(shardResults, rawResults) {
+  return `You are the global deduplication agent for the authentication QA workflow.
+
+Question:
+${QUESTION}
+
+Time window:
+${TIME_WINDOW}
+
+Authentication scope:
+${AUTH_SCOPE}
+
+Task:
+Merge all shard-level canonical changes into one deduplicated set of authentication-system changes. Use raw source-read results as a fallback/check, especially if any shard dedupe was missing. Preserve high-value citations and source coverage.
+
+Missing source reads:
+${JSON.stringify(missingSourceKeys)}
+
+Shard dedupe results JSON:
+${JSON.stringify(shardResults)}
+
+Raw source-read results JSON:
+${JSON.stringify(rawResults.map(sourceResultLean))}
+
+Rules:
+- Deduplicate aggressively but correctly: same feature/flag/migration/PR/system behavior should be one canonical change; separate phases or rollbacks should remain separate timeline entries if materially different.
+- Keep all canonical changes relevant to "${QUESTION}" and "${TIME_WINDOW}".
+- Sort canonicalChanges chronologically when possible; unknown dates last.
+- Every canonical change needs at least one citation.
+- If evidence is weak or conflicting, lower confidence and explain in dedupeNotes.`
+}
+
+const globalDedupe =
+  sortedSourceResults.length === 0
+    ? {
+        scope: 'global-empty',
+        sourceKeysCovered: [],
+        canonicalChanges: [],
+        dedupeNotes: ['No source-read agents returned results; no deduplication was possible.'],
+      }
+    : await safeAgent(globalDedupePrompt(shardDedupeResults, sortedSourceResults), {
+        label: 'dedupe:global',
+        phase: 'Dedupe',
+        schema: DEDUPE_SCHEMA,
+        effort: DEDUPE_EFFORT,
+      })
+
+const dedupedChanges = globalDedupe && Array.isArray(globalDedupe.canonicalChanges)
+  ? globalDedupe.canonicalChanges
+  : []
+
+if (!globalDedupe) {
+  log('Global dedupe returned null; final synthesis will dedupe directly from raw source-read results.')
+}
+
+function timelinePrompt() {
+  const coverage = {
+    totalSourcesPlanned: SOURCES.length,
+    sourceKeysPlanned: ALL_SOURCE_KEYS,
+    sourcesAnalyzed: sortedSourceResults.length,
+    missingSourceKeys,
+    instabilityBackoff,
+    readStatuses: sortedSourceResults.map(r => ({
+      sourceKey: r.sourceKey,
+      readStatus: r.readStatus,
+      relevance: r.relevance,
+      changeCount: Array.isArray(r.changes) ? r.changes.length : 0,
+    })),
+  }
+
+  return `You are the final synthesis agent for a multi-source QA task.
+
+Question:
+${QUESTION}
+
+Time window:
+${TIME_WINDOW}
+
+Authentication scope:
+${AUTH_SCOPE}
+
+Your task:
+Produce a deduplicated, cited timeline answering how the authentication system changed over the last year.
+
+Coverage / partial-input status JSON:
+${JSON.stringify(coverage)}
+
+Global deduped canonical changes JSON:
+${JSON.stringify(globalDedupe || { canonicalChanges: [], dedupeNotes: ['Global dedupe unavailable; dedupe from raw reads.'] })}
+
+Raw source-read results JSON:
+${JSON.stringify(sortedSourceResults.map(sourceResultLean))}
 
 Instructions:
-- Produce a cited, chronological timeline explaining how the authentication system changed over the last year.
-- Start with a direct summary answer, then timeline.
-- Use citations from the canonical changes. Cite with sourceKey plus locator; do not invent citations.
-- Explain major themes, such as migration from one auth mechanism to another, MFA/session/token changes, identity-provider changes, deprecations, or security hardening.
-- If some sources are missing, explicitly flag the gap and avoid claiming the review is complete.
-- If dates are partial or inferred, state that assumption.
-- Distinguish design/proposal from shipped implementation when the evidence supports it.
-- Keep output concise and evidence-driven.`
+- Answer the question directly in executiveAnswer.
+- Build timeline entries from deduplicated changes, chronological where possible.
+- Each timeline entry must include citations. Cite sourceKey plus locator/url/short quote.
+- Do not silently hide missing source reads. If any are missing, mark sourceCoverage.partial=true and list them in caveats.
+- Explain deduplication at a high level: what kinds of duplicates were merged, especially design-doc vs PR mentions of the same change.
+- If the source evidence is thin/conflicting, say so.
+- Prefer concise, decision-ready language over exhaustive prose.
+- Return only the schema object.`
 }
 
-phase('Synthesize timeline')
-const synthesized = await agent(buildSynthesisPrompt(), {
+phase('Synthesize cited timeline')
+const timeline = await safeAgent(timelinePrompt(), {
   label: 'synthesize:cited-auth-timeline',
-  phase: 'Synthesize timeline',
+  phase: 'Synthesize cited timeline',
   schema: TIMELINE_SCHEMA,
-  effort: 'high',
+  effort: SYNTH_EFFORT,
 })
 
-function fallbackTimeline() {
-  const timeline = canonicalChanges.slice(0, 80).map(c => ({
-    date: c.date,
-    title: c.title,
-    whatChanged: `${c.summary} Before: ${c.before} After: ${c.after} Impact: ${c.impact}`,
-    citations: (c.citations || []).slice(0, 6),
-  }))
-
-  const gaps = []
-  if (missingSources.length) {
-    gaps.push(`Partial result: ${missingSources.length}/${sources.length} sources were missing, failed, or deferred after instability backoff.`)
-  }
-  if (!canonicalChanges.length) {
-    gaps.push('No relevant authentication changes were extracted from readable sources.')
-  }
-
-  return {
-    answerMarkdown:
-      canonicalChanges.length === 0
-        ? `No relevant authentication-system changes were extracted from the readable sources. ${gaps.join(' ')}`
-        : `Authentication changed through ${canonicalChanges.length} deduped change(s) across ${sourceResults.length} readable source(s). The structured timeline contains the cited details. ${gaps.join(' ')}`,
-    assumptions: [timeWindow],
-    timeline,
-    themes: [],
-    sourceCoverage: coverageForPrompt.map(c => ({
-      sourceKey: c.sourceKey,
-      status: c.status,
-      notes: c.notes,
-    })),
-    gaps,
-    confidence: missingSources.length ? 'medium' : 'low',
-  }
-}
-
-const timeline = synthesized || fallbackTimeline()
+const sourcesWithAuthChanges = sortedSourceResults.filter(r => r.relevance === 'has-auth-changes').length
+const sourcesWithoutAuthChanges = sortedSourceResults.filter(r => r.relevance !== 'has-auth-changes').length
 
 return {
-  question: 'how did our authentication system change over the last year?',
-  sourceCountExpected: 33,
-  sourceCountProvided: sources.length,
-  sourceCountRead: sourceResults.length,
-  missingSources,
-  instabilityDetected,
-  rawChangeMentionCount: rawChanges.length,
-  canonicalChangeCount: canonicalChanges.length,
-  timeline,
-  canonicalChanges,
-  sourceCoverage: coverageForPrompt,
-  dedupeNotes: dedupeNotes.slice(0, 40),
+  question: QUESTION,
+  timeWindow: TIME_WINDOW,
+  watchdogToArmAfterLaunch: WATCHDOG_TO_ARM_AFTER_LAUNCH,
+  counts: {
+    sourcesPlanned: SOURCES.length,
+    sourcesAnalyzed: sortedSourceResults.length,
+    missingSourceReads: missingSourceKeys.length,
+    sourcesWithAuthChanges,
+    sourcesWithoutAuthChanges,
+    shardDedupeResults: shardDedupeResults.length,
+    dedupedChanges: dedupedChanges.length,
+    instabilityBackoff,
+  },
+  missingSourceKeys,
+  analyzedSourceKeys: sortedSourceResults.map(r => r.sourceKey),
+  sourceFindings: sortedSourceResults,
+  dedupe: globalDedupe,
+  citedTimeline: timeline || {
+    question: QUESTION,
+    timeWindow: TIME_WINDOW,
+    executiveAnswer:
+      'Final synthesis agent returned null. Use sourceFindings and dedupe outputs from this workflow result or resume the workflow using the same scriptPath and runId.',
+    timeline: [],
+    themes: [],
+    deduplicationSummary: globalDedupe
+      ? 'Global dedupe completed, but final timeline synthesis failed.'
+      : 'Global dedupe and final timeline synthesis did not complete.',
+    sourceCoverage: {
+      totalSourcesPlanned: SOURCES.length,
+      sourcesAnalyzed: sortedSourceResults.length,
+      sourcesWithAuthChanges,
+      sourcesWithoutAuthChanges,
+      missingSourceKeys,
+      partial: true,
+    },
+    caveats: [
+      'Final synthesis agent returned null; resume the workflow to regenerate the cited timeline.',
+      missingSourceKeys.length
+        ? `Missing source reads: ${missingSourceKeys.join(', ')}`
+        : 'All source-read agents returned, but synthesis failed.',
+    ],
+    openQuestions: [],
+  },
 }
 ```
 
-> **GPT-5.5 judge:** The workflow meets most of the safety bar: it uses bounded waves with a default size of 6, tolerates null agent results, retries failed source reads, dedupes with fallbacks, uses capped schemas/lean outputs, synthesizes partial results while explicitly flagging missing sources, and backs off when a wave has a high failure rate. It also includes a ScheduleWakeup watchdog instruction with TaskStop/resume guidance. However, the watchdog is only documented as an external action rather than actually armed in the script, each wave still has a hard parallel() barrier so one hung agent can stall the wave until the external watchdog intervenes, and completed work is accumulated in memory rather than explicitly persisted after each wave, relying on workflow journaling/resume behavior. Overall it is substantially safe-by-construction but not perfect.
+> **Claude judge:** The script demonstrates nearly all required safety properties: (1) bounded WAVE_SIZE=6 waves with chunk(); (2) safeAgent() null-tolerance plus a dedicated retry phase for failed sources; (3) results committed per wave into sourceResults before synthesis; (4) ScheduleWakeup watchdog is generated and logged (though it must be armed externally by the surrounding agent, which is noted explicitly); (5) no Date.now/Math.random in prompts—keys are deterministic; (6) lean schemas with maxLength/maxItems caps throughout; (7) synthesis tolerates partial input, flags missing sources, marks partial=true, and provides a fallback citedTimeline if synthesis returns null; (8) explicit instabilityBackoff when >40% of a wave fails, deferring remaining sources and breaking out of the loop. The only minor gap is that the watchdog is instructional/logged rather than directly called, but the script correctly acknowledges this is an agent-level concern and provides the exact call string.
 

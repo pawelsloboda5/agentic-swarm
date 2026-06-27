@@ -1,6 +1,6 @@
 # migration-swarm — `gpt-5.5`
 
-> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: GPT-5.5.
+> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: Claude (claude-sonnet-4-6).
 
 **Task**
 
@@ -8,73 +8,449 @@
 
 ---
 
-## Baseline (no skill) — rubric 25%, patterns 38%
+## Baseline (no skill) — rubric 28%, patterns 44%
 
 ```js
 export const meta = {
   name: 'migration-swarm-fetchUser-to-getUser',
-  description:
-    'Migrate 35 call sites from deprecated fetchUser(id) to getUser({ id }) using isolated per-site subagents, verify type correctness, and report outcomes.',
+  description: 'Migrate 35 deprecated fetchUser(id) call sites to getUser({ id }) using isolated subagents, verify type-correctness, and produce a migration report.',
   phases: [
     { title: 'Discover call sites' },
-    { title: 'Migrate in isolation' },
-    { title: 'Verify migrations' },
-    { title: 'Integrate verified changes' },
-    { title: 'Final validation and report' },
+    { title: 'Migrate in isolated swarm' },
+    { title: 'Synthesize report' },
   ],
+}
+
+const SITE_COUNT_TARGET = 35
+
+const callSiteSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['sites', 'notes'],
+  properties: {
+    notes: { type: 'string' },
+    sites: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'file', 'line', 'symbolContext', 'currentSnippet', 'migrationHint'],
+        properties: {
+          id: { type: 'string' },
+          file: { type: 'string' },
+          line: { type: 'integer', minimum: 1 },
+          symbolContext: { type: 'string' },
+          currentSnippet: { type: 'string' },
+          migrationHint: { type: 'string' },
+        },
+      },
+    },
+  },
+}
+
+const migrationResultSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'siteId',
+    'file',
+    'line',
+    'status',
+    'changedFiles',
+    'summary',
+    'verification',
+    'manualAttentionReason',
+    'residualFetchUserReferences',
+  ],
+  properties: {
+    siteId: { type: 'string' },
+    file: { type: 'string' },
+    line: { type: 'integer', minimum: 1 },
+    status: {
+      type: 'string',
+      enum: ['migrated_verified', 'migrated_unverified', 'manual_attention', 'not_found', 'skipped'],
+    },
+    changedFiles: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    summary: { type: 'string' },
+    verification: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['typecheckRun', 'typecheckPassed', 'commandsRun', 'outputSummary'],
+      properties: {
+        typecheckRun: { type: 'boolean' },
+        typecheckPassed: { type: 'boolean' },
+        commandsRun: {
+          type: 'array',
+          items: { type: 'string' },
+        },
+        outputSummary: { type: 'string' },
+      },
+    },
+    manualAttentionReason: { type: 'string' },
+    residualFetchUserReferences: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['file', 'line', 'snippet', 'reason'],
+        properties: {
+          file: { type: 'string' },
+          line: { type: 'integer', minimum: 1 },
+          snippet: { type: 'string' },
+          reason: { type: 'string' },
+        },
+      },
+    },
+  },
+}
+
+const reportSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['markdownReport', 'counts', 'migrated', 'manualAttention', 'unverified', 'notFoundOrSkipped'],
+  properties: {
+    markdownReport: { type: 'string' },
+    counts: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['totalDiscovered', 'migratedVerified', 'migratedUnverified', 'manualAttention', 'notFoundOrSkipped'],
+      properties: {
+        totalDiscovered: { type: 'integer', minimum: 0 },
+        migratedVerified: { type: 'integer', minimum: 0 },
+        migratedUnverified: { type: 'integer', minimum: 0 },
+        manualAttention: { type: 'integer', minimum: 0 },
+        notFoundOrSkipped: { type: 'integer', minimum: 0 },
+      },
+    },
+    migrated: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    manualAttention: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    unverified: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    notFoundOrSkipped: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+  },
+}
+
+function uniqBySiteKey(sites) {
+  const seen = new Set()
+  const out = []
+  for (const site of sites || []) {
+    if (!site || !site.file || !site.line) continue
+    const key = `${site.file}:${site.line}:${site.currentSnippet || ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(site)
+  }
+  return out
+}
+
+function compactResult(result, site) {
+  if (result) return result
+  return {
+    siteId: site.id,
+    file: site.file,
+    line: site.line,
+    status: 'manual_attention',
+    changedFiles: [],
+    summary: 'Migration subagent returned no result.',
+    verification: {
+      typecheckRun: false,
+      typecheckPassed: false,
+      commandsRun: [],
+      outputSummary: 'No verification available because the subagent returned null.',
+    },
+    manualAttentionReason: 'Subagent was skipped, failed, or hit a terminal API/runtime error.',
+    residualFetchUserReferences: [],
+  }
+}
+
+phase('Discover call sites')
+log('Discovering deprecated fetchUser(id) call sites...')
+
+const discovery = await agent(
+  `You are the discovery coordinator for a repository migration.
+
+Task:
+Find every call site that uses the deprecated API \`fetchUser(id)\` and should be migrated to the new API \`getUser({ id })\`.
+
+Requirements:
+- Inspect the repository thoroughly using search and code navigation.
+- Identify exactly the call expressions/import usages that represent call sites, not unrelated text.
+- Include tests, scripts, backend/frontend code, and any generated-looking source only if it is normally edited in this repo.
+- Exclude comments, documentation-only mentions, type declarations with no runtime call, and already-migrated \`getUser({ id })\` calls.
+- Return up to the full expected set. The migration request expects ${SITE_COUNT_TARGET} call sites; if you find a different count, explain in notes.
+- Give each site a stable id like "site-01", "site-02", ... sorted by file path then line number.
+- For each site, include enough snippet/context for a migration subagent to locate it unambiguously.
+
+Return only the schema object.`,
+  {
+    label: 'discover-fetchUser-call-sites',
+    phase: 'Discover call sites',
+    schema: callSiteSchema,
+    effort: 'high',
+  },
+)
+
+const discoveredSites = uniqBySiteKey(discovery && discovery.sites ? discovery.sites : [])
+log(`Discovery found ${discoveredSites.length} candidate call site(s).`)
+
+const sites = discoveredSites.slice(0, SITE_COUNT_TARGET)
+if (discoveredSites.length > SITE_COUNT_TARGET) {
+  log(`Discovery found more than ${SITE_COUNT_TARGET}; limiting swarm to first ${SITE_COUNT_TARGET} sorted sites and flagging remainder in report.`)
+}
+if (discoveredSites.length < SITE_COUNT_TARGET) {
+  log(`Discovery found fewer than expected (${discoveredSites.length}/${SITE_COUNT_TARGET}); proceeding with discovered sites and flagging count mismatch.`)
+}
+
+phase('Migrate in isolated swarm')
+log(`Launching ${sites.length} isolated migration subagent(s)...`)
+
+const migrationResults = await parallel(
+  sites.map((site, index) => async () => {
+    const result = await agent(
+      `You are migration worker ${index + 1} of ${sites.length}. You are operating in an isolated worktree.
+
+Migration target:
+- Deprecated API: \`fetchUser(id)\`
+- New API: \`getUser({ id })\`
+
+Your assigned call site:
+${JSON.stringify(site, null, 2)}
+
+Strict scope:
+- Migrate ONLY this assigned call site and the minimal supporting imports/types needed for this site.
+- Do not opportunistically migrate other \`fetchUser\` call sites.
+- Do not perform broad refactors, formatting-only rewrites, dependency upgrades, or unrelated cleanup.
+- Preserve behavior exactly. The argument expression passed to \`fetchUser(...)\` must become the \`id\` property value in \`getUser({ id: ... })\`, using shorthand only when correct.
+- If the old import is \`fetchUser\`, update it to \`getUser\` only as needed. If multiple old and unmigrated uses share an import in the same file, make the minimal safe import change that keeps the file compiling.
+- Handle aliases carefully:
+  - \`fetchUser(userId)\` -> \`getUser({ id: userId })\`
+  - \`fetchUser(id)\` -> \`getUser({ id })\`
+  - \`await fetchUser(expr)\` -> \`await getUser({ id: expr })\`
+  - Preserve generics, await/Promise handling, error handling, mocks, and test expectations where applicable.
+- If the call site cannot be migrated safely in isolation, do not guess. Return \`manual_attention\` and explain why.
+
+Verification:
+- After editing, run the most relevant type-check command available in the repo.
+- Prefer targeted checks if obvious, otherwise run the standard project/package typecheck.
+- If there is no obvious typecheck command, inspect package scripts/config and run the closest compile/static type validation.
+- Record every verification command you ran and whether it passed.
+- Search the changed file(s) after migration and report any residual \`fetchUser\` reference related to this assigned site.
+
+Return only the schema object. Be precise and honest; if edits were made but verification could not be run or failed, use \`migrated_unverified\` unless manual follow-up is required.`,
+      {
+        label: `migrate-${site.id}`,
+        phase: 'Migrate in isolated swarm',
+        schema: migrationResultSchema,
+        isolation: 'worktree',
+        effort: 'high',
+      },
+    )
+    return compactResult(result, site)
+  }),
+)
+
+const normalizedResults = migrationResults.map((result, index) => compactResult(result, sites[index]))
+
+phase('Synthesize report')
+log('Synthesizing migration report...')
+
+const extraDiscoveryNote =
+  discoveredSites.length > SITE_COUNT_TARGET
+    ? `Discovery found ${discoveredSites.length} sites, which is more than the expected ${SITE_COUNT_TARGET}. The swarm migrated the first ${SITE_COUNT_TARGET} sorted sites. Extra discovered sites: ${JSON.stringify(discoveredSites.slice(SITE_COUNT_TARGET), null, 2)}`
+    : discoveredSites.length < SITE_COUNT_TARGET
+      ? `Discovery found only ${discoveredSites.length} sites, fewer than the expected ${SITE_COUNT_TARGET}.`
+      : `Discovery found the expected ${SITE_COUNT_TARGET} sites.`
+
+const finalReport = await agent(
+  `You are the migration lead. Produce the final report for the migration swarm.
+
+Migration:
+- Deprecated API: \`fetchUser(id)\`
+- New API: \`getUser({ id })\`
+- Expected number of call sites: ${SITE_COUNT_TARGET}
+
+Discovery notes:
+${discovery && discovery.notes ? discovery.notes : 'Discovery agent returned no notes.'}
+
+Count note:
+${extraDiscoveryNote}
+
+Per-site migration results:
+${JSON.stringify(normalizedResults, null, 2)}
+
+Report requirements:
+- Produce a clear Markdown report.
+- Include summary counts.
+- List every site that was migrated and type-verified.
+- List migrated but unverified sites, with commands/output summary and why verification did not pass or did not run.
+- List sites needing manual attention, with exact reason.
+- List not-found/skipped sites.
+- Mention any discovery count mismatch or extra discovered sites.
+- Call out residual \`fetchUser\` references reported by workers.
+- Be concise but complete.
+- Do not claim repository-wide success beyond the evidence in the worker results.
+
+Return only the schema object.`,
+  {
+    label: 'final-migration-report',
+    phase: 'Synthesize report',
+    schema: reportSchema,
+    effort: 'medium',
+  },
+)
+
+if (finalReport && finalReport.markdownReport) {
+  log(finalReport.markdownReport)
+} else {
+  const migratedVerified = normalizedResults.filter(r => r.status === 'migrated_verified')
+  const migratedUnverified = normalizedResults.filter(r => r.status === 'migrated_unverified')
+  const manualAttention = normalizedResults.filter(r => r.status === 'manual_attention')
+  const notFoundOrSkipped = normalizedResults.filter(r => r.status === 'not_found' || r.status === 'skipped')
+
+  log(`# Migration swarm report
+
+${extraDiscoveryNote}
+
+## Counts
+- Discovered: ${discoveredSites.length}
+- Migrated and verified: ${migratedVerified.length}
+- Migrated but unverified: ${migratedUnverified.length}
+- Manual attention: ${manualAttention.length}
+- Not found/skipped: ${notFoundOrSkipped.length}
+
+## Migrated and verified
+${migratedVerified.map(r => `- ${r.siteId} ${r.file}:${r.line} — ${r.summary}`).join('\n') || '- None'}
+
+## Migrated but unverified
+${migratedUnverified.map(r => `- ${r.siteId} ${r.file}:${r.line} — ${r.summary}; verification: ${r.verification.outputSummary}`).join('\n') || '- None'}
+
+## Needs manual attention
+${manualAttention.map(r => `- ${r.siteId} ${r.file}:${r.line} — ${r.manualAttentionReason || r.summary}`).join('\n') || '- None'}
+
+## Not found or skipped
+${notFoundOrSkipped.map(r => `- ${r.siteId} ${r.file}:${r.line} — ${r.summary}`).join('\n') || '- None'}
+`)
+}
+
+export default {
+  discovery: {
+    expectedCount: SITE_COUNT_TARGET,
+    discoveredCount: discoveredSites.length,
+    notes: discovery ? discovery.notes : 'Discovery failed or returned null.',
+    sites,
+    extraSites: discoveredSites.slice(SITE_COUNT_TARGET),
+  },
+  results: normalizedResults,
+  report: finalReport,
+}
+```
+
+> **Claude judge:** The script fans out all 35 agents in a single unbounded parallel() barrier with no wave batching, no per-agent retry (only null-coalescing), no stall watchdog, and no backoff on high failure rates. Positive marks go to stable/cache-friendly prompts, well-structured schemas with additionalProperties:false, graceful null handling via compactResult, and synthesis that explicitly flags count mismatches and partial results.
+
+## With skill — rubric 95%, patterns 100%
+
+```js
+export const meta = {
+  name: 'migration-swarm-fetchUser-to-getUser',
+  description: 'Safely migrate 35 fetchUser(id) call sites to getUser({ id }) with isolated per-site agents, verification, application, and reporting.',
+  phases: [
+    { title: 'Discover' },
+    { title: 'Migrate/Verify Waves' },
+    { title: 'Retry' },
+    { title: 'Apply' },
+    { title: 'Report' },
+  ],
+}
+
+// IMPORTANT WATCHDOG (agent-level, run immediately after launching this Workflow; not available inside script body):
+// ScheduleWakeup({
+//   delaySeconds: 1200,
+//   reason: "watchdog: migration swarm wf_<id> may stall silently; check journal mtime",
+//   prompt: "Watchdog for migration swarm run wf_<id> (task <taskId>, journal at <path>): if the journal mtime is older than 20 min AND the workflow task is not 'completed', TaskStop the task then resume with Workflow({scriptPath, resumeFromRunId}); otherwise re-arm another 1200s ScheduleWakeup. Plain one-shot watchdog — NOT a /loop sentinel."
+// })
+
+const WAVE_SIZE = 7
+const TARGET_SITE_COUNT = 35
+const MAX_DIFF_CHARS = 24000
+
+const chunk = (arr, n) => {
+  const out = []
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n))
+  return out
+}
+
+const clip = (s, n) => {
+  const str = String(s ?? '')
+  return str.length <= n ? str : str.slice(0, n) + '\n...[truncated]'
+}
+
+const stableStringify = (value) => JSON.stringify(value, Object.keys(value || {}).sort())
+
+const sanitizeSite = (site, index) => {
+  const file = String(site.file || site.path || '')
+  const line = Number.isFinite(site.line) ? site.line : Number(site.line || 0)
+  const column = Number.isFinite(site.column) ? site.column : Number(site.column || 0)
+  const snippet = clip(site.snippet || site.expressionSnippet || site.context || '', 900)
+  const rawKey = site.key || `${file}:${line}:${column}:${clip(snippet.replace(/\s+/g, ' '), 80)}`
+  return {
+    key: String(rawKey || `site-${index + 1}`),
+    file,
+    line: Number.isFinite(line) ? line : 0,
+    column: Number.isFinite(column) ? column : 0,
+    snippet,
+    importHint: clip(site.importHint || site.importSource || '', 300),
+    notes: clip(site.notes || site.risk || '', 500),
+  }
+}
+
+const dedupeSites = (sites) => {
+  const seen = new Set()
+  const out = []
+  for (let i = 0; i < sites.length; i++) {
+    const s = sanitizeSite(sites[i], i)
+    if (!s.key || seen.has(s.key)) continue
+    seen.add(s.key)
+    out.push(s)
+  }
+  return out.sort((a, b) => (a.key > b.key ? 1 : a.key < b.key ? -1 : 0))
 }
 
 const DISCOVERY_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['callSites', 'summary'],
+  required: ['typecheckCommand', 'callSites', 'notes'],
   properties: {
-    summary: { type: 'string' },
+    typecheckCommand: { type: 'string' },
+    notes: { type: 'array', maxItems: 8, items: { type: 'string' } },
     callSites: {
       type: 'array',
-      minItems: 1,
-      maxItems: 100,
+      maxItems: 45,
       items: {
         type: 'object',
         additionalProperties: false,
-        required: [
-          'siteId',
-          'file',
-          'line',
-          'column',
-          'currentExpression',
-          'surroundingCode',
-          'importOrRequireContext',
-          'confidence',
-          'notes',
-        ],
+        required: ['key', 'file', 'line', 'column', 'snippet', 'importHint', 'risk'],
         properties: {
-          siteId: {
-            type: 'string',
-            description:
-              'Stable unique id, preferably derived from file path and source location.',
-          },
+          key: { type: 'string' },
           file: { type: 'string' },
-          line: { type: 'integer', minimum: 1 },
-          column: { type: 'integer', minimum: 1 },
-          currentExpression: {
-            type: 'string',
-            description: 'The exact fetchUser(...) expression or call statement found.',
-          },
-          surroundingCode: {
-            type: 'string',
-            description: 'Small code excerpt sufficient to relocate the call site.',
-          },
-          importOrRequireContext: {
-            type: 'string',
-            description:
-              'Relevant import/require lines for fetchUser/getUser in this file, if any.',
-          },
-          confidence: {
-            type: 'string',
-            enum: ['high', 'medium', 'low'],
-          },
-          notes: { type: 'string' },
+          line: { type: 'number' },
+          column: { type: 'number' },
+          snippet: { type: 'string' },
+          importHint: { type: 'string' },
+          risk: { type: 'string' },
         },
       },
     },
@@ -85,1306 +461,607 @@ const MIGRATION_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: [
-    'siteId',
+    'key',
     'file',
     'status',
+    'summary',
+    'manualReason',
     'changedFiles',
-    'patch',
-    'verificationCommands',
-    'verificationSummary',
-    'manualAttentionReason',
+    'diff',
+    'checksRun',
+    'typecheckCommandUsed',
     'notes',
   ],
   properties: {
-    siteId: { type: 'string' },
+    key: { type: 'string' },
     file: { type: 'string' },
-    status: {
-      type: 'string',
-      enum: ['migrated', 'manual_attention'],
-    },
-    changedFiles: {
+    status: { type: 'string', enum: ['migrated', 'manual_attention'] },
+    summary: { type: 'string' },
+    manualReason: { type: 'string' },
+    changedFiles: { type: 'array', maxItems: 6, items: { type: 'string' } },
+    diff: { type: 'string' },
+    checksRun: {
       type: 'array',
-      items: { type: 'string' },
+      maxItems: 8,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['command', 'status', 'summary'],
+        properties: {
+          command: { type: 'string' },
+          status: { type: 'string', enum: ['pass', 'fail', 'not_run'] },
+          summary: { type: 'string' },
+        },
+      },
     },
-    patch: {
-      type: 'string',
-      description:
-        'Unified git diff for the isolated worktree changes. Empty if no safe migration was made.',
-    },
-    verificationCommands: {
-      type: 'array',
-      items: { type: 'string' },
-    },
-    verificationSummary: {
-      type: 'string',
-      description:
-        'Summary of local checks run by the migration subagent and whether they passed.',
-    },
-    manualAttentionReason: {
-      type: 'string',
-      description:
-        'Empty when status=migrated. Required explanation when status=manual_attention.',
-    },
-    notes: { type: 'string' },
+    typecheckCommandUsed: { type: 'string' },
+    notes: { type: 'array', maxItems: 6, items: { type: 'string' } },
   },
 }
 
 const VERIFY_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: [
-    'siteId',
-    'file',
-    'status',
-    'typeCorrect',
-    'commandsRun',
-    'evidence',
-    'manualAttentionReason',
-    'notes',
-  ],
+  required: ['key', 'file', 'status', 'typeCorrect', 'checksRun', 'issues', 'summary'],
   properties: {
-    siteId: { type: 'string' },
+    key: { type: 'string' },
     file: { type: 'string' },
-    status: {
-      type: 'string',
-      enum: ['verified', 'failed_verification', 'manual_attention'],
-    },
+    status: { type: 'string', enum: ['verified', 'rejected', 'manual_attention'] },
     typeCorrect: { type: 'boolean' },
-    commandsRun: {
+    checksRun: {
       type: 'array',
-      items: { type: 'string' },
-    },
-    evidence: {
-      type: 'string',
-      description:
-        'Concise evidence from static checks/tests showing whether the migration is type-correct.',
-    },
-    manualAttentionReason: {
-      type: 'string',
-      description:
-        'Empty when status=verified. Explanation when verification failed or needs manual work.',
-    },
-    notes: { type: 'string' },
-  },
-}
-
-const INTEGRATION_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: [
-    'applied',
-    'notApplied',
-    'commandsRun',
-    'finalTypecheckPassed',
-    'finalTypecheckEvidence',
-    'notes',
-  ],
-  properties: {
-    applied: {
-      type: 'array',
+      maxItems: 8,
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['siteId', 'file', 'summary'],
+        required: ['command', 'status', 'summary'],
         properties: {
-          siteId: { type: 'string' },
-          file: { type: 'string' },
+          command: { type: 'string' },
+          status: { type: 'string', enum: ['pass', 'fail', 'not_run'] },
           summary: { type: 'string' },
         },
       },
     },
-    notApplied: {
+    issues: { type: 'array', maxItems: 10, items: { type: 'string' } },
+    summary: { type: 'string' },
+  },
+}
+
+const APPLY_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['status', 'summary', 'applied', 'manualAttention', 'fullTypecheck'],
+  properties: {
+    status: { type: 'string', enum: ['applied_all', 'applied_partial', 'none_applied', 'failed'] },
+    summary: { type: 'string' },
+    applied: {
       type: 'array',
+      maxItems: 35,
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['siteId', 'file', 'reason'],
+        required: ['key', 'file', 'status', 'reason'],
         properties: {
-          siteId: { type: 'string' },
+          key: { type: 'string' },
+          file: { type: 'string' },
+          status: { type: 'string', enum: ['applied', 'skipped', 'conflict', 'failed'] },
+          reason: { type: 'string' },
+        },
+      },
+    },
+    manualAttention: {
+      type: 'array',
+      maxItems: 35,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'file', 'reason'],
+        properties: {
+          key: { type: 'string' },
           file: { type: 'string' },
           reason: { type: 'string' },
         },
       },
     },
-    commandsRun: {
-      type: 'array',
-      items: { type: 'string' },
-    },
-    finalTypecheckPassed: { type: 'boolean' },
-    finalTypecheckEvidence: { type: 'string' },
-    notes: { type: 'string' },
-  },
-}
-
-const FINAL_REPORT_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['markdownReport'],
-  properties: {
-    markdownReport: { type: 'string' },
-  },
-}
-
-const expectedCount =
-  typeof args?.expectedCount === 'number' && args.expectedCount > 0
-    ? Math.floor(args.expectedCount)
-    : 35
-
-const typecheckHint =
-  typeof args?.typecheckCommand === 'string' && args.typecheckCommand.trim()
-    ? args.typecheckCommand.trim()
-    : 'Infer and run the repository’s normal TypeScript/type-check command, such as npm run typecheck, pnpm typecheck, yarn typecheck, npx tsc --noEmit, or the closest equivalent.'
-
-const testHint =
-  typeof args?.testCommand === 'string' && args.testCommand.trim()
-    ? args.testCommand.trim()
-    : 'Run the smallest relevant test or compile check when available; otherwise explain why only type-checking was possible.'
-
-const userProvidedSites = Array.isArray(args?.callSites) ? args.callSites : null
-
-phase('Discover call sites')
-log(
-  userProvidedSites
-    ? `Using ${userProvidedSites.length} user-provided call site(s).`
-    : `Discovering fetchUser(id) call sites; expected count is ${expectedCount}.`,
-)
-
-let discovered
-
-if (userProvidedSites) {
-  discovered = {
-    summary: `Received ${userProvidedSites.length} call site(s) from workflow args.`,
-    callSites: userProvidedSites.map((site, index) => ({
-      siteId:
-        typeof site.siteId === 'string' && site.siteId
-          ? site.siteId
-          : `provided-site-${index + 1}`,
-      file: String(site.file || ''),
-      line: Number.isInteger(site.line) && site.line > 0 ? site.line : 1,
-      column: Number.isInteger(site.column) && site.column > 0 ? site.column : 1,
-      currentExpression: String(site.currentExpression || 'fetchUser(...)'),
-      surroundingCode: String(site.surroundingCode || ''),
-      importOrRequireContext: String(site.importOrRequireContext || ''),
-      confidence:
-        site.confidence === 'medium' || site.confidence === 'low'
-          ? site.confidence
-          : 'high',
-      notes: String(site.notes || 'Provided by workflow args.'),
-    })),
-  }
-} else {
-  discovered = await agent(
-    `
-You are the discovery coordinator for a code migration.
-
-Goal:
-Find every call site of the deprecated API:
-
-  fetchUser(id)
-
-that must be migrated to:
-
-  getUser({ id })
-
-Repository task:
-1. Search the repo thoroughly for actual runtime call sites of fetchUser.
-2. Include direct calls, imported aliases only if you can confidently prove they reference fetchUser, and calls in tests if they are part of the repo source that must compile.
-3. Exclude definitions/declarations of fetchUser, comments, docs-only mentions, changelogs, and unrelated identifiers.
-4. For each call site, capture enough location and code context for another isolated agent to modify exactly that site.
-5. Pay attention to imports/requires: migration may require replacing fetchUser imports with getUser imports or adding getUser while preserving other imports.
-6. Expected number of call sites: ${expectedCount}. If you find a different number, still return all real call sites and explain the discrepancy in summary.
-
-Return strictly the schema object.
-`,
-    {
-      label: 'discover-fetchUser-call-sites',
-      phase: 'Discover call sites',
-      schema: DISCOVERY_SCHEMA,
-      effort: 'high',
-    },
-  )
-}
-
-if (!discovered || !Array.isArray(discovered.callSites)) {
-  discovered = {
-    summary:
-      'Discovery failed or was skipped. No migrations can be performed automatically.',
-    callSites: [],
-  }
-}
-
-const siteKey = site =>
-  `${site.file || ''}:${String(site.line || '')}:${String(site.column || '')}:${
-    site.siteId || ''
-  }`
-
-const callSites = discovered.callSites
-  .slice()
-  .sort((a, b) => siteKey(a).localeCompare(siteKey(b)))
-  .map((site, index) => ({
-    ...site,
-    siteId: site.siteId || `site-${index + 1}`,
-  }))
-
-log(`Discovery complete: ${callSites.length} call site(s) found.`)
-
-if (callSites.length !== expectedCount) {
-  log(
-    `Expected ${expectedCount} call site(s), but discovery found ${callSites.length}. Continuing with discovered sites and reporting the mismatch.`,
-  )
-}
-
-phase('Migrate in isolation')
-
-const migrationResults = await pipeline(
-  callSites,
-  async (site, originalSite, index) => {
-    log(
-      `Migrating ${index + 1}/${callSites.length}: ${site.siteId} in ${site.file}`,
-    )
-
-    return await agent(
-      `
-You are one isolated migration worker in a migration swarm.
-
-You are responsible for exactly ONE call site. Do not modify unrelated call sites.
-
-Migration:
-- Deprecated API: fetchUser(id)
-- New API: getUser({ id })
-- Preserve existing behavior, async/await behavior, error handling, and surrounding control flow.
-- If the old call is fetchUser(userId), migrate to getUser({ id: userId }).
-- If the argument expression is already named id, getUser({ id }) is acceptable.
-- If fetchUser is imported/required in the file and no longer needed after your single-site change, update imports safely.
-- If other fetchUser call sites remain in the same file, keep fetchUser imported for them.
-- If getUser is not imported/required, add it from the same module that supplied fetchUser unless repository conventions clearly indicate otherwise.
-- Make the smallest safe change.
-- Work only in your isolated worktree.
-
-Call site:
-${JSON.stringify(site, null, 2)}
-
-Verification requirements:
-- After editing, run formatting/linting only if this repo normally requires it and it is safe.
-- Verify the migration is type-correct.
-- Type-check instruction: ${typecheckHint}
-- Test instruction: ${testHint}
-- If full type-check is too expensive or blocked, run the narrowest reliable static check and explain.
-- If the call site is ambiguous, generated code, dynamically aliased, has incompatible types, or cannot be safely migrated in isolation, do not guess. Return manual_attention with a clear reason.
-
-Output:
-- Return a unified git diff in "patch" containing all changes you made.
-- If you made no safe change, patch must be empty and status must be manual_attention.
-- The patch should be suitable for later application to the main worktree.
-- Return strictly the schema object.
-`,
-      {
-        label: `migrate-${site.siteId}`,
-        phase: 'Migrate in isolation',
-        schema: MIGRATION_SCHEMA,
-        isolation: 'worktree',
-        effort: 'high',
-      },
-    )
-  },
-  async (migration, site, index) => {
-    if (!migration) {
-      return {
-        site,
-        migration: {
-          siteId: site.siteId,
-          file: site.file,
-          status: 'manual_attention',
-          changedFiles: [],
-          patch: '',
-          verificationCommands: [],
-          verificationSummary:
-            'Migration subagent failed, was skipped, or hit a terminal API error.',
-          manualAttentionReason:
-            'No migration result was produced for this call site.',
-          notes: '',
-        },
-        verification: {
-          siteId: site.siteId,
-          file: site.file,
-          status: 'manual_attention',
-          typeCorrect: false,
-          commandsRun: [],
-          evidence: 'No migration patch was available to verify.',
-          manualAttentionReason:
-            'Migration subagent did not produce a usable result.',
-          notes: '',
-        },
-      }
-    }
-
-    if (migration.status !== 'migrated' || !migration.patch.trim()) {
-      return {
-        site,
-        migration,
-        verification: {
-          siteId: site.siteId,
-          file: site.file,
-          status: 'manual_attention',
-          typeCorrect: false,
-          commandsRun: migration.verificationCommands || [],
-          evidence:
-            migration.verificationSummary ||
-            'Migration worker marked this site for manual attention.',
-          manualAttentionReason:
-            migration.manualAttentionReason ||
-            'Migration worker did not produce a patch.',
-          notes: migration.notes || '',
-        },
-      }
-    }
-
-    phase('Verify migrations')
-    log(
-      `Verifying ${index + 1}/${callSites.length}: ${site.siteId} in ${site.file}`,
-    )
-
-    const verification = await agent(
-      `
-You are an independent verification worker.
-
-You are verifying exactly ONE proposed migration from fetchUser(id) to getUser({ id }).
-
-Call site:
-${JSON.stringify(site, null, 2)}
-
-Migration result:
-${JSON.stringify(migration, null, 2)}
-
-Patch to verify:
-${migration.patch}
-
-Instructions:
-1. In your isolated worktree, apply the provided patch to a clean checkout.
-2. Confirm the intended call site was changed from fetchUser(...) to getUser({ id: ... }) or getUser({ id }) as appropriate.
-3. Confirm no unrelated call sites were accidentally migrated by this patch.
-4. Confirm imports/requires remain correct:
-   - getUser is imported/required from the correct module.
-   - fetchUser remains only if still used in that file.
-5. Verify type correctness.
-   Type-check instruction: ${typecheckHint}
-6. Run the smallest relevant test/compile check when useful.
-   Test instruction: ${testHint}
-7. If the patch does not apply cleanly, does not type-check, changes the wrong code, or is semantically questionable, mark failed_verification or manual_attention and explain why.
-
-Return strictly the schema object.
-`,
-      {
-        label: `verify-${site.siteId}`,
-        phase: 'Verify migrations',
-        schema: VERIFY_SCHEMA,
-        isolation: 'worktree',
-        effort: 'high',
-      },
-    )
-
-    return {
-      site,
-      migration,
-      verification:
-        verification || {
-          siteId: site.siteId,
-          file: site.file,
-          status: 'failed_verification',
-          typeCorrect: false,
-          commandsRun: [],
-          evidence:
-            'Verification subagent failed, was skipped, or hit a terminal API error.',
-          manualAttentionReason:
-            'Could not independently verify this migration patch.',
-          notes: '',
-        },
-    }
-  },
-)
-
-const perSiteResults = migrationResults.filter(Boolean)
-
-const verifiedResults = perSiteResults.filter(
-  result =>
-    result.verification &&
-    result.verification.status === 'verified' &&
-    result.verification.typeCorrect === true &&
-    result.migration &&
-    result.migration.status === 'migrated' &&
-    typeof result.migration.patch === 'string' &&
-    result.migration.patch.trim(),
-)
-
-const manualOrFailedResults = perSiteResults.filter(
-  result => !verifiedResults.some(v => v.site.siteId === result.site.siteId),
-)
-
-log(
-  `Per-site verification complete: ${verifiedResults.length} verified, ${manualOrFailedResults.length} needing manual attention or failed verification.`,
-)
-
-phase('Integrate verified changes')
-
-let integration
-
-if (verifiedResults.length === 0) {
-  integration = {
-    applied: [],
-    notApplied: [],
-    commandsRun: [],
-    finalTypecheckPassed: false,
-    finalTypecheckEvidence:
-      'No verified migration patches were available to apply.',
-    notes: 'Integration skipped.',
-  }
-} else {
-  integration = await agent(
-    `
-You are the integration worker for a migration swarm.
-
-Goal:
-Apply all independently verified patches to the main working tree, preserving correctness.
-
-Important:
-- Apply only patches whose verification status is verified and typeCorrect=true.
-- Apply patches carefully, one at a time.
-- If a patch conflicts or no longer applies, do not force it. Record that site as notApplied with the reason.
-- After applying all clean patches, run the repository type-check.
-- Type-check instruction: ${typecheckHint}
-- Run relevant tests if practical: ${testHint}
-- Do not apply patches for manual_attention or failed_verification sites.
-
-Verified patch set:
-${JSON.stringify(
-  verifiedResults.map(result => ({
-    site: result.site,
-    migration: result.migration,
-    verification: result.verification,
-  })),
-  null,
-  2,
-)}
-
-Manual/failed sites to leave untouched:
-${JSON.stringify(
-  manualOrFailedResults.map(result => ({
-    site: result.site,
-    migration: result.migration,
-    verification: result.verification,
-  })),
-  null,
-  2,
-)}
-
-Return strictly the schema object.
-`,
-    {
-      label: 'integrate-verified-migrations',
-      phase: 'Integrate verified changes',
-      schema: INTEGRATION_SCHEMA,
-      effort: 'high',
-    },
-  )
-}
-
-if (!integration) {
-  integration = {
-    applied: [],
-    notApplied: verifiedResults.map(result => ({
-      siteId: result.site.siteId,
-      file: result.site.file,
-      reason:
-        'Integration worker failed, was skipped, or hit a terminal API error.',
-    })),
-    commandsRun: [],
-    finalTypecheckPassed: false,
-    finalTypecheckEvidence:
-      'Integration did not complete, so final type correctness could not be established.',
-    notes: '',
-  }
-}
-
-phase('Final validation and report')
-
-const report = await agent(
-  `
-You are the reporting coordinator for a migration swarm.
-
-Create a concise but complete Markdown report for the user.
-
-Migration target:
-- Deprecated: fetchUser(id)
-- New: getUser({ id })
-- Expected call sites: ${expectedCount}
-- Discovered call sites: ${callSites.length}
-
-Discovery summary:
-${discovered.summary}
-
-Per-site results:
-${JSON.stringify(perSiteResults, null, 2)}
-
-Integration result:
-${JSON.stringify(integration, null, 2)}
-
-Report requirements:
-1. Start with an executive summary.
-2. Include counts:
-   - discovered
-   - expected
-   - migrated by isolated worker
-   - independently type-verified
-   - applied to main worktree
-   - needing manual attention
-   - integration not applied
-   - final type-check pass/fail
-3. Include a table of successfully migrated/applied sites with file, site id, and evidence.
-4. Include a table of sites needing manual attention, with file, site id, exact reason, and recommended next action.
-5. Include any discovery count mismatch warning.
-6. Include final validation commands/evidence.
-7. Be explicit if some verified patches could not be integrated.
-8. Do not claim success for any site that was not applied to the main worktree.
-9. Keep the report actionable.
-
-Return strictly the schema object.
-`,
-  {
-    label: 'final-migration-report',
-    phase: 'Final validation and report',
-    schema: FINAL_REPORT_SCHEMA,
-    effort: 'medium',
-  },
-)
-
-log(report ? report.markdownReport : 'Final report generation failed.')
-report ? report.markdownReport : 'Final report generation failed.'
-```
-
-> **GPT-5.5 judge:** The workflow has some partial-safety features: it uses strict schemas, handles null/failed subagent results for migration/verification/integration/reporting, and the final synthesis explicitly reports manual/failed/unapplied sites rather than claiming success. However, it uses a single pipeline over all discovered call sites with no explicit bounded wave size, no armed ScheduleWakeup/stall watchdog, no per-agent retry policy, no per-wave durable commits/checkpoints, no resume/cache-stable discovery mechanism, and no backoff when many sites fail. It also carries full patches/results through later JSON prompts, which risks large/truncated outputs. Overall it is heavily vulnerable to a hung connection stalling the run and to completed work being lost or truncated before integration.
-
-## With skill — rubric 84%, patterns 88%
-
-```js
-export const meta = {
-  name: 'migration-swarm-fetchuser-to-getuser',
-  description: 'Safely migrate fetchUser(id) call sites to getUser({ id }) with isolated per-site agents, verification, integration, and reporting.',
-  phases: [
-    { title: 'Preflight' },
-    { title: 'Discover' },
-    { title: 'Migrate' },
-    { title: 'Retry' },
-    { title: 'Integrate' },
-    { title: 'Report' },
-  ],
-}
-
-/*
-After launching this workflow, arm the required one-shot stall watchdog from the
-surrounding agent context, replacing wf_<id>, <taskId>, and <path> with the
-Workflow launch result:
-
-ScheduleWakeup({
-  delaySeconds: 1200,
-  reason: "watchdog: swarm wf_<id> may stall silently; check journal mtime",
-  prompt: "Watchdog for swarm run wf_<id> (task <taskId>, journal at <path>): if the journal mtime is older than 20 min AND the workflow task is not 'completed', TaskStop the task then resume with Workflow({scriptPath, resumeFromRunId}). Otherwise re-arm another 1200s ScheduleWakeup. Do NOT use the autonomous-loop sentinel — this is a plain one-shot watchdog, not a /loop."
-})
-*/
-
-const WAVE_SIZE = Number.isInteger(args?.waveSize) && args.waveSize >= 1 && args.waveSize <= 8 ? args.waveSize : 6
-const EXPECTED_COUNT = Number.isInteger(args?.expectedCount) ? args.expectedCount : 35
-const SHOULD_INTEGRATE = args?.integrate === false || args?.reportOnly === true ? false : true
-const INTEGRATE_UNVERIFIED = args?.integrateUnverified === true
-const SCOPE = typeof args?.scope === 'string' && args.scope.trim() ? args.scope.trim() : 'the current repository'
-const TYPECHECK_HINT = typeof args?.typecheckCommand === 'string' && args.typecheckCommand.trim()
-  ? args.typecheckCommand.trim()
-  : ''
-
-function chunk(arr, n) {
-  const out = []
-  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n))
-  return out
-}
-
-function stableStringify(value) {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value)
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
-  const keys = Object.keys(value).sort()
-  return `{${keys.map(k => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`
-}
-
-function sanitizeLabel(s) {
-  return String(s || 'unknown')
-    .replace(/[^a-zA-Z0-9._/-]+/g, '-')
-    .slice(0, 80)
-}
-
-function normalizeSite(raw, index) {
-  const file = String(raw?.file || raw?.path || '').trim()
-  const line = Number.isInteger(raw?.line) ? raw.line : (
-    Number.isInteger(raw?.startLine) ? raw.startLine : 0
-  )
-  const column = Number.isInteger(raw?.column) ? raw.column : (
-    Number.isInteger(raw?.startColumn) ? raw.startColumn : 0
-  )
-  const explicitKey = typeof raw?.key === 'string' && raw.key.trim() ? raw.key.trim() : ''
-  const key = explicitKey || `${file || 'unknown-file'}:${line || 0}:${column || 0}:fetchUser:${index + 1}`
-  return {
-    key,
-    file,
-    line,
-    column,
-    snippet: typeof raw?.snippet === 'string' ? raw.snippet.slice(0, 1200) : '',
-    importHint: typeof raw?.importHint === 'string' ? raw.importHint.slice(0, 500) : '',
-    notes: typeof raw?.notes === 'string' ? raw.notes.slice(0, 1000) : '',
-  }
-}
-
-function dedupeAndSortSites(sites) {
-  const byKey = new Map()
-  sites.forEach((site, i) => {
-    const normalized = normalizeSite(site, i)
-    if (!byKey.has(normalized.key)) byKey.set(normalized.key, normalized)
-  })
-  return [...byKey.values()].sort((a, b) => a.key > b.key ? 1 : a.key < b.key ? -1 : 0)
-}
-
-const CALL_SITE_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['key', 'file', 'line', 'column', 'snippet', 'importHint', 'notes'],
-  properties: {
-    key: { type: 'string' },
-    file: { type: 'string' },
-    line: { type: 'integer' },
-    column: { type: 'integer' },
-    snippet: { type: 'string', maxLength: 1200 },
-    importHint: { type: 'string', maxLength: 500 },
-    notes: { type: 'string', maxLength: 1000 },
-  },
-}
-
-const DISCOVERY_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['callSites', 'warnings'],
-  properties: {
-    callSites: {
-      type: 'array',
-      maxItems: 80,
-      items: CALL_SITE_SCHEMA,
-    },
-    warnings: {
-      type: 'array',
-      maxItems: 20,
-      items: { type: 'string', maxLength: 500 },
-    },
-  },
-}
-
-const MIGRATION_RESULT_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: [
-    'key',
-    'file',
-    'status',
-    'summary',
-    'changedFiles',
-    'verification',
-    'manualAttention',
-    'risk',
-    'diff',
-  ],
-  properties: {
-    key: { type: 'string' },
-    file: { type: 'string' },
-    status: {
-      type: 'string',
-      enum: [
-        'migrated',
-        'already_migrated',
-        'manual_attention',
-        'not_found',
-        'skipped',
-      ],
-    },
-    summary: { type: 'string', maxLength: 1200 },
-    changedFiles: {
-      type: 'array',
-      maxItems: 10,
-      items: { type: 'string', maxLength: 300 },
-    },
-    verification: {
+    fullTypecheck: {
       type: 'object',
       additionalProperties: false,
-      required: ['typecheck', 'commands', 'evidence'],
+      required: ['command', 'status', 'summary'],
       properties: {
-        typecheck: {
-          type: 'string',
-          enum: ['passed', 'failed', 'not_run', 'unrelated_failures'],
-        },
-        commands: {
-          type: 'array',
-          maxItems: 5,
-          items: { type: 'string', maxLength: 300 },
-        },
-        evidence: { type: 'string', maxLength: 1500 },
+        command: { type: 'string' },
+        status: { type: 'string', enum: ['pass', 'fail', 'not_run'] },
+        summary: { type: 'string' },
       },
     },
-    manualAttention: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['needed', 'reason'],
-      properties: {
-        needed: { type: 'boolean' },
-        reason: { type: 'string', maxLength: 1500 },
-      },
-    },
-    risk: {
-      type: 'string',
-      enum: ['low', 'medium', 'high'],
-    },
-    diff: {
-      type: 'string',
-      maxLength: 12000,
-      description: 'Unified diff for this call-site-only migration, or empty string if no automatic change is safe.',
-    },
-  },
-}
-
-const INTEGRATION_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['applied', 'changedFiles', 'verification', 'notes'],
-  properties: {
-    applied: {
-      type: 'array',
-      maxItems: 80,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['key', 'status', 'reason'],
-        properties: {
-          key: { type: 'string' },
-          status: {
-            type: 'string',
-            enum: ['applied', 'already_present', 'conflict', 'skipped_manual', 'failed'],
-          },
-          reason: { type: 'string', maxLength: 1000 },
-        },
-      },
-    },
-    changedFiles: {
-      type: 'array',
-      maxItems: 80,
-      items: { type: 'string', maxLength: 300 },
-    },
-    verification: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['typecheck', 'commands', 'evidence'],
-      properties: {
-        typecheck: {
-          type: 'string',
-          enum: ['passed', 'failed', 'not_run', 'unrelated_failures'],
-        },
-        commands: {
-          type: 'array',
-          maxItems: 8,
-          items: { type: 'string', maxLength: 300 },
-        },
-        evidence: { type: 'string', maxLength: 2000 },
-      },
-    },
-    notes: { type: 'string', maxLength: 3000 },
   },
 }
 
 const REPORT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: [
-    'summary',
-    'migrated',
-    'manualAttention',
-    'missing',
-    'verification',
-    'reportMarkdown',
-  ],
+  required: ['summary', 'counts', 'migrated', 'manualAttention', 'notAttempted', 'typecheckSummary', 'nextSteps'],
   properties: {
-    summary: {
+    summary: { type: 'string' },
+    counts: {
       type: 'object',
       additionalProperties: false,
-      required: [
-        'expectedCallSites',
-        'identifiedCallSites',
-        'workerResults',
-        'migratedCount',
-        'manualAttentionCount',
-        'missingCount',
-        'integrated',
-      ],
+      required: ['planned', 'verified', 'applied', 'manualAttention', 'notAttempted'],
       properties: {
-        expectedCallSites: { type: 'integer' },
-        identifiedCallSites: { type: 'integer' },
-        workerResults: { type: 'integer' },
-        migratedCount: { type: 'integer' },
-        manualAttentionCount: { type: 'integer' },
-        missingCount: { type: 'integer' },
-        integrated: { type: 'boolean' },
+        planned: { type: 'number' },
+        verified: { type: 'number' },
+        applied: { type: 'number' },
+        manualAttention: { type: 'number' },
+        notAttempted: { type: 'number' },
       },
     },
     migrated: {
       type: 'array',
-      maxItems: 80,
+      maxItems: 35,
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['key', 'file', 'status', 'verification', 'integrationStatus', 'notes'],
+        required: ['key', 'file', 'summary'],
         properties: {
           key: { type: 'string' },
           file: { type: 'string' },
-          status: { type: 'string' },
-          verification: { type: 'string', maxLength: 500 },
-          integrationStatus: { type: 'string', maxLength: 500 },
-          notes: { type: 'string', maxLength: 1000 },
+          summary: { type: 'string' },
         },
       },
     },
     manualAttention: {
       type: 'array',
-      maxItems: 80,
+      maxItems: 35,
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['key', 'file', 'reason', 'workerStatus'],
+        required: ['key', 'file', 'reason'],
         properties: {
           key: { type: 'string' },
           file: { type: 'string' },
-          reason: { type: 'string', maxLength: 1500 },
-          workerStatus: { type: 'string' },
+          reason: { type: 'string' },
         },
       },
     },
-    missing: {
+    notAttempted: {
       type: 'array',
-      maxItems: 80,
-      items: { type: 'string' },
-    },
-    verification: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['overall', 'details'],
-      properties: {
-        overall: {
-          type: 'string',
-          enum: ['passed', 'failed', 'partial', 'not_run'],
+      maxItems: 35,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['key', 'file', 'reason'],
+        properties: {
+          key: { type: 'string' },
+          file: { type: 'string' },
+          reason: { type: 'string' },
         },
-        details: { type: 'string', maxLength: 3000 },
       },
     },
-    reportMarkdown: { type: 'string', maxLength: 12000 },
+    typecheckSummary: { type: 'string' },
+    nextSteps: { type: 'array', maxItems: 10, items: { type: 'string' } },
   },
 }
 
-function buildDiscoveryPrompt() {
-  return `
-You are the discovery agent for a TypeScript/JavaScript migration swarm.
+const workerModel = args?.workerModel
+const verifierModel = args?.verifierModel || workerModel
+const synthesizerModel = args?.synthesizerModel || workerModel
+const requestedTypecheckCommand = String(args?.typecheckCommand || '').trim()
+const applyChanges = args?.apply !== false
+
+phase('Discover')
+
+let discovered = null
+let sites = []
+
+if (Array.isArray(args?.callSites) && args.callSites.length) {
+  sites = dedupeSites(args.callSites).slice(0, TARGET_SITE_COUNT)
+  discovered = {
+    typecheckCommand: requestedTypecheckCommand,
+    notes: ['Using call sites supplied in workflow args.'],
+    callSites: sites.map(s => ({
+      key: s.key,
+      file: s.file,
+      line: s.line,
+      column: s.column,
+      snippet: s.snippet,
+      importHint: s.importHint,
+      risk: s.notes,
+    })),
+  }
+  log(`Using ${sites.length} supplied call sites.`)
+} else {
+  discovered = await agent(
+    `You are preparing a migration swarm.
 
 Task:
-Find the ${EXPECTED_COUNT} deprecated call sites that use \`fetchUser(id)\` and must be migrated to \`getUser({ id })\`.
+- Inspect the repository and find call sites of the deprecated API fetchUser(id) that should migrate to getUser({ id }).
+- Return up to exactly ${TARGET_SITE_COUNT} concrete call sites.
+- Include stable keys so later agents can operate independently and resume safely.
+- Prefer keys like "path/to/file.ts:line:column".
+- Include only actual fetchUser(id) runtime call sites, not declarations, docs, tests that intentionally assert deprecated behavior, or unrelated identifiers.
+- If there are fewer than ${TARGET_SITE_COUNT}, return all real call sites and explain in notes.
+- Identify the best typecheck command for this repo. If unsure, choose the most likely project command and explain briefly.
 
-Scope:
-${SCOPE}
+Output must be lean. Snippets should be one or two lines only.
+Search hints supplied by caller:
+${clip(JSON.stringify(args?.searchHints || {}, null, 2), 3000)}`,
+    {
+      label: 'discover-fetchUser-call-sites',
+      phase: 'Discover',
+      schema: DISCOVERY_SCHEMA,
+      model: workerModel,
+      effort: 'medium',
+    }
+  )
 
-Instructions:
-- Search the repository for actual call sites of the deprecated \`fetchUser(id)\` API.
-- Include direct calls, awaited calls, calls inside callbacks, and aliased imports only if you can confidently identify them as the deprecated API.
-- Exclude the implementation/definition of fetchUser, tests/mocks unless they are real production call sites in scope, and unrelated functions with the same name.
-- Return stable keys. Prefer "file:line:column" when known.
-- Keep snippets short. Do not include full files.
-- Return exactly the migration targets if possible. If the count differs from ${EXPECTED_COUNT}, include a warning explaining why.
-
-Output must match the schema.
-`.trim()
+  if (discovered && Array.isArray(discovered.callSites)) {
+    sites = dedupeSites(discovered.callSites).slice(0, TARGET_SITE_COUNT)
+  }
+  log(`Discovered ${sites.length} candidate call sites.`)
 }
 
-function buildMigrationPrompt(site) {
-  return `
-You are one isolated migration subagent in a larger swarm.
+const typecheckCommand = requestedTypecheckCommand || String(discovered?.typecheckCommand || '').trim()
 
-Your single assigned call site:
-${stableStringify(site)}
+if (!sites.length) {
+  phase('Report')
+  const emptyReport = {
+    summary: 'No fetchUser(id) call sites were supplied or discovered; no migration was attempted.',
+    counts: { planned: 0, verified: 0, applied: 0, manualAttention: 0, notAttempted: 0 },
+    migrated: [],
+    manualAttention: [],
+    notAttempted: [],
+    typecheckSummary: 'No typecheck run because no migration was attempted.',
+    nextSteps: ['Confirm the deprecated API name and provide callSites explicitly if discovery missed them.'],
+  }
+  return { ok: false, discovered, sites: [], results: [], missing: [], applyResult: null, report: emptyReport }
+}
+
+function migrationPrompt(site) {
+  return `You are one isolated migration worker for exactly one call site.
 
 Migration:
-- Deprecated API: \`fetchUser(id)\`
-- New API: \`getUser({ id })\`
+- Deprecated API: fetchUser(id)
+- New API: getUser({ id })
+- Migrate ONLY this call site:
+${JSON.stringify(site, null, 2)}
 
-Hard boundaries:
-- You are running in an isolated worktree.
-- Handle ONLY the assigned call site above.
-- Do NOT broad-replace every \`fetchUser\` occurrence.
-- Do NOT migrate neighboring call sites unless the exact same syntactic call expression is the assigned site.
-- If import edits are needed, make the minimal import change required for this one site.
-- If multiple assigned sites share a file, another subagent will handle those separately; avoid unrelated cleanup.
+Hard rules:
+1. Work in your isolated worktree.
+2. Make the smallest safe code change for this one call site.
+3. Preserve async/await behavior, generics, nullability, comments, and surrounding semantics.
+4. If fetchUser is imported, update imports conservatively:
+   - add/import getUser from the correct module,
+   - remove fetchUser only if no remaining fetchUser references in that file,
+   - do not break other fetchUser call sites assigned to other workers.
+5. If this call is ambiguous, dynamically constructed, shadowed, test-only intentional deprecated coverage, or requires broader refactoring, do NOT force it. Return manual_attention with a concise reason.
+6. Run a relevant typecheck if feasible. Preferred command:
+${typecheckCommand || '(infer from repository: package manager script, tsc --noEmit, or equivalent)'}
+7. Return a unified diff for the change. Keep it targeted; if the diff would exceed ${MAX_DIFF_CHARS} characters, return manual_attention instead and explain why.
+8. Do not include long logs. Summarize checks in one line each.
 
-Required work:
-1. Locate the exact assigned call site.
-2. Determine whether it is still using \`fetchUser(id)\`, is already migrated, cannot be found, or needs manual attention.
-3. If safe, update the call to \`getUser({ id })\`.
-4. Preserve behavior:
-   - Preserve \`await\`, promise chaining, error handling, optional chaining, comments, and surrounding formatting.
-   - Preserve the exact id expression as the value of the \`id\` property.
-   - If the old call uses multiple arguments, spread/generic overloads, destructuring, unusual binding, shadowed names, or semantics you cannot prove, do not guess; mark manual attention.
-5. Update imports minimally:
-   - Remove \`fetchUser\` import only when this call site no longer needs it and doing so is safe for the file.
-   - Add/import \`getUser\` from the correct module by inspecting existing code and project conventions.
-   - If the correct module cannot be determined confidently, mark manual attention.
-6. Verify type correctness:
-   - Prefer the repo/package's existing typecheck command.
-   - ${TYPECHECK_HINT ? `If applicable, use this typecheck hint: \`${TYPECHECK_HINT}\`.` : 'If no obvious command exists, inspect package scripts and run the most targeted safe TypeScript check.'}
-   - If the repository has unrelated pre-existing type errors, report \`unrelated_failures\` only when you can show the migration itself is not the cause.
-   - If verification cannot run, report \`not_run\` and explain.
-
-Return lean structured data:
-- Echo the assigned key exactly.
-- Include a concise summary.
-- Include the commands run and short evidence.
-- Include a unified diff for only the relevant migration, capped to roughly 200 lines.
-- If manual attention is needed, leave diff empty unless a partial safe change is truly useful.
-`.trim()
+Return migrated only when the code edit is complete and ready for independent verification.`
 }
 
-function buildIntegrationPrompt(payload) {
-  return `
-You are the integration agent for a completed migration swarm.
+function verifyPrompt(site, migration) {
+  return `You are an independent verifier for exactly one migrated call site.
 
-Goal:
-Apply the verified safe \`fetchUser(id)\` -> \`getUser({ id })\` migrations to the main working tree and run final verification.
+Original call site:
+${JSON.stringify(site, null, 2)}
 
-Important:
-- The per-call-site workers ran in isolated worktrees. Their results are below.
-- Apply only entries listed in \`safeMigrations\`.
-- Do NOT apply entries listed in \`manualOrUnsafe\`.
-- Prefer applying the actual intended source edits over blindly forcing patches if context has shifted.
-- Consolidate import edits when multiple safe migrations touch the same file.
-- Preserve behavior and formatting.
-- If a diff conflicts or appears stale, skip that call site and mark it \`conflict\` or \`failed\` rather than guessing.
-- After applying, run the best available typecheck. ${TYPECHECK_HINT ? `Prefer this command when appropriate: \`${TYPECHECK_HINT}\`.` : ''}
-- Keep output concise.
+Migration worker output:
+${clip(JSON.stringify(migration, null, 2), MAX_DIFF_CHARS + 4000)}
 
-Integration payload:
-${stableStringify(payload)}
+Verification task:
+1. In your isolated worktree, apply the provided unified diff.
+2. Inspect the migrated call site and confirm it changes fetchUser(id) to getUser({ id }) without changing behavior.
+3. Confirm imports are type-correct and conservative.
+4. Run the preferred typecheck command if feasible:
+${typecheckCommand || migration.typecheckCommandUsed || '(infer from repository)'}
+5. If typecheck cannot be run, use static TypeScript inspection and mark typeCorrect=false unless you have strong evidence.
+6. Return verified only if this individual patch is type-correct and safe.
+7. Return rejected/manual_attention with concise issues if the patch does not apply, is not targeted, is semantically risky, or fails typecheck.
 
-Output must match the schema.
-`.trim()
+Keep output lean. Do not include full command logs.`
 }
 
-function buildReportPrompt(payload) {
-  return `
-You are the reporting agent for a migration swarm.
+async function runItem(site) {
+  try {
+    const migration = await agent(migrationPrompt(site), {
+      label: `migrate:${site.key}`,
+      phase: 'Migrate/Verify Waves',
+      schema: MIGRATION_SCHEMA,
+      model: workerModel,
+      effort: 'medium',
+      isolation: 'worktree',
+    })
 
-Produce a concise but complete report for the migration:
-\`fetchUser(id)\` -> \`getUser({ id })\`
+    if (!migration) return null
 
-Use ONLY the structured payload below.
-Flag gaps explicitly. Do not claim full success if any call site is missing, unverified, manually skipped, or failed integration.
-
-Payload:
-${stableStringify(payload)}
-
-Report requirements:
-- Summarize counts.
-- List which sites migrated and whether they were integrated.
-- List which sites need manual attention and why.
-- List missing/unprocessed sites explicitly.
-- Summarize typecheck verification status.
-- Keep the Markdown report compact and actionable.
-
-Output must match the schema.
-`.trim()
-}
-
-phase('Preflight')
-log(`Migration swarm starting: expected ${EXPECTED_COUNT} call sites, wave size ${WAVE_SIZE}, integrate=${SHOULD_INTEGRATE}`)
-
-let sites = []
-let discoveryWarnings = []
-
-if (Array.isArray(args?.callSites) && args.callSites.length > 0) {
-  sites = dedupeAndSortSites(args.callSites)
-  log(`Using ${sites.length} call sites supplied in args.callSites`)
-} else {
-  phase('Discover')
-  const discovery = await agent(buildDiscoveryPrompt(), {
-    label: 'discover-fetchUser-call-sites',
-    phase: 'Discover',
-    schema: DISCOVERY_SCHEMA,
-    effort: 'medium',
-  })
-
-  if (discovery === null) {
-    log('Discovery failed; no call sites available to migrate.')
-    return {
-      ok: false,
-      reason: 'Discovery agent failed or was skipped.',
-      expectedCallSites: EXPECTED_COUNT,
-      callSites: [],
-      results: [],
-      missing: [],
-      integration: null,
-      report: null,
+    if (migration.status !== 'migrated') {
+      return {
+        key: site.key,
+        file: site.file,
+        line: site.line,
+        column: site.column,
+        finalStatus: 'manual_attention',
+        reason: migration.manualReason || migration.summary || 'Migration worker requested manual attention.',
+        migration,
+        verification: null,
+        diff: '',
+      }
     }
+
+    if (!migration.diff || migration.diff.length > MAX_DIFF_CHARS) {
+      return {
+        key: site.key,
+        file: site.file,
+        line: site.line,
+        column: site.column,
+        finalStatus: 'manual_attention',
+        reason: !migration.diff
+          ? 'Migration worker did not return a diff.'
+          : `Migration diff exceeded ${MAX_DIFF_CHARS} characters and needs manual review.`,
+        migration,
+        verification: null,
+        diff: '',
+      }
+    }
+
+    const verification = await agent(verifyPrompt(site, migration), {
+      label: `verify:${site.key}`,
+      phase: 'Migrate/Verify Waves',
+      schema: VERIFY_SCHEMA,
+      model: verifierModel,
+      effort: 'medium',
+      isolation: 'worktree',
+    })
+
+    if (!verification) return null
+
+    if (verification.status === 'verified' && verification.typeCorrect) {
+      return {
+        key: site.key,
+        file: site.file,
+        line: site.line,
+        column: site.column,
+        finalStatus: 'verified_migration',
+        reason: verification.summary || migration.summary || 'Verified type-correct migration.',
+        migration,
+        verification,
+        diff: migration.diff,
+      }
+    }
+
+    return {
+      key: site.key,
+      file: site.file,
+      line: site.line,
+      column: site.column,
+      finalStatus: 'manual_attention',
+      reason:
+        (verification.issues && verification.issues.length ? verification.issues.join('; ') : '') ||
+        verification.summary ||
+        'Verifier rejected migration or could not prove type correctness.',
+      migration,
+      verification,
+      diff: '',
+    }
+  } catch (e) {
+    log(`Worker exception for ${site.key}: ${String(e && e.message ? e.message : e)}`)
+    return null
   }
-
-  sites = dedupeAndSortSites(discovery.callSites || [])
-  discoveryWarnings = discovery.warnings || []
-  log(`Discovery identified ${sites.length} unique call sites`)
 }
 
-if (sites.length !== EXPECTED_COUNT) {
-  log(`⚠ expected ${EXPECTED_COUNT} call sites, but identified ${sites.length}`)
-}
-
-if (sites.length === 0) {
-  return {
-    ok: false,
-    reason: 'No call sites were identified.',
-    expectedCallSites: EXPECTED_COUNT,
-    callSites: [],
-    discoveryWarnings,
-    results: [],
-    missing: [],
-    integration: null,
-    report: null,
-  }
-}
-
-function runCallSite(site) {
-  return agent(buildMigrationPrompt(site), {
-    label: `migrate:${sanitizeLabel(site.key)}`,
-    phase: 'Migrate',
-    schema: MIGRATION_RESULT_SCHEMA,
-    effort: 'medium',
-    isolation: 'worktree',
-  })
-}
+phase('Migrate/Verify Waves')
 
 const waves = chunk(sites, WAVE_SIZE)
-const doneByKey = new Map()
+const done = []
 let failed = []
-let notStarted = []
-let stoppedForInstability = false
+let instabilitySpike = false
 
-phase('Migrate')
 for (let w = 0; w < waves.length; w++) {
-  phase(`Migrate wave ${w + 1}/${waves.length}`)
+  phase(`Migrate/Verify Wave ${w + 1}/${waves.length}`)
   const wave = waves[w]
-  log(`Starting migration wave ${w + 1}/${waves.length} (${wave.length} call sites)`)
 
-  const batch = await parallel(wave.map(site => () => runCallSite(site)))
+  const batch = await parallel(wave.map(site => () => runItem(site)))
 
-  let nulls = 0
   batch.forEach((result, i) => {
-    const site = wave[i]
-    if (result === null) {
-      nulls += 1
-      failed.push(site)
-      return
-    }
-
-    if (result.key !== site.key) {
-      doneByKey.set(site.key, {
-        ...result,
-        key: site.key,
-        manualAttention: {
-          needed: true,
-          reason: `Worker returned mismatched key "${result.key}" for assigned key "${site.key}". Review required.`,
-        },
-        status: 'manual_attention',
-        risk: 'high',
-      })
-      return
-    }
-
-    doneByKey.set(site.key, result)
+    if (result) done.push(result)
+    else failed.push(wave[i])
   })
 
-  log(`Wave ${w + 1}: ${doneByKey.size}/${sites.length} returned, ${failed.length} failed/null so far`)
+  const nulls = batch.filter(r => r === null).length
+  log(`Wave ${w + 1}/${waves.length}: ${batch.length - nulls}/${batch.length} returned; cumulative ${done.length}/${sites.length}; failed-to-retry ${failed.length}.`)
 
-  if (nulls / wave.length > 0.4) {
-    stoppedForInstability = true
-    notStarted = waves.slice(w + 1).flat()
-    log(`⚠ instability: ${nulls}/${wave.length} failed this wave — backing off. Returning partial; resume later.`)
+  if (nulls / batch.length > 0.4) {
+    log(`⚠ instability: ${nulls}/${batch.length} failed this wave — backing off. Returning partial results; resume later to recover remaining work from cache.`)
+    instabilitySpike = true
     break
   }
 }
 
-if (!stoppedForInstability && failed.length > 0) {
+if (failed.length && !instabilitySpike) {
   phase('Retry')
   const retryItems = failed
   failed = []
 
-  log(`Starting retry wave for ${retryItems.length} failed call sites`)
-  const retried = await parallel(retryItems.map(site => () => runCallSite(site)))
+  const retried = await parallel(retryItems.map(site => () => runItem(site)))
 
   retried.forEach((result, i) => {
-    const site = retryItems[i]
-    if (result === null) {
-      failed.push(site)
-      return
-    }
-
-    if (result.key !== site.key) {
-      doneByKey.set(site.key, {
-        ...result,
-        key: site.key,
-        manualAttention: {
-          needed: true,
-          reason: `Retry worker returned mismatched key "${result.key}" for assigned key "${site.key}". Review required.`,
-        },
-        status: 'manual_attention',
-        risk: 'high',
-      })
-      return
-    }
-
-    doneByKey.set(site.key, result)
+    if (result) done.push(result)
+    else failed.push(retryItems[i])
   })
 
-  log(`Retry wave recovered ${retried.filter(Boolean).length}; still missing ${failed.length}`)
+  log(`Retry wave recovered ${retried.filter(Boolean).length}/${retryItems.length}; still missing ${failed.length}.`)
+} else if (failed.length && instabilitySpike) {
+  log(`Retry skipped because of instability backoff; ${failed.length} failed items can be recovered on resume.`)
 }
 
-const workerResults = [...doneByKey.values()].sort((a, b) => a.key > b.key ? 1 : a.key < b.key ? -1 : 0)
-const returnedKeys = new Set(workerResults.map(r => r.key))
-const missingSites = sites.filter(site => !returnedKeys.has(site.key))
-const missing = missingSites.map(site => site.key)
+const resultByKey = new Map()
+for (const r of done) resultByKey.set(r.key, r)
+const dedupedResults = Array.from(resultByKey.values()).sort((a, b) => (a.key > b.key ? 1 : a.key < b.key ? -1 : 0))
 
-if (missing.length > 0) {
-  log(`⚠ partial: missing ${missing.length}/${sites.length}: ${missing.join(', ')}`)
+const haveKeys = new Set(dedupedResults.map(r => r.key))
+const missing = sites
+  .filter(site => !haveKeys.has(site.key))
+  .map(site => ({
+    key: site.key,
+    file: site.file,
+    reason: instabilitySpike
+      ? 'Not completed because workflow backed off during an API instability spike; resume this run.'
+      : 'Worker or verifier did not return a result after retry.',
+  }))
+
+if (missing.length) {
+  log(`⚠ partial: missing ${missing.length}/${sites.length}: ${missing.map(m => m.key).join(', ')}`)
 }
 
-const safeMigrations = workerResults.filter(r => {
-  if (r.status !== 'migrated') return false
-  if (r.manualAttention?.needed) return false
-  if (!r.diff || !r.diff.trim()) return false
-  if (INTEGRATE_UNVERIFIED) return r.verification.typecheck !== 'failed'
-  return r.verification.typecheck === 'passed'
-})
+const verifiedPatches = dedupedResults
+  .filter(r => r.finalStatus === 'verified_migration' && r.diff)
+  .map(r => ({
+    key: r.key,
+    file: r.file,
+    line: r.line,
+    column: r.column,
+    reason: r.reason,
+    diff: clip(r.diff, MAX_DIFF_CHARS),
+  }))
+  .sort((a, b) => (a.key > b.key ? 1 : a.key < b.key ? -1 : 0))
 
-const alreadyMigrated = workerResults.filter(r => r.status === 'already_migrated')
+let applyResult = null
 
-const manualOrUnsafe = workerResults.filter(r => {
-  if (r.status === 'manual_attention' || r.status === 'not_found' || r.status === 'skipped') return true
-  if (r.manualAttention?.needed) return true
-  if (r.status === 'migrated' && !safeMigrations.some(s => s.key === r.key)) return true
-  return false
-})
+if (applyChanges && verifiedPatches.length) {
+  phase('Apply')
+  applyResult = await agent(
+    `You are the integration applier for verified isolated migration patches.
 
-let integration = null
+Goal:
+- Apply verified patches that migrate fetchUser(id) to getUser({ id }) in the main worktree.
+- Apply only patches listed below.
+- If patches conflict, resolve only straightforward import/context conflicts that preserve the verified migration.
+- If a patch is risky or cannot be applied cleanly, skip it and report manual attention.
+- After applying all clean patches, run full typecheck if feasible.
+- Preferred full typecheck command:
+${typecheckCommand || '(infer from repository)'}
+- Do not migrate additional call sites not represented by these verified patches.
+- Keep output concise.
 
-if (SHOULD_INTEGRATE && safeMigrations.length > 0) {
-  phase('Integrate')
-  log(`Integrating ${safeMigrations.length} verified safe migrations into the main working tree`)
+Verified patches:
+${clip(JSON.stringify(verifiedPatches, null, 2), 120000)}
 
-  integration = await agent(buildIntegrationPrompt({
-    expectedCallSites: EXPECTED_COUNT,
-    identifiedCallSites: sites.length,
-    safeMigrations: safeMigrations.map(r => ({
-      key: r.key,
-      file: r.file,
-      summary: r.summary,
-      changedFiles: r.changedFiles,
-      verification: r.verification,
-      diff: r.diff,
-    })),
-    alreadyMigrated: alreadyMigrated.map(r => ({
-      key: r.key,
-      file: r.file,
-      summary: r.summary,
-    })),
-    manualOrUnsafe: manualOrUnsafe.map(r => ({
-      key: r.key,
-      file: r.file,
-      status: r.status,
-      reason: r.manualAttention?.reason || r.summary,
-      verification: r.verification,
-    })),
-    missing,
-  }), {
-    label: 'integrate-verified-migrations',
-    phase: 'Integrate',
-    schema: INTEGRATION_SCHEMA,
-    effort: 'high',
-  })
+Known manual/missing items to leave untouched:
+${JSON.stringify(
+  dedupedResults
+    .filter(r => r.finalStatus !== 'verified_migration')
+    .map(r => ({ key: r.key, file: r.file, reason: r.reason }))
+    .concat(missing),
+  null,
+  2
+)}`,
+    {
+      label: 'apply-verified-migrations',
+      phase: 'Apply',
+      schema: APPLY_SCHEMA,
+      model: workerModel,
+      effort: 'high',
+    }
+  )
 
-  if (integration === null) {
-    log('⚠ integration agent failed or was skipped; report will mark integration as incomplete')
+  if (!applyResult) {
+    log('⚠ apply agent returned null; verified patches are reported but may not be applied.')
   }
-} else if (!SHOULD_INTEGRATE) {
-  log('Skipping integration because args.integrate=false or args.reportOnly=true')
 } else {
-  log('No verified safe migrations available for automatic integration')
+  phase('Apply')
+  log(applyChanges ? 'No verified patches to apply.' : 'apply=false; verified patches were not applied.')
 }
 
 phase('Report')
 
-const integrationByKey = new Map()
-if (integration?.applied) {
-  integration.applied.forEach(entry => integrationByKey.set(entry.key, entry))
-}
+const manualAttention = dedupedResults
+  .filter(r => r.finalStatus !== 'verified_migration')
+  .map(r => ({
+    key: r.key,
+    file: r.file,
+    reason: r.reason || 'Needs manual attention.',
+  }))
+  .sort((a, b) => (a.key > b.key ? 1 : a.key < b.key ? -1 : 0))
 
 const reportPayload = {
-  expectedCallSites: EXPECTED_COUNT,
-  identifiedCallSites: sites.length,
-  discoveryWarnings,
-  stoppedForInstability,
-  notStarted: notStarted.map(site => site.key),
-  missing,
-  integrationRequested: SHOULD_INTEGRATE,
-  integration,
-  workerResults: workerResults.map(r => ({
+  plannedSites: sites,
+  discoveryNotes: discovered?.notes || [],
+  typecheckCommand,
+  instabilitySpike,
+  results: dedupedResults.map(r => ({
     key: r.key,
     file: r.file,
-    status: r.status,
-    summary: r.summary,
-    changedFiles: r.changedFiles,
-    verification: r.verification,
-    manualAttention: r.manualAttention,
-    risk: r.risk,
-    integrated: integrationByKey.get(r.key) || null,
+    line: r.line,
+    column: r.column,
+    finalStatus: r.finalStatus,
+    reason: r.reason,
+    migrationSummary: r.migration?.summary || '',
+    migrationChecks: r.migration?.checksRun || [],
+    verificationSummary: r.verification?.summary || '',
+    verificationChecks: r.verification?.checksRun || [],
+    verificationIssues: r.verification?.issues || [],
   })),
+  missing,
+  applyResult,
 }
 
-const report = await agent(buildReportPrompt(reportPayload), {
-  label: 'migration-report',
-  phase: 'Report',
-  schema: REPORT_SCHEMA,
-  effort: 'medium',
-})
+const report = await agent(
+  `Produce the final migration report for this fetchUser(id) -> getUser({ id }) migration swarm.
+
+Requirements:
+- Be explicit about which call sites migrated, which need manual attention, and why.
+- Do not hide partial coverage. Include every missing/not-attempted site.
+- Distinguish "verified in isolated worktree" from "applied to main worktree".
+- Summarize typecheck status, including full integration typecheck if available.
+- Keep the report concise and actionable.
+
+Input payload:
+${JSON.stringify(reportPayload, null, 2)}`,
+  {
+    label: 'final-migration-report',
+    phase: 'Report',
+    schema: REPORT_SCHEMA,
+    model: synthesizerModel,
+    effort: 'high',
+  }
+)
+
+const fallbackReport = {
+  summary: 'Migration swarm completed but the report synthesis agent did not return a structured report.',
+  counts: {
+    planned: sites.length,
+    verified: verifiedPatches.length,
+    applied: applyResult?.applied?.filter(a => a.status === 'applied').length || 0,
+    manualAttention: manualAttention.length,
+    notAttempted: missing.length,
+  },
+  migrated: verifiedPatches.map(p => ({ key: p.key, file: p.file, summary: p.reason || 'Verified migration.' })),
+  manualAttention,
+  notAttempted: missing,
+  typecheckSummary: applyResult?.fullTypecheck?.summary || 'See raw migration and verification checks.',
+  nextSteps: [
+    'Review manualAttention and notAttempted lists.',
+    'If this run backed off or stalled, resume using Workflow({ scriptPath, resumeFromRunId }) rather than restarting.',
+  ],
+}
 
 return {
-  ok: missing.length === 0 && !stoppedForInstability,
-  expectedCallSites: EXPECTED_COUNT,
-  identifiedCallSites: sites.length,
-  discoveryWarnings,
-  stoppedForInstability,
-  notStarted: notStarted.map(site => site.key),
-  results: workerResults,
-  safeMigrations: safeMigrations.map(r => r.key),
-  alreadyMigrated: alreadyMigrated.map(r => r.key),
-  manualAttention: manualOrUnsafe.map(r => ({
-    key: r.key,
-    file: r.file,
-    status: r.status,
-    reason: r.manualAttention?.reason || r.summary,
-  })),
+  ok: !instabilitySpike && missing.length === 0 && manualAttention.length === 0 && !!(report || fallbackReport),
+  plannedCount: sites.length,
+  verifiedCount: verifiedPatches.length,
+  manualAttentionCount: manualAttention.length,
+  missingCount: missing.length,
+  instabilitySpike,
+  typecheckCommand,
+  discovered,
+  results: dedupedResults,
   missing,
-  integration,
-  report,
+  applyResult,
+  report: report || fallbackReport,
 }
 ```
 
-> **GPT-5.5 judge:** The script meets most of the safety bar: it uses bounded waves with a default size of 6 and max 8, tolerates null agent results, retries failed/null call sites, records completed results into doneByKey after each wave, uses capped schemas and lean outputs, synthesizes partial results with explicit missing/manual/integration gaps, and backs off when a wave has a high null failure rate. It also includes a detailed ScheduleWakeup watchdog instruction. However, the watchdog is only documented in a comment rather than actually armed by the workflow itself, each wave still has a hard parallel() barrier so a single hung subagent can stall that wave until external intervention, and there is no explicit persistent cache/resume mechanism beyond stable keys and the watchdog resume suggestion. Overall it is strongly safe-by-construction but not perfect against hangs without the external watchdog being correctly armed.
+> **Claude judge:** All eight safety properties are present: bounded 7-item waves with sequential iteration, per-agent null-tolerance with a dedicated retry wave, per-wave result accumulation with no single hard barrier, an armed ScheduleWakeup watchdog comment (correctly noted as agent-level), deterministic cache-stable keys, capped schemas and clipped outputs, synthesis with explicit gap-flagging and a fallback report, and a >40% failure-rate backoff that halts further waves and skips retry.
 

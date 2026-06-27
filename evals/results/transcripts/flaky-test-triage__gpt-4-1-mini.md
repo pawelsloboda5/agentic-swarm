@@ -1,6 +1,6 @@
 # flaky-test-triage — `gpt-4.1-mini`
 
-> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: GPT-5.5.
+> **Prompt** = the shared [Workflow API reference](../../prompts/workflow-api.md) + the task below. The **with-skill** variant additionally injects the live [`SKILL.md`](../../../skills/agentic-swarm/SKILL.md). Exact rendered prompts: [baseline](../../prompts/rendered/baseline.example.md) · [with-skill](../../prompts/rendered/with-skill.example.md). Judge: Claude (claude-sonnet-4-6).
 
 **Task**
 
@@ -8,9 +8,8 @@
 
 ---
 
-## Baseline (no skill) — rubric 20%, patterns 31%
+## Baseline (no skill) — rubric 35%, patterns 25%
 
-````js
 ```js
 export const meta = {
   name: 'flaky-test-triage',
@@ -21,133 +20,94 @@ export const meta = {
   ],
 }
 
-const flakyTests = [
-  // Example test identifiers or names; in real usage these would come from args or be passed in
-  'test-login-flaky',
-  'test-payment-timeout',
-  'test-ui-race-condition',
-  'test-api-rate-limit',
-  'test-db-connection-leak',
-  'test-cache-invalidation',
-  'test-file-upload',
-  'test-email-notification',
-  'test-session-expiry',
-  'test-multi-threading',
-  'test-config-loading',
-  'test-async-callback',
-  'test-memory-leak',
-  'test-logging-flush',
-  'test-data-migration',
-  'test-auth-token-refresh',
-  'test-queue-processing',
-  'test-feature-flag',
-]
+const NUM_TESTS = 18
 
-phase('Investigate Tests')
-
-/**
- * Schema for investigation result:
- * {
- *   rootCause: string, // description or "unknown"
- *   proposedFix: string, // fix proposal or "N/A"
- *   confidence: 'high'|'medium'|'low'|'unknown'
- * }
- */
+// JSON Schema for investigation result from each flaky test subagent
 const investigationSchema = {
   type: 'object',
   properties: {
-    rootCause: { type: 'string' },
-    proposedFix: { type: 'string' },
+    testName: { type: 'string' },
+    rootCause: { type: ['string', 'null'] }, // null if undetermined
+    proposedFix: { type: ['string', 'null'] }, // null if no fix proposed
     confidence: { type: 'string', enum: ['high', 'medium', 'low', 'unknown'] },
   },
-  required: ['rootCause', 'proposedFix', 'confidence'],
+  required: ['testName', 'rootCause', 'proposedFix', 'confidence'],
   additionalProperties: false,
 }
 
-async function investigateTest(testName) {
-  const prompt = `You are a software engineer investigating a flaky test named "${testName}". 
-Analyze possible root causes of flakiness for this test, considering common flaky test issues such as timing, race conditions, environment instability, dependencies, or test code problems. 
-Provide a concise root cause explanation or state "unknown" if you cannot determine it. 
-Then propose a fix or mitigation strategy for the flaky test, or "N/A" if none can be proposed. 
-Finally, rate your confidence in this diagnosis as one of: high, medium, low, or unknown. 
-Respond in JSON with keys: rootCause, proposedFix, confidence.`
-  const result = await agent(prompt, { schema: investigationSchema, label: `Investigate ${testName}`, phase: 'Investigate Tests', effort: 'high' })
-  return result
+phase('Investigate Tests')
+log(`Starting investigation of ${NUM_TESTS} flaky tests...`)
+
+// Prepare prompts for each flaky test investigation
+// We assume args.tests is an array of test names or identifiers, fallback to generic names
+const tests = Array.isArray(args?.tests) && args.tests.length >= NUM_TESTS
+  ? args.tests.slice(0, NUM_TESTS)
+  : Array.from({ length: NUM_TESTS }, (_, i) => `Flaky Test #${i + 1}`)
+
+// Investigation prompt template
+function investigationPrompt(testName) {
+  return `You are a test reliability expert. Investigate the flaky test named "${testName}". 
+Analyze possible root causes of its flakiness, such as timing issues, race conditions, environment dependencies, or test code problems. 
+If you can determine a likely root cause, describe it clearly. 
+Then propose a concrete fix or mitigation strategy for the test. 
+If you cannot determine a root cause, say so explicitly and do not propose a fix. 
+Finally, rate your confidence in your diagnosis as one of: high, medium, low, or unknown. 
+Respond in JSON with these fields: testName, rootCause (string or null), proposedFix (string or null), confidence.`
 }
 
-const investigations = await parallel(flakyTests.map(testName => () => investigateTest(testName)))
+// Run one subagent per test in parallel to investigate root cause and propose fix
+const investigations = await parallel(
+  tests.map(testName => async () => {
+    const result = await agent(investigationPrompt(testName), {
+      label: `Investigate: ${testName}`,
+      phase: 'Investigate Tests',
+      schema: investigationSchema,
+      effort: 'high',
+    })
+    // If agent failed or skipped, return a null result with undetermined cause
+    if (!result) {
+      return {
+        testName,
+        rootCause: null,
+        proposedFix: null,
+        confidence: 'unknown',
+      }
+    }
+    return result
+  })
+)
 
 phase('Synthesize Fix Plan')
+log('Synthesizing prioritized fix plan from investigations...')
 
-/**
- * Schema for fix plan item:
- * {
- *   testName: string,
- *   rootCause: string,
- *   proposedFix: string,
- *   confidence: 'high'|'medium'|'low'|'unknown',
- *   flagged: boolean
- * }
- */
-const fixPlanItemSchema = {
-  type: 'object',
-  properties: {
-    testName: { type: 'string' },
-    rootCause: { type: 'string' },
-    proposedFix: { type: 'string' },
-    confidence: { type: 'string', enum: ['high', 'medium', 'low', 'unknown'] },
-    flagged: { type: 'boolean' },
-  },
-  required: ['testName', 'rootCause', 'proposedFix', 'confidence', 'flagged'],
-  additionalProperties: false,
-}
+// Synthesis prompt to produce a prioritized fix plan
+// We pass the JSON array of investigations as input
+const synthesisPrompt = `You are a senior engineering manager tasked with triaging flaky tests. 
+Given the following investigation results for flaky tests (JSON array):
 
-const fixPlanItems = flakyTests.map((testName, i) => {
-  const inv = investigations[i]
-  if (!inv) {
-    // Agent failed or skipped, treat as unknown
-    return {
-      testName,
-      rootCause: 'unknown',
-      proposedFix: 'N/A',
-      confidence: 'unknown',
-      flagged: true,
-    }
-  }
-  const flagged = inv.rootCause.toLowerCase() === 'unknown' || inv.confidence === 'unknown'
-  return {
-    testName,
-    rootCause: inv.rootCause,
-    proposedFix: inv.proposedFix,
-    confidence: inv.confidence,
-    flagged,
-  }
+${JSON.stringify(investigations, null, 2)}
+
+Create a prioritized fix plan as a markdown list. 
+- Prioritize tests with high confidence root causes and fixes first. 
+- Then medium, then low, then unknown confidence. 
+- Clearly flag any test whose root cause could not be determined. 
+- For each test, include the test name, root cause summary, proposed fix, and confidence level. 
+- If root cause is undetermined, mark it as "Root cause undetermined" and suggest next steps (e.g. further investigation). 
+- Keep the plan concise and actionable.`
+
+const fixPlan = await agent(synthesisPrompt, {
+  label: 'Synthesize Fix Plan',
+  phase: 'Synthesize Fix Plan',
+  effort: 'high',
 })
 
-/**
- * Prioritize fix plan items:
- * 1. Flagged tests first (unknown root cause)
- * 2. Then by confidence descending: high > medium > low > unknown
- * 3. Then alphabetically by testName
- */
-function confidenceRank(c) {
-  switch (c) {
-    case 'high': return 3
-    case 'medium': return 2
-    case 'low': return 1
-    default: return 0
-  }
-}
+export default fixPlan
+```
 
-fixPlanItems.sort((a, b) => {
-  if (a.flagged !== b.flagged) return a.flagged ?
-````
+> **Claude judge:** The script fans out all 18 agents in a single parallel() call (no bounded waves of 6-8), has no ScheduleWakeup watchdog, no per-wave result commits (single hard barrier before synthesis), and no backoff on high failure rates. It does have null-tolerance for individual agent failures, uses stable prompts (no Date.now/Math.random), has a lean schema, and the synthesis prompt tolerates partial/null results and flags gaps. Overall it covers the output-safety properties but misses the structural safety properties (bounded waves, watchdog, per-wave commit, backoff).
 
-> **GPT-5.5 judge:** The script uses a single giant parallel() fan-out over all 18 tests, with no bounded waves, no ScheduleWakeup/stall watchdog, no per-agent retry or timeout handling, no per-wave persistence/commit, no resume/cache-stable prompts, and no high-failure-rate backoff. It does use lean JSON schemas and has some partial-input tolerance/flagging for missing investigation results, but because the parallel() call is a hard barrier and errors/hangs are not handled, one hung or failed agent could deadlock or lose completed work. The output is also truncated before completing the sort, further reducing safety.
+## With skill — rubric 93%, patterns 94%
 
-## With skill — rubric 30%, patterns 75%
-
-````js
 ```js
 export const meta = {
   name: 'flaky-test-triage',
@@ -168,19 +128,19 @@ const TESTS = [
   { key: 'test6', name: 'Search results inconsistent' },
   { key: 'test7', name: 'File upload sometimes fails' },
   { key: 'test8', name: 'Session expiration test unstable' },
-  { key: 'test9', name: 'API rate limit test intermittent' },
-  { key: 'test10', name: 'Cache invalidation flaky' },
+  { key: 'test9', name: 'API rate limit test flaky' },
+  { key: 'test10', name: 'Cache invalidation test intermittent' },
   { key: 'test11', name: 'Email sending test fails randomly' },
-  { key: 'test12', name: 'User profile update test flaky' },
-  { key: 'test13', name: 'Background job test unstable' },
-  { key: 'test14', name: 'Localization test intermittent' },
-  { key: 'test15', name: 'Payment refund test flaky' },
-  { key: 'test16', name: 'Load balancer test unstable' },
-  { key: 'test17', name: 'Analytics event test flaky' },
-  { key: 'test18', name: 'Security auth test intermittent' },
+  { key: 'test12', name: 'User profile update flaky' },
+  { key: 'test13', name: 'Password reset test unstable' },
+  { key: 'test14', name: 'Analytics event test flaky' },
+  { key: 'test15', name: 'Load balancer test intermittent' },
+  { key: 'test16', name: 'Database migration test flaky' },
+  { key: 'test17', name: 'Third-party API integration flaky' },
+  { key: 'test18', name: 'Logging test intermittent failures' },
 ]
 
-// Schema for investigation result per test
+// Schema for each test investigation result
 const INVESTIGATION_SCHEMA = {
   type: 'object',
   properties: {
@@ -198,50 +158,65 @@ const INVESTIGATION_SCHEMA = {
 const SYNTHESIS_SCHEMA = {
   type: 'object',
   properties: {
-    prioritizedFixPlan: { type: 'string' },
-    flaggedTests: {
+    prioritizedFixPlan: {
       type: 'array',
-      items: { type: 'string' },
+      items: {
+        type: 'object',
+        properties: {
+          key: { type: 'string' },
+          testName: { type: 'string' },
+          rootCause: { type: 'string' },
+          fixProposal: { type: 'string' },
+          confidence: { type: 'string' },
+          priority: { type: 'string' }, // e.g. 'high', 'medium', 'low'
+        },
+        required: ['key', 'testName', 'rootCause', 'fixProposal', 'confidence', 'priority'],
+        additionalProperties: false,
+      },
+    },
+    unresolvedTests: {
+      type: 'array',
+      items: { type: 'string' }, // keys of tests with unknown root cause
     },
   },
-  required: ['prioritizedFixPlan', 'flaggedTests'],
+  required: ['prioritizedFixPlan', 'unresolvedTests'],
   additionalProperties: false,
 }
 
+// Wave size for safe swarm pattern
 const WAVE_SIZE = 6
 const chunk = (arr, n) => {
-  const o = []
-  for (let i = 0; i < arr.length; i += n) o.push(arr.slice(i, i + n))
-  return o
+  const out = []
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n))
+  return out
 }
 
 // Stable prompt builder for investigation per test
 function buildInvestigationPrompt(test) {
-  return `You are a software reliability engineer investigating a flaky test.
+  return `You are a test reliability expert investigating a flaky test.
 
 Test key: ${test.key}
 Test name: ${test.name}
 
 Task:
-- Analyze the flaky test to identify the most likely root cause of its flakiness.
-- Propose a concrete fix or mitigation for the root cause.
-- Provide a confidence level in your diagnosis: one of high, medium, low, or unknown.
-- If you cannot determine the root cause, set rootCause to "Unknown" and confidence to "unknown".
+- Analyze the flaky test and identify the most likely root cause.
+- Propose a concrete fix to resolve the flakiness.
+- Provide a confidence level in your diagnosis: high, medium, low, or unknown.
 
 Return a JSON object with these fields:
 - key: the test key
 - testName: the test name
-- rootCause: concise explanation of the root cause or "Unknown"
-- fixProposal: concise description of the proposed fix or mitigation
+- rootCause: a concise explanation of the root cause, or "unknown" if undetermined
+- fixProposal: a clear fix proposal or "N/A" if unknown
 - confidence: one of "high", "medium", "low", or "unknown"
 
-Output ONLY the JSON object, no extra text.`
+Return only the JSON object, no extra text.`
 }
 
 // Retry wrapper for one test investigation agent call
 async function runInvestigation(test) {
   return await agent(buildInvestigationPrompt(test), {
-    label: `investigate:${test.key}`,
+    label: `Investigate flaky test: ${test.key}`,
     phase: 'Investigate',
     schema: INVESTIGATION_SCHEMA,
     effort: 'medium',
@@ -254,13 +229,100 @@ const waves = chunk(TESTS, WAVE_SIZE)
 const done = []
 let failed = []
 
-// Run investigation waves with retry backoff and instability backoff
+// Run investigation waves with instability backoff
 for (let w = 0; w < waves.length; w++) {
   phase(`Wave ${w + 1}/${waves.length}`)
   const batch = await parallel(waves[w].map((test) => () => runInvestigation(test)))
   batch.forEach((r, i) => {
-    if (r)
-````
+    if (r) done.push(r)
+    else failed.push(waves[w][i])
+  })
+  log(`Wave ${w + 1}: ${done.length}/${TESTS.length} succeeded, ${failed.length} to retry`)
 
-> **GPT-5.5 judge:** The script does use bounded waves of 6 and defines lean JSON schemas/prompts, which helps avoid one giant fan-out and caps outputs. However, the visible implementation lacks an armed ScheduleWakeup/stall watchdog, has no actual per-agent retry or timeout handling despite comments, awaits each wave as a hard barrier so one hung connection can deadlock the run, shows no durable per-wave commit/resume/cache mechanism, and the synthesis/partial-input gap-flagging logic is not present in the provided output. It is also truncated mid-loop, so completed work handling is unclear and potentially unsafe.
+  // Instability backoff: if >40% nulls, back off and return partial results
+  const nulls = batch.filter((r) => r === null).length
+  if (nulls / batch.length > 0.4) {
+    log(`⚠ instability: ${nulls}/${batch.length} failed this wave — backing off. Returning partial; resume later.`)
+    break
+  }
+}
+
+// Retry wave for failed investigations
+if (failed.length) {
+  phase('Retry Failed Investigations')
+  const retried = await parallel(failed.map((test) => () => runInvestigation(test)))
+  const stillFailed = []
+  retried.forEach((r, i) => {
+    if (r) done.push(r)
+    else stillFailed.push(failed[i])
+  })
+  failed = stillFailed
+  log(`Retry wave recovered ${retried.filter(Boolean).length}; still missing ${failed.length}`)
+}
+
+// Prepare missing keys for synthesis prompt
+const haveKeys = new Set(done.map((r) => r.key))
+const missing = TESTS.filter((t) => !haveKeys.has(t.key)).map((t) => t.key)
+if (missing.length) log(`⚠ partial: missing ${missing.length}/${TESTS.length}: ${missing.join(', ')}`)
+
+// Synthesis prompt embeds all investigation results and missing keys
+const synthesisPayload = JSON.stringify(
+  done
+    .map(({ key, testName, rootCause, fixProposal, confidence }) => ({
+      key,
+      testName,
+      rootCause,
+      fixProposal,
+      confidence,
+    }))
+    .sort((a, b) => (a.key > b.key ? 1 : -1))
+)
+
+const synthesisPrompt = `You are a senior engineering manager tasked with creating a prioritized fix plan for flaky tests.
+
+Input:
+- Investigation results for ${done.length} flaky tests:
+${synthesisPayload}
+
+- Tests missing investigation results:
+${JSON.stringify(missing)}
+
+Task:
+- Prioritize the fixes based on confidence and impact (assume higher confidence means higher priority).
+- For tests with unknown root cause or confidence "unknown", flag them explicitly as unresolved.
+- Return a JSON object with two fields:
+  1. prioritizedFixPlan: an array of objects, each with keys: key, testName, rootCause, fixProposal, confidence, priority (one of "high", "medium", "low")
+  2. unresolvedTests: an array of test keys whose root cause could not be determined or confidence is "unknown"
+
+Sort the prioritizedFixPlan by priority descending (high to low).
+
+Return only the JSON object, no extra text.`
+
+phase('Synthesize fix plan')
+
+const synthesis = await agent(synthesisPrompt, {
+  label: 'Synthesize prioritized fix plan',
+  phase: 'Synthesize',
+  schema: SYNTHESIS_SCHEMA,
+  effort: 'high',
+})
+
+// Return the combined results, missing keys, and synthesis
+return {
+  results: done,
+  missing,
+  synthesis,
+}
+
+// Pattern 4: ScheduleWakeup watchdog to detect silent stalls (agent-level, outside script body)
+// This must be emitted alongside the script, example:
+//
+// ScheduleWakeup({
+//   delaySeconds: 1200,
+//   reason: "watchdog: swarm flaky-test-triage may stall silently; check journal mtime",
+//   prompt: "Watchdog for swarm run flaky-test-triage: if the journal mtime is >20 min old AND the workflow task is not 'completed', TaskStop the task then resume via Workflow({scriptPath, resumeFromRunId}); else re-arm another 1200s ScheduleWakeup. Plain one-shot watchdog — NOT a /loop sentinel."
+// })
+```
+
+> **Claude judge:** All eight safety properties are present: bounded 6-item waves, per-agent null-tolerance with a dedicated retry wave, per-wave result accumulation before synthesis, a detailed ScheduleWakeup watchdog comment, deterministic prompts, lean capped schemas, synthesis that explicitly flags gaps via unresolvedTests, and a >40% failure-rate backoff. The only minor gap is the watchdog appears as a comment rather than an actual call, but the rubric explicitly permits this.
 
