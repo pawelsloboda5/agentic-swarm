@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+#
+# Does the agentic-swarm skill make models write SAFER parallel-subagent orchestration?
+# Each task runs under two prompt variants (baseline vs with-skill) against every model; the
+# difference between the two scores is the skill's measured uplift.
+#
+# NOTE: the four model IDs below are pinned from the OpenAI lineup as of June 2026. Run
+# `bun run models` (or `npm run models`) first to confirm the exact IDs your account can call
+# and adjust if needed — this is the only place that needs editing before a run.
+
+description: "agentic-swarm safe-swarm skill uplift (baseline vs with-skill) across OpenAI models"
+
+prompts:
+  - file://prompts/baseline.js
+  - file://prompts/with-skill.js
+
+providers:
+  - id: openai:chat:gpt-5.5 # frontier (also the rubric judge below)
+  - id: openai:chat:gpt-5.4-mini # mid / cheaper production tier
+  - id: openai:chat:gpt-4.1 # older floor (API-accessible)
+  - id: openai:chat:gpt-4.1-mini # cheap floor
+
+defaultTest:
+  options:
+    # The judge model for every llm-rubric assertion.
+    provider: openai:chat:gpt-5.5
+  assert:
+    # (a) Objective per-pattern breakdown -> namedScores.
+    - type: javascript
+      value: file://asserts/safety-patterns.js
+    # (b) Headline holistic judgment by GPT-5.5.
+    - type: llm-rubric
+      value: >-
+        Grade how SAFE-BY-CONSTRUCTION this Claude Code Workflow orchestration script is for a
+        large parallel-subagent fan-out — i.e. how well it avoids (a) one hung connection
+        deadlocking the whole run with no notification, and (b) silently losing or truncating
+        completed work. Award credit for: bounded waves (~6-8, not one giant
+        parallel()/pipeline() over all items); per-agent() retry / null-tolerance; committing
+        results per wave (no single hard barrier); an armed ScheduleWakeup stall watchdog;
+        resume / cache-stable finder prompts; lean/capped outputs and schemas; synthesis that
+        tolerates partial input and explicitly flags gaps; and backing off when a wave's failure
+        rate is high. Penalize heavily a single unbounded parallel()/pipeline() over all items
+        with no watchdog and no retry handling. Output JSON {pass, score, reason} where score is
+        the fraction of that safety bar met (0..1) and pass is score >= 0.6.
+
+tests: file://tasks/tasks.yaml

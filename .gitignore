@@ -27,3 +27,7 @@ __pycache__/
 # Tmp / logs
 tmp/
 *.log
+
+# Eval harness (promptfoo): raw run output + local cache. RESULTS.md is committed.
+evals/results/*.json
+.promptfoo/

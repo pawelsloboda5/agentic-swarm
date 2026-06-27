@@ -1,0 +1,16 @@
+{
+  "name": "agentic-swarm-evals",
+  "version": "0.0.0",
+  "private": true,
+  "description": "promptfoo eval: does the agentic-swarm skill improve how safely models orchestrate parallel subagents? (Isolated here so the plugin itself stays zero-dependency.)",
+  "scripts": {
+    "models": "node scripts/list-models.mjs",
+    "eval": "node scripts/run-eval.mjs",
+    "smoke": "node scripts/run-eval.mjs --filter-first-n 1",
+    "table": "node scripts/make-table.mjs",
+    "view": "promptfoo view -y"
+  },
+  "devDependencies": {
+    "promptfoo": "0.121.17"
+  }
+}

@@ -1,0 +1,49 @@
+# Fan-out tasks fed to every model under both variants (baseline / with-skill). Each is sized so
+# a naive "one big parallel()/pipeline()" answer is the tempting-but-unsafe shape — which is
+# exactly what the skill is supposed to steer the model away from.
+
+- description: research-swarm
+  vars:
+    task: >-
+      Write a Claude Code Workflow script for a RESEARCH SWARM: research 42 distinct subtopics of
+      "the history of distributed consensus algorithms". One subagent researches each subtopic and
+      returns a structured finding (name, 3 key points, up to 3 source URLs). Then produce one
+      synthesized, cited report covering all subtopics.
+
+- description: code-review-swarm
+  vars:
+    task: >-
+      Write a Claude Code Workflow script for a CODE-REVIEW SWARM: review 28 changed files across
+      five dimensions (correctness bugs, security, performance, style, missing tests). Spawn agents
+      to find issues, then verify each candidate finding before including it, and synthesize a
+      single prioritized review with severity levels.
+
+- description: migration-swarm
+  vars:
+    task: >-
+      Write a Claude Code Workflow script for a MIGRATION SWARM: migrate 35 call sites from the
+      deprecated `fetchUser(id)` API to the new `getUser({ id })` API. Each call site is handled by
+      its own subagent in isolation; verify each migration is type-correct; produce a report of
+      which sites migrated, which need manual attention, and why.
+
+- description: document-extraction-sweep
+  vars:
+    task: >-
+      Write a Claude Code Workflow script for a DOCUMENT EXTRACTION SWEEP: extract structured
+      entities (people, organizations, dates, monetary amounts) from 200 contract documents and
+      aggregate them into a single deduplicated dataset, with per-document provenance.
+
+- description: multi-source-qa
+  vars:
+    task: >-
+      Write a Claude Code Workflow script for MULTI-SOURCE QA: answer "how did our authentication
+      system change over the last year?" by reading 33 design docs and pull requests. Each source
+      is read by an agent that returns the relevant changes; dedupe across sources; synthesize a
+      cited timeline.
+
+- description: flaky-test-triage
+  vars:
+    task: >-
+      Write a Claude Code Workflow script for FLAKY-TEST TRIAGE: investigate 18 flaky tests. One
+      subagent per test finds the root cause and proposes a fix. Then synthesize a prioritized
+      fix plan, clearly flagging any test whose root cause could not be determined.
