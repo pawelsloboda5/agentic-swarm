@@ -7,6 +7,39 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-27
+
+The QUALITY-layer release: a new `/agentic-swarm:architect` skill that turns a one-line goal into a
+researched, gate-aware subagent swarm — the layer that makes a fan-out *produce better work*, on top of
+`/agentic-swarm`'s existing *survive-the-fan-out* safety layer.
+
+### Added
+
+- **Skill: `/agentic-swarm:architect`** (`skills/architect/SKILL.md`) — Phases 0 & 1 of the architecture
+  harness: **Phase 0** researches "what does GOOD look like", classifies the use-case, decomposes the goal
+  into workstreams, selects the skill-set + quality GATES per workstream, and defines the shared contract;
+  a **plan-then-confirm** checkpoint presents the PLAN for approval before the expensive fan-out;
+  **Phase 1** synthesizes a zero-context brief per workstream. It **references** (never duplicates) the
+  shipped `/agentic-swarm` rails for Phase 2 (safe fan-out) and `reference/loops.md` for the optional
+  Phase-4 persistence back-edge.
+- **Brief template** (`skills/architect/reference/brief-template.md`) — the headline novelty:
+  **forward-couples each selected gate's concrete pass-criteria into the worker's brief** (a "You MUST
+  PASS these GATES" block), alongside skill-aware briefing ("invoke skill X if available"), so workers
+  build *toward* a named, checkable bar. Self-contained: criteria are inlined so a worker passes with zero
+  external skills; includes a filled UI-workstream example.
+- **Use-case → gate map** (`skills/architect/reference/usecase-gate-map.md`) — default gate-set per
+  use-case with an **anti-theater rule**: only gates with shipped, checkable criteria are forward-coupled
+  into briefs; non-MVP gates (`a11y` full, `api-contract`, `security`, `docs`, `perf`, `completeness`,
+  `source-verification`) are marked `future / not-yet-built` and surfaced in the PLAN only.
+- **Structural test** (`tests/test_architect_skill.py`) — guards the design contract: the skill lives at
+  `skills/architect/` (command = directory name → `/agentic-swarm:architect`), frontmatter is exactly
+  `name`+`description`, the brief template forward-couples gates + names skills, the gate map keeps the
+  anti-theater scoping, and Phase 4 references the `/loop` rails rather than duplicating them.
+
+> The **gate runner + gate library** (`tests`/`assets`/`ui-ux` files, detection probe, verdict schema,
+> shared WCAG util) and the **measured showcase** land in v0.7.0 / v0.8.0 — see
+> `docs/plans/2026-06-27-mvp-gate-library-and-versioning-plan.md`.
+
 ## [0.5.0] — 2026-06-27
 
 The robustness-proof release: a reproducible execution-time demo that the safe-swarm orchestration
@@ -175,7 +208,8 @@ Initial release.
 - **Docs & trust** — full `README.md`, plain-language `docs/PRIVACY.md`, `CONTRIBUTING.md`,
   this changelog, and the MIT `LICENSE`.
 
-[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.2.0...v0.3.0
