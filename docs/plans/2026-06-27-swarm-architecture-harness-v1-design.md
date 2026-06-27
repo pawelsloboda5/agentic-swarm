@@ -1,7 +1,11 @@
 # Design — Agentic-Swarm Architecture Harness (umbrella, toward v1.0)
 
-**Status:** DRAFT for review · **Date:** 2026-06-27 · **Supersedes scope of:** the standalone
-v0.5.0 robustness eval (now folded in as the *safety-proof* component).
+**Status:** architecture **CONVERGED** (2026-06-27) — lifecycle diagram in §2; **build deferred**.
+**Supersedes scope of:** the standalone v0.5.0 robustness eval (now folded in as the *safety-proof*
+component). **Research backing:**
+[`research/2026-06-27-architecture-research-synthesis.md`](research/2026-06-27-architecture-research-synthesis.md)
+— a dogfooded research swarm (`wf_ee0c68b9-95c`, 8/8 subareas: LangGraph · CrewAI · AutoGen · OpenAI
+Agents SDK · Anthropic multi-agent · plan-execute-verify · context-engineering · quality-gates).
 
 ## 1. Vision
 
@@ -53,6 +57,43 @@ GOAL (one line)
 RESULT  (complete · gated · integrated · honestly flagged where thin)
 ```
 
+### Converged lifecycle (Mermaid · research-validated 2026-06-27)
+
+The simplified flow below is the **converged** representation of the lifecycle above. Color encodes
+the three layers — **blue = QUALITY (new)**, **green = SAFETY (shipped)** — and the dashed back-edge
+is **PERSISTENCE (`/loop`, shipped)**. The headline novelty (*forward-coupling the named gate into
+the brief*) lives in Phase 1. Editable source: [`diagrams/harness-lifecycle.mmd`](diagrams/harness-lifecycle.mmd).
+
+```mermaid
+flowchart TD
+    G(["GOAL - one line"])
+    P0["Phase 0 - ORIENT / RESEARCH\nresearch what GOOD looks like, classify use-case,\ndecompose into workstreams, select skill + GATE set,\ndefine shared contract"]
+    CP{"Approve PLAN?"}
+    P1["Phase 1 - BRIEF SYNTHESIS\nper workstream, a zero-context brief: mission, context,\ncontract, output schema, 'invoke skills X',\nand the headline novelty: 'MUST PASS GATES Y'"]
+    P2["Phase 2 - SAFE FAN-OUT (shipped)\nbounded waves, per-agent retry, instability backoff,\nScheduleWakeup watchdog, resume, partial-synthesis"]
+    P3["Phase 3 - GATED INTEGRATION + VERIFY\nintegrate vs contract, then run each output through ITS gates\n(tiered + objective-anchored: machine check OR\nseparate-context critic; reports confidence)"]
+    GQ{"Gates pass?"}
+    R(["RESULT - complete, gated, integrated, honestly flagged"])
+
+    G --> P0 --> CP
+    CP -->|"revise"| P0
+    CP -->|"approve (plan-then-confirm)"| P1
+    P1 --> P2 --> P3 --> GQ
+    GQ -->|"fail: re-brief & re-run that workstream"| P1
+    GQ -->|"pass"| R
+    R -.->|"optional Phase 4 - LOOP: until-dry / until-budget / recurring"| P0
+
+    classDef goal fill:#111827,stroke:#111827,color:#ffffff
+    classDef quality fill:#e8f0fe,stroke:#1a73e8,color:#0b3d91
+    classDef safety fill:#e6f4ea,stroke:#137333,color:#0b5d2e
+    classDef decision fill:#ffffff,stroke:#5f6368,color:#202124
+
+    class G,R goal
+    class P0,P1,P3 quality
+    class P2 safety
+    class CP,GQ decision
+```
+
 ## 3. Components — where each lives in the plugin
 
 | Component | New? | Home |
@@ -73,11 +114,27 @@ A **gate** = a named, reusable quality checkpoint a workstream's output must pas
 gate := {
   id            // 'ui-ux' | 'assets' | 'a11y' | 'tests' | 'security' | 'perf' | 'docs' | 'api-contract'
   applies_when  // use-case / output triggers (e.g. ui-ux applies when the output renders UI)
+  tier          // 'objective' (test/build/lint/measurable) | 'critic' (separate-context judge) | 'advisory'
   criteria      // CONCRETE, self-contained pass conditions (shipped IN the plugin)
-  verifier      // an adversarial-verify subagent prompt that checks criteria
+  verifier      // an adversarial-verify subagent prompt that checks criteria, in a SEPARATE context
+  confidence    // the gate REPORTS how trustworthy its verdict is — never a silent pass
   backing_skill // OPTIONAL external skill that strengthens the gate IF installed
 }
 ```
+
+**Tiered, objective-anchored gates (converged 2026-06-27 — the answer to "gate theater").** LLM
+judges are biased (verbosity, position, self-enhancement) and have low test-retest reliability, so a
+gate that holistically "scores" output is theater. Every gate therefore declares a **`tier`** and
+**reports `confidence`**, never a silent pass:
+- **`objective`** — a machine-checkable criterion (run tests, build/lint, assert assets exist, WCAG
+  contrast math). Preferred wherever the use-case allows; highest trust.
+- **`critic`** — a **separate-context** adversarial verifier (cross-context review beats same-thread
+  self-review), using **binary per-criterion checks** (not a holistic 1–10), **one well-grounded
+  pass** (more rounds add noise), and pairwise/position-swap where scoring is unavoidable.
+- **`advisory`** — a judgment the harness surfaces but does **not** treat as a hard pass.
+
+This keeps the repo's **"measured, not asserted"** ethos: graceful degradation (a missing backing
+skill) must **never become *silent* quality degradation** — the gate reports it in `confidence`.
 
 **⚠ Portability constraint (load-bearing).** The plugin is **public**; other users will **not** have
 the skills this machine has (`frontend-design`, `ui-ux-pro-max`, `web-design-guidelines`,
@@ -138,11 +195,29 @@ Smallest thing that proves the whole loop end-to-end:
    approval before the expensive fan-out (safety ethos + cost control). ✅
 5. **Showcase:** **Three.js game redo FIRST**; broadly-useful apps (landing page, dashboard, CLI)
    **later** to prove generalization (see Showcase roadmap, §5). ✅
+7. **Core architecture (research-validated):** ship **Arch 1** — orchestrator-worker with
+   research-driven, **skill+gate-aware briefs** + **gated integration** — on a **plan-execute-verify**
+   fan-out skeleton, borrowing LangGraph's persistence model *only as the reference* for
+   `/loop`+resume. Reject the conversational (AutoGen) and handoff (OpenAI SDK) shapes, and reject
+   adopting LangGraph/CrewAI as the runtime (libraries, not portable plugins). ✅
+8. **Headline novelty:** ***forward-coupling the named gate into the brief*** — across all 8 surveyed
+   areas, gates are applied *after* production and briefs are authored *independently* of any rubric;
+   **no surveyed system feeds the gate definition forward into the brief.** Plus **skill-aware
+   briefing** and **zero-dependency portable-plugin packaging**. *Honest caveat:* this is
+   *integration + packaging*, not a new algorithm, and is **unproven until the showcase measures it.* ✅
+9. **Gate reliability stance:** **tiered, objective-anchored gates that report `confidence`** (see §4)
+   — the answer to "gate theater" (biased, low-test-retest LLM judges). ✅
 
-**Still open:**
-4. **MVP gate set:** proposed {ui-ux, assets, tests} — confirm or adjust.
-6. **Naming / versioning:** is this a v0.5→v1.0 track, and does the standalone robustness eval still
-   get a tag, or only ship as part of the harness?
+**Resolved (2026-06-27 — research-backed; see [`2026-06-27-mvp-gate-library-and-versioning-plan.md`](2026-06-27-mvp-gate-library-and-versioning-plan.md)):**
+4. **MVP gate set:** **`{ tests, assets, ui-ux }`** — `tests`=objective, `assets`=mixed, `ui-ux`=mixed
+   (objective floor + screenshot critic) with the cheap a11y checks **folded into `ui-ux`**; standalone
+   `a11y` **deferred to v0.7.x**. Each gate declares `tier` and reports `confidence`. ✅
+6. **Versioning:** a **v0.5 → v1.0 track** — **`v0.5.0` now** (robustness eval = its own tag, the Phase-2
+   safety proof) → v0.6 architect → v0.7 gates → v0.8 measured showcase → **v1.0** (only after the
+   showcase measures the uplift; freezes the gate-file schema). ✅
+
+No open architecture decisions remain; the next step is **build** (deferred), starting with the v0.5.0
+release chore — see the readiness build-spec §5.
 
 ## 8. Risks / constraints
 
