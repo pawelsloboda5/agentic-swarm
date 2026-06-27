@@ -22,8 +22,9 @@ the two loops; the maintainer handles capture + the side-by-side README.
 
 ### Baseline session
 1. Open a new terminal in `C:\Users\Pawel Sloboda\Desktop\loop-demo-baseline`.
-2. Start Claude **without** the plugin: plain `claude`. If `agentic-swarm` is installed globally,
-   run `/plugin disable agentic-swarm` first (and confirm the skill does not auto-activate).
+2. Start Claude **without** the plugin: plain `claude`. (`agentic-swarm` is **not** installed globally
+   on this machine — confirmed via `claude plugin list` — so plain `claude` is already vanilla; no
+   `/plugin disable` needed. The folder is empty: nothing is copied in — that's the fair start.)
 3. `/model opus` + `/effort ultracode` (**config A**: identical power to the swarm arm — the *only*
    difference between arms is that this one has the plugin OFF).
 4. Paste the shared `/loop …` prompt. Let it run for the agreed budget, then press **`Esc`** to stop.
