@@ -1,0 +1,30 @@
+%% agentic-swarm v1.0 "architect" harness - end-to-end lifecycle (converged 2026-06-27)
+%% Color = the three layers: blue = QUALITY (new), green = SAFETY (shipped); the dashed
+%% back-edge = PERSISTENCE (/loop, shipped). Renders on GitHub and mermaid.live.
+flowchart TD
+    G(["GOAL - one line"])
+    P0["Phase 0 - ORIENT / RESEARCH\nresearch what GOOD looks like, classify use-case,\ndecompose into workstreams, select skill + GATE set,\ndefine shared contract"]
+    CP{"Approve PLAN?"}
+    P1["Phase 1 - BRIEF SYNTHESIS\nper workstream, a zero-context brief: mission, context,\ncontract, output schema, 'invoke skills X',\nand the headline novelty: 'MUST PASS GATES Y'"]
+    P2["Phase 2 - SAFE FAN-OUT (shipped)\nbounded waves, per-agent retry, instability backoff,\nScheduleWakeup watchdog, resume, partial-synthesis"]
+    P3["Phase 3 - GATED INTEGRATION + VERIFY\nintegrate vs contract, then run each output through ITS gates\n(tiered + objective-anchored: machine check OR\nseparate-context critic; reports confidence)"]
+    GQ{"Gates pass?"}
+    R(["RESULT - complete, gated, integrated, honestly flagged"])
+
+    G --> P0 --> CP
+    CP -->|"revise"| P0
+    CP -->|"approve (plan-then-confirm)"| P1
+    P1 --> P2 --> P3 --> GQ
+    GQ -->|"fail: re-brief & re-run that workstream"| P1
+    GQ -->|"pass"| R
+    R -.->|"optional Phase 4 - LOOP: until-dry / until-budget / recurring"| P0
+
+    classDef goal fill:#111827,stroke:#111827,color:#ffffff
+    classDef quality fill:#e8f0fe,stroke:#1a73e8,color:#0b3d91
+    classDef safety fill:#e6f4ea,stroke:#137333,color:#0b5d2e
+    classDef decision fill:#ffffff,stroke:#5f6368,color:#202124
+
+    class G,R goal
+    class P0,P1,P3 quality
+    class P2 safety
+    class CP,GQ decision

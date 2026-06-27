@@ -1,0 +1,182 @@
+{
+  "repo": "axios/axios",
+  "repo_url": "https://github.com/axios/axios",
+  "commit": "3243566a188507e69692d94a36d6fca4a64c6765",
+  "license": "MIT",
+  "selection": "lib/**/*.js with >=25 lines",
+  "file_count": 43,
+  "files": [
+    {
+      "path": "lib/adapters/adapters.js",
+      "lines": 132
+    },
+    {
+      "path": "lib/adapters/fetch.js",
+      "lines": 643
+    },
+    {
+      "path": "lib/adapters/http.js",
+      "lines": 1417
+    },
+    {
+      "path": "lib/adapters/xhr.js",
+      "lines": 228
+    },
+    {
+      "path": "lib/axios.js",
+      "lines": 89
+    },
+    {
+      "path": "lib/cancel/CancelToken.js",
+      "lines": 135
+    },
+    {
+      "path": "lib/core/Axios.js",
+      "lines": 283
+    },
+    {
+      "path": "lib/core/AxiosError.js",
+      "lines": 188
+    },
+    {
+      "path": "lib/core/AxiosHeaders.js",
+      "lines": 351
+    },
+    {
+      "path": "lib/core/InterceptorManager.js",
+      "lines": 72
+    },
+    {
+      "path": "lib/core/buildFullPath.js",
+      "lines": 50
+    },
+    {
+      "path": "lib/core/dispatchRequest.js",
+      "lines": 89
+    },
+    {
+      "path": "lib/core/mergeConfig.js",
+      "lines": 159
+    },
+    {
+      "path": "lib/core/settle.js",
+      "lines": 27
+    },
+    {
+      "path": "lib/core/transformData.js",
+      "lines": 28
+    },
+    {
+      "path": "lib/defaults/index.js",
+      "lines": 177
+    },
+    {
+      "path": "lib/helpers/AxiosTransformStream.js",
+      "lines": 156
+    },
+    {
+      "path": "lib/helpers/AxiosURLSearchParams.js",
+      "lines": 59
+    },
+    {
+      "path": "lib/helpers/Http2Sessions.js",
+      "lines": 119
+    },
+    {
+      "path": "lib/helpers/HttpStatusCode.js",
+      "lines": 77
+    },
+    {
+      "path": "lib/helpers/ZlibHeaderTransformStream.js",
+      "lines": 29
+    },
+    {
+      "path": "lib/helpers/buildURL.js",
+      "lines": 69
+    },
+    {
+      "path": "lib/helpers/composeSignals.js",
+      "lines": 57
+    },
+    {
+      "path": "lib/helpers/cookies.js",
+      "lines": 64
+    },
+    {
+      "path": "lib/helpers/deprecatedMethod.js",
+      "lines": 31
+    },
+    {
+      "path": "lib/helpers/estimateDataURLDecodedBytes.js",
+      "lines": 105
+    },
+    {
+      "path": "lib/helpers/formDataToJSON.js",
+      "lines": 125
+    },
+    {
+      "path": "lib/helpers/formDataToStream.js",
+      "lines": 119
+    },
+    {
+      "path": "lib/helpers/fromDataURI.js",
+      "lines": 68
+    },
+    {
+      "path": "lib/helpers/parseHeaders.js",
+      "lines": 69
+    },
+    {
+      "path": "lib/helpers/progressEventReducer.js",
+      "lines": 54
+    },
+    {
+      "path": "lib/helpers/resolveConfig.js",
+      "lines": 119
+    },
+    {
+      "path": "lib/helpers/sanitizeHeaderValue.js",
+      "lines": 60
+    },
+    {
+      "path": "lib/helpers/shouldBypassProxy.js",
+      "lines": 210
+    },
+    {
+      "path": "lib/helpers/speedometer.js",
+      "lines": 55
+    },
+    {
+      "path": "lib/helpers/spread.js",
+      "lines": 28
+    },
+    {
+      "path": "lib/helpers/throttle.js",
+      "lines": 44
+    },
+    {
+      "path": "lib/helpers/toFormData.js",
+      "lines": 286
+    },
+    {
+      "path": "lib/helpers/trackStream.js",
+      "lines": 89
+    },
+    {
+      "path": "lib/helpers/validator.js",
+      "lines": 112
+    },
+    {
+      "path": "lib/platform/common/utils.js",
+      "lines": 52
+    },
+    {
+      "path": "lib/platform/node/index.js",
+      "lines": 37
+    },
+    {
+      "path": "lib/utils.js",
+      "lines": 1017
+    }
+  ]
+}

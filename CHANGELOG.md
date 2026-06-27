@@ -7,6 +7,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-06-27
+
+The robustness-proof release: a reproducible execution-time demo that the safe-swarm orchestration
+shape preserves coverage and fails loudly where a naive single-barrier fan-out silently loses work —
+the **Phase-2 safety proof** of the architecture harness now under design.
+
+### Added
+
+- **Swarm robustness eval** under `evals/loop-demo/code-review/` — a controlled A/B over the agentic-swarm
+  orchestration shape vs a naive single-barrier fan-out, on a pinned 43-file axios corpus (`manifest.json`,
+  commit `3243566a`). Two byte-identical review arms isolate orchestration as the only variable. Evidence
+  is two-layer and honest: (A) one real-agent **ambient run** (n=1, calm window) producing a complete
+  43/43-file review (192 findings, 1 high — a genuine unhandled-http2-error process-crash bug in axios);
+  (B) a **deterministic robustness sweep** (`robustness-model.mjs` → `curve.json`, reproduces
+  bit-identically) showing safe-swarm holds **100% coverage** under transient drops while naive decays
+  ~`1−rate`, **flags** permanent gaps where naive hides them, and **survives a hang** that takes naive to
+  0% coverage with no notification. Full writeup with caveats in `RESULTS.md`. The injected faults are a
+  clearly-labeled deterministic model of the real `Connection closed mid-response` drops.
+- **Architecture & design docs** under `docs/plans/` — the converged v1.0 "architect harness" design
+  (3-layer SAFETY/QUALITY/PERSISTENCE; orchestrator-worker with research-driven, gate+skill-aware briefs
+  and gated integration; the forward-coupling novelty), the MVP gate-library + versioning build-spec
+  (`{ tests, assets, ui-ux }`, the v0.5→v1.0 track), the robustness-eval design, the dogfooded research
+  synthesis + reproducible swarm scripts, and the lifecycle diagram.
+
 ## [0.4.0] — 2026-06-27
 
 The `/loop` release: the plugin now teaches how to carry a swarm **across turns and sessions** with
@@ -151,7 +175,8 @@ Initial release.
 - **Docs & trust** — full `README.md`, plain-language `docs/PRIVACY.md`, `CONTRIBUTING.md`,
   this changelog, and the MIT `LICENSE`.
 
-[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.1.0...v0.2.0
