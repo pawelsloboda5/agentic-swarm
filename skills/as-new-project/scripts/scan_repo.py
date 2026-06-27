@@ -123,7 +123,7 @@ def parse_requirements(path):
                 line = line.strip()
                 if not line or line.startswith("#") or line.startswith("-"):
                     continue
-                name = re.split(r"[<>=!~\[ ;]", line, 1)[0].strip()
+                name = re.split(r"[<>=!~\[ ;]", line, maxsplit=1)[0].strip()
                 if name:
                     deps.append(name.lower())
     except OSError:

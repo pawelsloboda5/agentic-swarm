@@ -25,7 +25,15 @@ const path = require("path");
 const https = require("https");
 
 const REPO = "pawelsloboda5/agentic-swarm";
-const RELEASES_URL = "https://api.github.com/repos/" + REPO + "/releases/latest";
+// Canonical release endpoint. Overridable ONLY as a testability / self-host seam:
+// tests point it at an unreachable host to exercise offline degradation, and a
+// GitHub Enterprise user could point it at their host. Unset (the normal case) it
+// is the public github.com API. Either way this is still a read-only GET that
+// SENDS NOTHING — the privacy guarantee in docs/PRIVACY.md is unchanged.
+const RELEASES_URL =
+  (process.env.AGENTIC_SWARM_RELEASES_URL &&
+    process.env.AGENTIC_SWARM_RELEASES_URL.trim()) ||
+  "https://api.github.com/repos/" + REPO + "/releases/latest";
 const UPDATE_CHECK_TTL_MS = 24 * 60 * 60 * 1000; // throttle: at most once / 24h
 const FETCH_TIMEOUT_MS = 2500; // hard cap on the network call
 

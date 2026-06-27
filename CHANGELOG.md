@@ -7,7 +7,35 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **Test suite** under `tests/` — `pytest` for the four profiler scripts (redactor, transcript
+  profiler, repo scanner, GitHub scanner) and a built-in `node:test` black-box test for the
+  SessionStart hook. The profiler tests **enforce the privacy guarantee**: a synthetic transcript
+  seeded with secrets and sentinel content is profiled, then the aggregated output is asserted to
+  contain no message text / thinking / tool input / tool output (and no content-bearing key) — so
+  a regression that starts copying raw content fails the build.
+- **GitHub Actions CI** (`.github/workflows/ci.yml`) — runs the Python + Node tests on Ubuntu and
+  Windows, plus `claude plugin validate --strict` in both marketplace and plugin modes, on every
+  push to `main` and every pull request.
+- **Secret-shape guard** (`tests/test_no_literal_secrets.py`) — fails the build if any complete
+  secret-shaped literal (token / JWT / key) ever lands in tracked source, so redactor test
+  fixtures can't reintroduce a scanner false-positive.
+
+### Changed
+
+- `redact.py`'s self-test now assembles its secret-shaped sample inputs at runtime instead of
+  embedding literal placeholder tokens, so the file no longer trips external secret scanners. (The
+  values were always non-functional placeholders — no real credential was ever committed.)
+- The SessionStart hook gained an `AGENTIC_SWARM_RELEASES_URL` override seam (defaults to the
+  public GitHub API; used by tests to exercise offline degradation, and usable for GitHub
+  Enterprise hosts). The version check remains a read-only GET that sends nothing — the privacy
+  guarantee in `docs/PRIVACY.md` is unchanged.
+
+### Fixed
+
+- `scan_repo.py` passed `maxsplit` positionally to `re.split`, which Python 3.13+ deprecates; it
+  is now passed as a keyword, so the profiler runs warning-clean on current Python.
 
 ## [0.1.0] — 2026-06-26
 

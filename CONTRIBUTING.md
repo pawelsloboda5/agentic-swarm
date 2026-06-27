@@ -28,6 +28,46 @@ claude plugin validate . --strict   # treat warnings (e.g. misspelled manifest f
 `--strict` is what the marketplace review pipeline runs, so a green `--strict` is the bar. If
 something won't load, `claude --debug` prints manifest errors and skill/agent/hook init detail.
 
+## Tests
+
+Tests live in `tests/` and run on every PR via GitHub Actions
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml), matrixed across Ubuntu + Windows, plus
+a `claude plugin validate --strict` job). Run them locally before pushing:
+
+```bash
+python -m pip install pytest              # the only test dependency (pytest 9+)
+python -m pytest                          # profiler + redactor + the privacy guarantee
+node --test tests/check-session.test.js   # the SessionStart hook contract (built-in node:test)
+```
+
+What the suite pins down:
+
+- **The privacy guarantee is enforced by a test.** `test_profile_transcripts.py` plants secrets
+  and unique sentinel strings into a synthetic transcript (message text, thinking, tool inputs,
+  tool outputs) and asserts that none of them — and no content-bearing key (`content` / `text` /
+  `thinking` / `input` / `output` / …) — ever appears in the aggregated output. If a change
+  starts copying raw content, that test fails. Keep it that way.
+- **The redactor** (`test_redact.py`) is checked against every known secret shape and home-path
+  form; the scanners (`test_scan_repo.py`, `test_scan_github.py`) are checked to emit names/
+  signals only, to strip credentials from git remotes, and to make no direct network calls.
+- **The hook** (`check-session.test.js`) is exercised black-box across fresh / second-run /
+  update-available / offline, asserting it always exits 0 and prints exactly one valid JSON
+  object.
+
+### No literal secrets in source
+
+A literal `ghp_…` token or `eyJ…` JWT in a committed file trips secret scanners (GitGuardian,
+GitHub) even when it's a harmless placeholder. The redactor's tests still need secret-*shaped*
+inputs, so **assemble them at runtime from fragments** instead of writing a contiguous literal:
+
+```python
+filler = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+fake_token = "ghp" + "_" + filler   # matches the redactor regex; not a literal token
+```
+
+`tests/test_no_literal_secrets.py` scans all tracked files and fails CI if a complete
+secret-shaped literal slips in.
+
 ## Repo layout
 
 ```text
@@ -94,7 +134,8 @@ default to cp1252 and will raise `UnicodeEncodeError` on `→`/`—`/emoji.
   "fixes").
 - Keep PRs focused; describe what changed and how you verified it (`claude plugin validate .`
   output, the swarm/profiler run you tested).
-- Run `claude plugin validate . --strict` before pushing.
+- Run `claude plugin validate . --strict`, `python -m pytest`, and
+  `node --test tests/check-session.test.js` before pushing — CI runs all three on every PR.
 - Don't break the privacy guarantee. Any change that touches the profiler or hook must keep
   `docs/PRIVACY.md` accurate — local-only, secrets redacted, the version check the only
   outbound call. If your change alters data flow, update `docs/PRIVACY.md` in the same PR.

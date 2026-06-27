@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Python tests (profiler + redactor + privacy guarantee)
+        run: python -m pytest
+
+      - name: Node tests (SessionStart hook contract)
+        run: node --test tests/check-session.test.js
+
+  validate:
+    name: claude plugin validate --strict
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      # When both marketplace.json and plugin.json exist, `validate` checks the
+      # MARKETPLACE. Validate it directly here...
+      - name: Validate marketplace manifest (repo root)
+        run: claude plugin validate . --strict
+
+      # ...then validate the PLUGIN (plugin.json + skill/hook frontmatter) from a
+      # manifest-only copy WITHOUT marketplace.json, so `validate` picks plugin mode.
+      - name: Validate plugin manifest (no marketplace.json)
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          cp -r .claude-plugin "$tmp/"
+          rm -f "$tmp/.claude-plugin/marketplace.json"
+          cp -r skills hooks "$tmp/"
+          claude plugin validate "$tmp" --strict
