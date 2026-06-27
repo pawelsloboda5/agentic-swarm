@@ -7,7 +7,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **`SECURITY.md`** — how to report a security or privacy issue, and what counts as one (a break in
+  the local-only / no-exfiltration privacy guarantee is treated as a security bug).
 
 ## [0.3.0] — 2026-06-27
 
