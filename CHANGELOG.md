@@ -7,16 +7,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.2.0] — 2026-06-27
+
+The trust-and-evidence release: the skill is now **measured**, the privacy guarantee is **enforced
+by tests in CI**, and the whole eval — prompts, model outputs, and judge reasoning — is committed
+for anyone to inspect or reproduce.
+
 ### Added
 
 - **Eval harness** under `evals/` (promptfoo) — a reproducible A/B eval measuring whether the
   `agentic-swarm` skill makes models write *safer* parallel-subagent orchestration. Each model
   writes a `Workflow` script for a fan-out task with vs without the live `SKILL.md`, scored by a
-  GPT-5.5 `llm-rubric` plus a per-pattern programmatic check. First run (GPT-5.5 → GPT-4.1): the
-  skill ~triples the safe-orchestration rubric score on capable models (GPT-5.5 26%→75%,
-  GPT-5.4-mini 20%→64%). Results in `evals/results/RESULTS.md`; the README "How it was built"
-  section now leads with this table instead of an anecdote. Isolated with its own `package.json`
-  so the plugin stays zero-dependency.
+  GPT-5.5 `llm-rubric` plus a per-pattern programmatic check. Result (GPT-5.5 → GPT-4.1): the skill
+  **more than triples** the safe-orchestration rubric score on capable models (GPT-5.5 26%→83%,
+  GPT-5.4-mini 20%→64%), with a smaller positive lift on the older GPT-4.1 family. Isolated with
+  its own `package.json` so the plugin stays zero-dependency.
+- **Committed eval evidence** — the rendered prompts (`evals/prompts/rendered/`) and a readable
+  transcript of every model's baseline-vs-with-skill output **with the GPT-5.5 judge's reasoning**
+  (`evals/results/transcripts/`), plus the aggregate table (`evals/results/RESULTS.md`). The README
+  "How it was built" section now leads with the uplift table instead of an anecdote.
 - **Test suite** under `tests/` — `pytest` for the four profiler scripts (redactor, transcript
   profiler, repo scanner, GitHub scanner) and a built-in `node:test` black-box test for the
   SessionStart hook. The profiler tests **enforce the privacy guarantee**: a synthetic transcript
@@ -32,6 +43,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Skill: the watchdog + instability-backoff guidance is now front-and-center.** A new "emit these
+  two" block and a stiffer pre-flight checklist push models to include the `ScheduleWakeup` stall
+  watchdog and the per-wave backoff check (the two most-forgotten patterns). The eval re-run shows
+  the frontier model's safety score rising 75% → 83% after this change.
+- **CI installs the Claude Code CLI with Bun** (`oven-sh/setup-bun` + `bun install -g`) rather than
+  npm.
 - `redact.py`'s self-test now assembles its secret-shaped sample inputs at runtime instead of
   embedding literal placeholder tokens, so the file no longer trips external secret scanners. (The
   values were always non-functional placeholders — no real credential was ever committed.)
@@ -75,5 +92,6 @@ Initial release.
 - **Docs & trust** — full `README.md`, plain-language `docs/PRIVACY.md`, `CONTRIBUTING.md`,
   this changelog, and the MIT `LICENSE`.
 
-[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/pawelsloboda5/agentic-swarm/releases/tag/v0.1.0

@@ -30,6 +30,17 @@ Each generated script is scored two ways per task:
 > the guidance generalizes across frontier models. It does **not** exercise the live Claude-Code
 > retry/watchdog runtime.
 
+## Inspect the prompts and the answers (no run needed)
+
+Everything that produced the numbers is committed and readable:
+
+- **The prompts** — [`prompts/`](prompts/) (baseline vs with-skill, the A/B explained), with the
+  exact rendered text under [`prompts/rendered/`](prompts/rendered/).
+- **The answers** — every model's baseline-vs-with-skill output **with the GPT-5.5 judge's
+  reasoning**, in [`results/transcripts/`](results/transcripts/) (start at its
+  [`README.md`](results/transcripts/README.md)).
+- **The table** — [`results/RESULTS.md`](results/RESULTS.md).
+
 ## Run it
 
 ```bash
