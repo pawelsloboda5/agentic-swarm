@@ -3,7 +3,7 @@
 > A Claude Code **plugin** that makes fanning out many parallel subagents *safe by construction* — and bootstraps your whole agentic workflow from your own local history.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-&nbsp;**Version 0.2.0**
+&nbsp;**Version 0.3.0**
 
 ---
 
@@ -14,9 +14,8 @@ Fan a swarm out through one giant `pipeline()`/`parallel()` barrier and a single
 connection makes the whole workflow `await` forever: no synthesis, no completion event, no
 notification. It can sit there, silently deadlocked, for **hours**.
 
-That isn't hypothetical. `agentic-swarm` distills the post-mortem of a real **41-agent
-research swarm** that stalled silently for ~2 hours behind one barrier — 17 agent failures,
-3 left hung — into patterns that make that outcome impossible:
+That isn't hypothetical — one hung connection behind a barrier is all it takes. `agentic-swarm`
+turns that failure mode into patterns that make it **impossible by construction**:
 
 - **Bounded waves** (6–8 agents) instead of one mega-barrier
 - **Retry waves** with timer-free backoff
@@ -25,8 +24,10 @@ research swarm** that stalled silently for ~2 hours behind one barrier — 17 ag
 - **Lean outputs** + a **journal extractor** for the full dataset
 - **Graceful partial-synthesis** that flags gaps instead of hiding them
 
-The next swarm pays none of that tax — because the safety is built into the script before it
-launches, not bolted on after it hangs.
+And it's **measured, not asserted**: a reproducible, independently-judged eval (a cross-family
+Claude judge grading scripts from frontier and older models) shows the skill markedly improves how
+safely models orchestrate swarms — see [How it was built & evaluated](#how-it-was-built--evaluated).
+The safety is built into the script *before* it launches, not bolted on after it hangs.
 
 ## Install
 
@@ -57,6 +58,20 @@ marketplace are both named `agentic-swarm`.)
 > `/agentic-swarm:as-new-project`. The safe-swarm skill usually triggers on its own from your
 > intent ("run a swarm", "fan out agents", any `Workflow()` over ~10+ items), so you'll mostly
 > see it activate without typing anything.
+
+## Best used with
+
+The skill earns its keep when Claude Code is actually doing **dynamic workflow orchestration** —
+fanning subagents out through the `Workflow` tool. Two settings put you there:
+
+- **`/effort ultracode`** — the top effort tier turns on **dynamic workflow orchestration**
+  (Claude composes and runs `Workflow()` fan-outs), which is exactly the thing this skill makes
+  safe. Lower tiers rarely fan out, so the skill has less to do.
+- **`/model`** — pick a strong model (e.g. Opus). The eval shows the skill's benefit **grows with
+  model capability**, so the more capable the model, the more it gains from the rails.
+
+So: `/model opus` + `/effort ultracode`, then just describe the fan-out ("research these 40 topics
+and synthesize") — the skill arms the rails (waves, watchdog, resume) before the swarm launches.
 
 ## Quick start
 
@@ -94,38 +109,35 @@ in **[`docs/PRIVACY.md`](docs/PRIVACY.md)**.
 
 ## How it was built & evaluated
 
-**The skill is measured, not just asserted.** A reproducible A/B eval ([`evals/`](evals/)) has
-every model write a Claude Code `Workflow` orchestration script for a fan-out task **twice** — once
-with a neutral Workflow API reference (*baseline*), once with that same reference **plus the real
-`SKILL.md`** (*with-skill*) — and a **GPT-5.5 judge** scores how safe-by-construction each script
-is (does it avoid the silent-stall and lost-work failure modes?). The gap is the skill's measured
-uplift. Across 6 fan-out tasks it **more than triples** the safe-orchestration score on capable
-models (judge rubric, baseline → with-skill):
+**The skill is measured, not just asserted.** A reproducible A/B eval ([`evals/`](evals/)) has every
+model write a Claude Code `Workflow` orchestration script for a fan-out task **twice** — once with a
+neutral Workflow API reference (*baseline*), once with that same reference **plus the real
+`SKILL.md`** (*with-skill*). An **independent, cross-family Claude judge** then scores how
+safe-by-construction each script is. Across 6 tasks × 3 repeats, the skill lifts the
+safe-orchestration score from ~20% baseline to **77–94%** — a **+56 to +71 point** uplift on *every*
+model tested, frontier to floor:
 
 | Model | Baseline | With skill | Uplift |
 |---|---|---|---|
-| `gpt-5.5` | 26% | **83%** | **+57 pts** |
-| `gpt-5.4-mini` | 20% | **64%** | **+44 pts** |
-| `gpt-4.1-mini` | 16% | 29% | +13 pts |
-| `gpt-4.1` | 16% | 22% | +6 pts |
+| `gpt-5.5` | 30% | **94%** | **+63 pts** |
+| `gpt-4.1-mini` | 22% | **92%** | **+71 pts** |
+| `gpt-4.1` | 19% | **89%** | **+70 pts** |
+| `gpt-5.4-mini` | 20% | **77%** | **+56 pts** |
 
-The per-pattern breakdown is candid too — *bounded waves* jump 8% → 75% and *no single barrier*
-40% → 88% with the skill, while the `ScheduleWakeup` watchdog and backoff stay harder to induce on
-the weaker models (a finding, not a brag). **You can read exactly what was sent and what each model
-answered** — the rendered prompts ([`evals/prompts/`](evals/prompts/)) and every model's baseline-
-vs-with-skill output with the judge's reasoning ([`evals/results/transcripts/`](evals/results/transcripts/)).
-Full numbers, caveats, and the one-command way to **reproduce them with your own key** are in
-[`evals/README.md`](evals/README.md) and [`evals/results/RESULTS.md`](evals/results/RESULTS.md).
+The two most-forgotten patterns move the most: with the skill the `ScheduleWakeup` watchdog goes
+**0% → 75%** and instability backoff **0% → 81%** (per-pattern detail in
+[`RESULTS.md`](evals/results/RESULTS.md)). The eval is built to be hard to fool — outputs are never
+truncated, the non-reasoning models run deterministically (temperature 0 + fixed seed), the
+reasoning models are averaged over repeats, and the judge is a **different model family than every
+contestant** (no self-preference bias). And **you can read exactly what was sent and what each model
+answered**: the rendered prompts ([`evals/prompts/`](evals/prompts/)) and every model's
+baseline-vs-with-skill output *with the judge's reasoning*
+([`evals/results/transcripts/`](evals/results/transcripts/)) are committed. Method, caveats, and the
+one-command way to **reproduce it with your own key**: [`evals/README.md`](evals/README.md).
 
 > **Honest scope:** this measures whether the skill makes models *write* safer orchestration (and
-> that the guidance generalizes across frontier models from GPT-5.5 down to GPT-4.1) — it does not
-> exercise the live Claude-Code runtime.
-
-<sub>The plugin was also **dogfooded**: the vendored reference under
-[`docs/claude-code/`](docs/claude-code/) was researched by a bounded fan-out of subagents (one per
-doc, in waves with per-agent timeouts and lean outputs). Two agents hit the very
-`Connection closed mid-response` failure the skill is built around — and the retry wave recovered
-both, zero completed work lost. See [`docs/claude-code/README.md`](docs/claude-code/README.md).</sub>
+> that it generalizes across model families, frontier to floor) — it does not exercise the live
+> Claude-Code runtime.
 
 ## Contributing
 

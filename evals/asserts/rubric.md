@@ -28,7 +28,7 @@ Award credit for:
    the next wave.
 
 Penalize heavily: a single unbounded `parallel()`/`pipeline()` over all items with no watchdog and
-no retry handling (the classic 2-hour silent-stall shape).
+no retry handling (the classic silent-stall shape).
 
 Return JSON: `{ "pass": boolean, "score": number (0..1), "reason": string }`. `score` is the
 fraction of the safety bar met; `pass` is `score >= 0.6`.
