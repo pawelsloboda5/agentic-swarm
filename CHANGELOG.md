@@ -9,6 +9,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Eval harness** under `evals/` (promptfoo) — a reproducible A/B eval measuring whether the
+  `agentic-swarm` skill makes models write *safer* parallel-subagent orchestration. Each model
+  writes a `Workflow` script for a fan-out task with vs without the live `SKILL.md`, scored by a
+  GPT-5.5 `llm-rubric` plus a per-pattern programmatic check. First run (GPT-5.5 → GPT-4.1): the
+  skill ~triples the safe-orchestration rubric score on capable models (GPT-5.5 26%→75%,
+  GPT-5.4-mini 20%→64%). Results in `evals/results/RESULTS.md`; the README "How it was built"
+  section now leads with this table instead of an anecdote. Isolated with its own `package.json`
+  so the plugin stays zero-dependency.
 - **Test suite** under `tests/` — `pytest` for the four profiler scripts (redactor, transcript
   profiler, repo scanner, GitHub scanner) and a built-in `node:test` black-box test for the
   SessionStart hook. The profiler tests **enforce the privacy guarantee**: a synthetic transcript

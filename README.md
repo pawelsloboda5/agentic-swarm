@@ -92,16 +92,37 @@ nothing.
 Full plain-language details — exactly what is read, where files land, and how to opt out — are
 in **[`docs/PRIVACY.md`](docs/PRIVACY.md)**.
 
-## How it was built
+## How it was built & evaluated
 
-This plugin was **dogfooded with its own safe-swarm pattern.** The vendored reference under
-[`docs/claude-code/`](docs/claude-code/) was researched and independently cross-verified
-(official docs + Context7) by a bounded fan-out of research subagents — one per doc, in
-controlled waves with per-agent timeouts and lean outputs. During that run, **2 of the
-research agents hit the very same `Connection closed mid-response` failure** the skill is
-built around — and the **retry wave auto-recovered both**, with zero completed work lost. The
-docs you're reading are, quite literally, the output of the thing they document. See
-[`docs/claude-code/README.md`](docs/claude-code/README.md) for the verification trail.
+**The skill is measured, not just asserted.** A reproducible A/B eval ([`evals/`](evals/)) has
+every model write a Claude Code `Workflow` orchestration script for a fan-out task **twice** — once
+with a neutral Workflow API reference (*baseline*), once with that same reference **plus the real
+`SKILL.md`** (*with-skill*) — and a **GPT-5.5 judge** scores how safe-by-construction each script
+is (does it avoid the silent-stall and lost-work failure modes?). The gap is the skill's measured
+uplift. Across 6 fan-out tasks it roughly **triples** the safe-orchestration score on capable
+models (judge rubric, baseline → with-skill):
+
+| Model | Baseline | With skill | Uplift |
+|---|---|---|---|
+| `gpt-5.5` | 26% | **75%** | **+49 pts** |
+| `gpt-5.4-mini` | 20% | **64%** | **+43 pts** |
+| `gpt-4.1-mini` | 16% | 31% | +15 pts |
+| `gpt-4.1` | 16% | 23% | +7 pts |
+
+The per-pattern breakdown is candid too — *bounded waves* jump 8% → 85% and *no single barrier*
+40% → 92% with the skill, while the `ScheduleWakeup` watchdog stays hard to induce (a finding, not
+a brag). Full numbers, caveats, and the one-command way to **reproduce them with your own key** are
+in [`evals/README.md`](evals/README.md) and [`evals/results/RESULTS.md`](evals/results/RESULTS.md).
+
+> **Honest scope:** this measures whether the skill makes models *write* safer orchestration (and
+> that the guidance generalizes across frontier models from GPT-5.5 down to GPT-4.1) — it does not
+> exercise the live Claude-Code runtime.
+
+<sub>The plugin was also **dogfooded**: the vendored reference under
+[`docs/claude-code/`](docs/claude-code/) was researched by a bounded fan-out of subagents (one per
+doc, in waves with per-agent timeouts and lean outputs). Two agents hit the very
+`Connection closed mid-response` failure the skill is built around — and the retry wave recovered
+both, zero completed work lost. See [`docs/claude-code/README.md`](docs/claude-code/README.md).</sub>
 
 ## Contributing
 
