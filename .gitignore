@@ -20,8 +20,8 @@ __pycache__/
 .env.*
 !.env.example
 
-# Claude Code local state (never commit a user's local settings or plugin data)
-.claude/settings.local.json
+# Claude Code local working dir (personal settings, prompts, plugin data — never committed)
+.claude/
 .claude-plugin-data/
 
 # Tmp / logs
