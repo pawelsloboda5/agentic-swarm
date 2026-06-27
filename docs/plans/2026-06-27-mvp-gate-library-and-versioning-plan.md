@@ -1,7 +1,7 @@
 # MVP Gate Library + Versioning — Readiness Build-Spec
 
 > **For Claude:** this is a **design-readiness build-spec**, not a task-by-task TDD plan. The project
-> is deliberately **architecture-first / build-deferred** — do NOT author the `swarm-architect` skill
+> is deliberately **architecture-first / build-deferred** — do NOT author the `architect` skill
 > or gate files from this doc. A future build session expands §5 into `superpowers:writing-plans`
 > TDD tasks (REQUIRED SUB-SKILL then: `superpowers:test-driven-development`).
 
@@ -79,7 +79,7 @@ promise and the headline novelty is unproven until measured ("measured, not asse
 | Tag | Contents |
 |---|---|
 | **v0.5.0 — now** | Merge `feat/loop-demo-v0.5.0`; CHANGELOG "Added: robustness eval (deterministic curve + real axios review + session-drop evidence) as the **Phase 2 safety proof**" + the committed architecture/design docs; bump `plugin.json` → `0.5.0`; annotated tag `v0.5.0`; `[0.5.0]` compare-link footer. *(Consistent with the 0.2.0/0.3.0 evals-only release precedent.)* |
-| **v0.6.0** | `swarm-architect` skill scaffold (Phase 0/1) + brief-template (additive minor). |
+| **v0.6.0** | `architect` skill scaffold (Phase 0/1) + brief-template (additive minor). |
 | **v0.7.0** | Starter gate library `{ tests, assets, ui-ux + folded a11y }` + full standalone `gate-a11y`; each gate file declares `id/applies_when/tier/criteria/verifier/confidence/backing_skill`. |
 | **v0.8.0** | The showcase redo (Three.js game) that **MEASURES** swarm-beats-bare-`/loop` — the proof. |
 | **v1.0.0** | MVP complete + showcase measured + `claude plugin validate --strict` green (both modes) + docs updated. **1.0 freezes the public contract = the two skills + the gate-file schema.** |
@@ -105,8 +105,8 @@ Per the build-deferred constraint, this is the *shape* a future `superpowers:wri
 fills in (REQUIRED SUB-SKILL then: `superpowers:test-driven-development`, atomic commits):
 
 1. **v0.5.0 release chore** (mergeable now, low-risk): CHANGELOG + `plugin.json` bump + tag; validate `--strict` both modes. *(This is the only near-term actionable; the rest stays designed-not-built.)*
-2. **v0.6.0:** `skills/swarm-architect/SKILL.md` (Phases 0/1 orchestration) + `reference/brief-template.md` (forward-couples gates into briefs).
-3. **v0.7.0:** `skills/swarm-architect/gates/{tests,assets,ui-ux}.md` (+ `a11y.md`) each = §2 schema; a `gate-runner` reference implementing the §2 contract (detection probe, verdict schema, invariant tests); the bundled WCAG contrast utility (shared by ui-ux + a11y).
+2. **v0.6.0:** `skills/architect/SKILL.md` (Phases 0/1 orchestration) + `reference/brief-template.md` (forward-couples gates into briefs).
+3. **v0.7.0:** `skills/architect/gates/{tests,assets,ui-ux}.md` (+ `a11y.md`) each = §2 schema; a `gate-runner` reference implementing the §2 contract (detection probe, verdict schema, invariant tests); the bundled WCAG contrast utility (shared by ui-ux + a11y).
 4. **v0.8.0:** the game-demo redo run *through* the harness, measuring vs the committed bare-`/loop` "before".
 5. **v1.0.0:** docs/README, `validate --strict`, freeze the gate-file schema.
 
