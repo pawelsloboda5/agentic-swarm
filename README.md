@@ -3,7 +3,7 @@
 > A Claude Code **plugin** that makes fanning out many parallel subagents *safe by construction* — and bootstraps your whole agentic workflow from your own local history.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-&nbsp;**Version 0.1.0**
+&nbsp;**Version 0.2.0**
 
 ---
 
@@ -99,20 +99,23 @@ every model write a Claude Code `Workflow` orchestration script for a fan-out ta
 with a neutral Workflow API reference (*baseline*), once with that same reference **plus the real
 `SKILL.md`** (*with-skill*) — and a **GPT-5.5 judge** scores how safe-by-construction each script
 is (does it avoid the silent-stall and lost-work failure modes?). The gap is the skill's measured
-uplift. Across 6 fan-out tasks it roughly **triples** the safe-orchestration score on capable
+uplift. Across 6 fan-out tasks it **more than triples** the safe-orchestration score on capable
 models (judge rubric, baseline → with-skill):
 
 | Model | Baseline | With skill | Uplift |
 |---|---|---|---|
-| `gpt-5.5` | 26% | **75%** | **+49 pts** |
-| `gpt-5.4-mini` | 20% | **64%** | **+43 pts** |
-| `gpt-4.1-mini` | 16% | 31% | +15 pts |
-| `gpt-4.1` | 16% | 23% | +7 pts |
+| `gpt-5.5` | 26% | **83%** | **+57 pts** |
+| `gpt-5.4-mini` | 20% | **64%** | **+44 pts** |
+| `gpt-4.1-mini` | 16% | 29% | +13 pts |
+| `gpt-4.1` | 16% | 22% | +6 pts |
 
-The per-pattern breakdown is candid too — *bounded waves* jump 8% → 85% and *no single barrier*
-40% → 92% with the skill, while the `ScheduleWakeup` watchdog stays hard to induce (a finding, not
-a brag). Full numbers, caveats, and the one-command way to **reproduce them with your own key** are
-in [`evals/README.md`](evals/README.md) and [`evals/results/RESULTS.md`](evals/results/RESULTS.md).
+The per-pattern breakdown is candid too — *bounded waves* jump 8% → 75% and *no single barrier*
+40% → 88% with the skill, while the `ScheduleWakeup` watchdog and backoff stay harder to induce on
+the weaker models (a finding, not a brag). **You can read exactly what was sent and what each model
+answered** — the rendered prompts ([`evals/prompts/`](evals/prompts/)) and every model's baseline-
+vs-with-skill output with the judge's reasoning ([`evals/results/transcripts/`](evals/results/transcripts/)).
+Full numbers, caveats, and the one-command way to **reproduce them with your own key** are in
+[`evals/README.md`](evals/README.md) and [`evals/results/RESULTS.md`](evals/results/RESULTS.md).
 
 > **Honest scope:** this measures whether the skill makes models *write* safer orchestration (and
 > that the guidance generalizes across frontier models from GPT-5.5 down to GPT-4.1) — it does not

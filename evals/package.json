@@ -8,6 +8,8 @@
     "eval": "node scripts/run-eval.mjs",
     "smoke": "node scripts/run-eval.mjs --filter-first-n 1",
     "table": "node scripts/make-table.mjs",
+    "transcripts": "node scripts/make-transcripts.mjs",
+    "report": "node scripts/make-table.mjs && node scripts/make-transcripts.mjs",
     "view": "promptfoo view -y"
   },
   "devDependencies": {
