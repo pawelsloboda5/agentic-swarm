@@ -42,12 +42,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
+      # Install the Claude Code CLI with Bun (project convention: prefer Bun over
+      # npm). `bun install -g` is a Node-compatible install, so the `claude` CLI
+      # still runs under the runner's preinstalled Node — no runtime gamble.
+      - uses: oven-sh/setup-bun@v2
 
       - name: Install Claude Code CLI
-        run: npm install -g @anthropic-ai/claude-code
+        run: bun install -g @anthropic-ai/claude-code
 
       # When both marketplace.json and plugin.json exist, `validate` checks the
       # MARKETPLACE. Validate it directly here...
