@@ -44,6 +44,8 @@ _SECRET_PATTERNS = [
     # GitHub tokens (classic + fine-grained PAT + app tokens).
     ("github_pat", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}")),
     ("github_token", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}")),
+    # npm access tokens.
+    ("npm_token", re.compile(r"\bnpm_[A-Za-z0-9]{36,}")),
     # Google API keys.
     ("google_key", re.compile(r"\bAIza[0-9A-Za-z_-]{20,}")),
     # AWS access key ids and the GA secret token shape.

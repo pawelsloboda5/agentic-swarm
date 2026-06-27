@@ -288,7 +288,7 @@ def main():
             "note": "No transcripts directory found. Nothing scanned.",
         }
         with open(out_path, "w", encoding="utf-8") as fh:
-            json.dump(empty, fh, ensure_ascii=False, indent=2)
+            json.dump(redact.scrub_obj(empty), fh, ensure_ascii=False, indent=2)
         print("no transcripts directory found at the configured root -- wrote empty signals.")
         print("wrote " + out_path)
         sys.exit(0)

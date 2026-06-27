@@ -41,8 +41,14 @@ WHAT IT READS (all local, read-only):
     METADATA via the `gh` CLI (languages, topics, recency). It sends NONE of your local data out.
 
 WHAT LEAVES YOUR MACHINE:
-  - Nothing. There is no upload, no telemetry, no exfiltration. The only network access that can
-    happen at all is the opt-in GitHub *read* (listing your own repos' metadata).
+  - Nothing about you or your code: no upload, no telemetry, no exfiltration. The profiler makes
+    ZERO network calls. The only optional outbound read in THIS command is the opt-in GitHub
+    repo-metadata scan above (lists your own repos; sends none of your data).
+  - Separately (not part of this scan): the plugin's SessionStart hook makes one throttled
+    (at most once / 24h), read-only HTTPS request to the GitHub Releases API to check for a newer
+    version. It sends NO user data -- only fetches a public version string -- and fails silently
+    offline. Disable it any time via `/plugin` -> manage -> disable hooks. See PRIVACY.md for the
+    full network summary and opt-out steps.
 
 PRIVACY PROTECTIONS:
   - Aggregate signals only — counts/lists/histograms, never raw message or file contents.

@@ -15,7 +15,8 @@
  * A startup hook must never block or crash the session, so every path is
  * wrapped and the worst case is `{"continue":true}` + exit 0.
  *
- * Zero external dependencies — Node built-ins only (Node >=18 for global fetch).
+ * Zero external dependencies — Node built-ins only (node:https, NOT the fetch
+ * global; works on Node >=12).
  */
 
 const fs = require("fs");
