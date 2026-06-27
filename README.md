@@ -3,7 +3,7 @@
 > A Claude Code **plugin** that makes fanning out many parallel subagents *safe by construction* — and bootstraps your whole agentic workflow from your own local history.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-&nbsp;**Version 0.3.0**
+&nbsp;**Version 0.4.0**
 
 ---
 

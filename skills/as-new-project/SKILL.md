@@ -60,8 +60,9 @@ WHAT GETS WRITTEN (local files you own, under this repo):
   - .claude/agentic-swarm/repo-signals.json          (aggregate signals)
   - .claude/agentic-swarm/github-signals.json        (only if you opt in)
   - .claude/agentic-swarm/PROFILE.md                 (your human-readable profile)
-  Optional scaffolding (only if you say yes): .claude/agentic-swarm/my-first-swarm.js and a short
-  note appended to CLAUDE.md. You can delete or .gitignore any of these at any time.
+  Optional scaffolding (only if you say yes): .claude/agentic-swarm/my-first-swarm.js, an optional
+  loop setup (a recommended /loop command to run, and/or a .claude/loop.md you approve first), and a
+  short note appended to CLAUDE.md. You can delete or .gitignore any of these at any time.
 ```
 
 Then ask two things and wait for the answers:
@@ -124,6 +125,50 @@ Keep PROFILE.md tight and skimmable (headings + bullets + a couple of small tabl
 with a one-line note that it was generated locally from aggregate signals and contains no raw
 content. **Show the user a short summary** of what you found and confirm the file path.
 
+### STEP 3.5 — Infer likely end goals and recommend automations (do this UNPROMPTED)
+
+The user will almost never *state* their goals. Infer them anyway — from the local signals — and
+present them as **hypotheses to confirm or correct**, never as fact. This is the heart of the
+pre-warm: the value is recommending the right swarm/loop *before* the user asks. Add two sections
+to PROFILE.md:
+
+**`## Inferred goals (hypotheses — confirm or correct)`** — 2–4 concrete end goals, each grounded
+in specific signals and tagged with a confidence. Triangulate, don't guess from one number:
+
+- **What they build** = `repo-signals` languages/frameworks/`dependency_sample` (+ GitHub
+  topics if scanned) × the transcript `file_extensions` histogram. (e.g. Next.js + `@supabase`
+  + `.tsx` heavy → "ship & maintain a Next.js/Supabase web app"; `pandas`/`torch` + `.ipynb` →
+  "keep a data/ML pipeline current".)
+- **How they work** = transcript `tools` mix. Heavy `Bash`/`Edit`/`Read` → hands-on coding;
+  presence of `Workflow`/`Agent`/`TaskCreate` → **they already fan out subagents**; presence of
+  `ScheduleWakeup`/`CronCreate` → **they already run loops**; MCP servers (`mcp__supabase__*`,
+  `mcp__context7__*`, …) → which external systems they live in.
+- **At what cadence** = the new cadence signals. Compute **density = `distinct_active_days` /
+  `activity_span_days`** and read recency from `last_activity_utc` (if `activity_span_days` is
+  **null** — no timestamped events, e.g. a fresh install — treat cadence as *unknown* and skip the
+  density read and any recurring-loop recommendation):
+  - density near **1.0** + recent `last_activity_utc` → **daily driver on an active project**.
+  - **low** density (sporadic days over a wide span) → occasional / multi-project, not a daily loop.
+  - heavy `token_usage_totals` cache-reads → **long iterative sessions** (checkpoint/resume + a
+    cross-session loop-until-budget fit them).
+
+**`## Recommended automations`** — for each inferred goal, recommend the agentic-swarm primitive
+that fits, and say **which of the three** it is. Key the choice off cadence + orchestration signals
+(see `../agentic-swarm/reference/loops.md` for the exact `/loop` forms):
+
+| Signal pattern | Recommend |
+|---|---|
+| One-off / discovery-shaped goal (audit, research, migration) | A **one-shot safe swarm** (`/agentic-swarm` + `my-first-swarm.js`). |
+| Daily driver + active project + a *recurring* need (watch CI, triage PRs, nightly audit) | A **recurring `/loop`** that launches a bounded swarm each tick. |
+| Sporadic / on-demand, or "run until done" | A **self-paced `/loop`** (model paces itself; ends when done), or just an on-demand swarm. |
+| Goal that ends on a **condition** (not a clock) | **`/goal`** (condition-driven) rather than `/loop` — see `../agentic-swarm/reference/loops.md`. |
+| Long sessions / work too big for one run | **Loop-until-budget across sessions**: a `/loop` that resumes a checkpointed swarm each turn. |
+
+**Discipline:** every inferred goal and recommendation must cite the signal it rests on. If the
+signals are thin (few sessions, no clear stack), say so and offer **fewer, hedged** suggestions —
+never invent a goal the data doesn't support. These are *inferred → presented for confirmation →
+scaffolded only on opt-in* (Step 4). Show the user the inferred goals and ask which to act on.
+
 ---
 
 ## STEP 4 — Scaffold tailored tooling (opt-in + idempotent)
@@ -153,6 +198,25 @@ A starter swarm script is at `.claude/agentic-swarm/my-first-swarm.js`. Run `/as
 to refresh your local PROFILE.md.
 ```
 
+**(c) Loop setup (optional, opt-in).** If STEP 3.5 inferred a *recurring*, *monitoring*, or
+*loop-until-dry* goal **and the user wants it**, set up the loop they pick. **Confirm the exact form
+first; never apply silently, and never start the loop for them** — you hand them the `/loop` to run.
+Tune the recommendation to the cadence signal (density near 1.0 + recent `last_activity_utc` →
+**recurring** fits; sporadic → **self-paced / on-demand**). See `../agentic-swarm/reference/loops.md`
+for the exact forms and the worklist architecture.
+
+- **Recurring monitoring loop.** Propose a concrete `/loop <interval> <prompt>` (e.g. watch CI,
+  triage PRs, a periodic review/audit swarm over what changed). For a longer standing prompt, offer
+  to write **`.claude/loop.md`** — **show it and ask before creating or overwriting** (idempotent;
+  if one exists, diff it, don't clobber).
+- **Self-paced / loop-until-dry loop.** Hand them a `/loop <prompt>` (no interval — the model paces
+  itself and ends when done) wired to a worklist under `.claude/agentic-swarm/`, for a backlog too
+  big for one run.
+- Always tell them: a `/loop` runs **only while the session is open**, recurring tasks **auto-expire
+  after 7 days**, and for unattended runs across machine restarts they'd use Cloud Routines
+  (`/schedule`), not `/loop`. Remind them the `/agentic-swarm` skill arms the watchdog inside each
+  loop tick's swarm.
+
 ---
 
 ## STEP 5 — Wrap up
@@ -161,6 +225,9 @@ Tell the user, concisely:
 - which files were written (full local paths),
 - that everything stayed on their machine and secrets were redacted,
 - the top 3–5 profile takeaways,
+- the **inferred goals** (STEP 3.5) and which they confirmed — framed as hypotheses they can correct,
+- if a loop was set up or recommended, the **exact `/loop` to run** (and that recurring loops
+  auto-expire after 7 days and need the session open),
 - the suggested next step: open `/agentic-swarm` and fill in `my-first-swarm.js`.
 
 You may note they can inspect the `*-signals.json` files to verify exactly what was derived, and
@@ -186,3 +253,4 @@ that the whole `.claude/agentic-swarm/` dir is safe to delete or `.gitignore`.
 | `scripts/scan_repo.py` | Local repo scanner (extensions, manifests, languages/frameworks, dependency names, git remote from `.git/config`). No network. |
 | `scripts/scan_github.py` | OPT-IN, read-only GitHub *metadata* via `gh` CLI. Skips cleanly (exit 0) if `gh` is missing/unauthenticated. Sends no local data. |
 | `../agentic-swarm/reference/safe-swarm-template.js` | The safe-swarm starter copied into the user's repo in Step 4. |
+| `../agentic-swarm/reference/loops.md` | How to pair a swarm with `/loop` (Step 3.5 recommendations + Step 4c loop setup). |

@@ -335,6 +335,38 @@ if (nulls / batch.length > 0.4) {
 
 ---
 
+## Scaling a swarm across time — pair it with `/loop` (three loop layers, kept distinct)
+
+A swarm lives inside **one bounded Workflow run**. When the work outgrows one run — a backlog too big
+for one budget, or a fan-out you want to re-run on a cadence — carry it across turns/sessions with a
+`/loop`. Three different "loops" touch a swarm; the watchdog one is the easy one to mix up:
+
+| Layer | What it is | Repeats a… | Sentinel? |
+|---|---|---|---|
+| **1. In-script wave loop** (Pattern 1) | the `for` over waves of 6–8 inside ONE Workflow script | wave, within a run | no |
+| **2. One-shot `ScheduleWakeup` watchdog** (Pattern 4) | one main-loop wakeup armed beside the swarm | nothing — fires once, re-arm manually | **NO — plain prompt** |
+| **3. `/loop`** (recurring or self-paced) | a whole TURN over time; each turn can launch a fresh bounded swarm | turn, across time | yes (runtime sets it) |
+
+**The rule that keeps them safe:** the layer-2 watchdog is a **plain** `ScheduleWakeup` with a concrete
+prompt — **never** a `/loop` sentinel (`<<autonomous-loop-dynamic>>` / `<<autonomous-loop>>`). A
+sentinel turns your one-shot watchdog into an autonomous loop. Layer 3 is the **user's** `/loop`.
+
+**Reach for layer 3 when:**
+- **Loop-until-dry / loop-until-budget ACROSS sessions** — the in-script `while (budget.remaining()…)`
+  loop spends *one* run's budget; a `/loop` runs a **bounded, checkpointed** wave-set each tick and
+  **resumes** (`resumeFromRunId`) the next, until the backlog is dry or the budget target is hit.
+- **Recurring monitoring swarm** — `/loop 2h <re-run the review/audit swarm over what changed since
+  last tick>`; Pattern 4's watchdog still applies *within* each tick.
+
+**Gotcha:** a *self-paced* `/loop` is itself driven by `ScheduleWakeup`, so a competing watchdog
+`ScheduleWakeup` inside it can collide — prefer a **fixed-interval** `/loop` (leaves `ScheduleWakeup`
+free) or a bounded per-tick swarm whose completion notification is your signal. Workflow **scripts
+can't self-schedule** (no `ScheduleWakeup`/`CronCreate`/timers in the sandbox), so cross-tick state
+(the worklist) is held by the **main session** and passed into each run as `args`. Full playbook:
+`reference/loops.md`; raw mechanics: `../../docs/claude-code/loops.md`.
+
+---
+
 ## Resume runbook
 
 When a swarm stops, stalls, or partially fails — recover it, don't restart it.
@@ -426,7 +458,8 @@ PY
   identity instead of randomness.
 - **`ScheduleWakeup` here is a one-shot watchdog, not a `/loop`** — pass a plain descriptive
   `prompt`, **not** the `<<autonomous-loop-dynamic>>` sentinel (and never the CronCreate
-  `<<autonomous-loop>>` one). Confusing the two turns a watchdog into an autonomous loop.
+  `<<autonomous-loop>>` one). Confusing the two turns a watchdog into an autonomous loop. To
+  deliberately run a swarm *under* a `/loop` (across turns/sessions), see `reference/loops.md`.
 
 ## "Before" (what NOT to do) vs "after"
 
@@ -449,4 +482,5 @@ const [gov, foundation] = await parallel([...])                // synthesis ONLY
 |---|---|
 | `reference/safe-swarm-template.js` | **Start here to build.** The full copy-paste workflow script implementing all 8 patterns — fill in items, prompts, schema. |
 | `reference/watchdog.md` | The complete `ScheduleWakeup` watchdog + journal-staleness check, the stop/resume decision tree, and a background-shell fallback watchdog. |
+| `reference/loops.md` | Pairing a swarm with `/loop` across turns/sessions: the three loop layers, loop-until-dry/budget across sessions, recurring monitoring swarms, and the watchdog-vs-sentinel rule. |
 | `reference/extract_journal.py` | The runnable journal parser: dedup by key, list result-less agents, write a UTF-8 merge. Use for final extraction and for resume diagnosis. |

@@ -7,8 +7,37 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-06-27
+
+The `/loop` release: the plugin now teaches how to carry a swarm **across turns and sessions** with
+`/loop`, the pre-warm profiler **infers your likely goals unprompted** and can scaffold a loop, and a
+new vendored reference pins the real `/loop` mechanics — verified against the live docs *and* the
+in-session tool schemas (which turned out to disagree in two places).
+
 ### Added
 
+- **Vendored `docs/claude-code/loops.md`** — a verified reference snapshot for `/loop` and the
+  scheduling layer: the three forms (fixed-interval via `CronCreate`, self-paced via `ScheduleWakeup`,
+  bare-maintenance + `loop.md`), the `CronCreate`/`CronList`/`CronDelete` and `ScheduleWakeup`
+  signatures, the **internal `<<autonomous-loop>>` / `<<autonomous-loop-dynamic>>` sentinels**, jitter,
+  the 7-day expiry and 50-task cap, provider fallback (Bedrock/Vertex/Foundry → fixed 10-min), and how
+  `/loop` compares to Routines, Workflows, and `/goal`. It carries an explicit **"Discrepancies noted"**
+  footer for two real **doc-vs-schema divergences** the verification fan-out caught (the recurring-task
+  jitter magnitude, and the fact that the sentinels are undocumented internal detail).
+- **Skill: pair a swarm with `/loop`.** A new "three loop layers" section in
+  `skills/agentic-swarm/SKILL.md` plus `skills/agentic-swarm/reference/loops.md` teach **loop-until-dry
+  / loop-until-budget across sessions**, **recurring monitoring swarms**, and the cross-tick **worklist
+  architecture** (a Workflow script can't self-schedule, so scheduling lives in the main session). This
+  **builds on — never contradicts —** the existing rule that the swarm watchdog is a *plain one-shot*
+  `ScheduleWakeup`, not a `/loop` (no sentinel).
+- **Profiler: infer goals unprompted + optional loop setup** (`as-new-project`). A new **STEP 3.5**
+  turns the local aggregate signals into **inferred end goals + recommended automations** (one-shot
+  swarm vs recurring `/loop` vs self-paced loop), framed as hypotheses to confirm — *without the user
+  ever stating a goal*. A new **STEP 4(c)** optionally scaffolds the chosen loop (a recommended `/loop`
+  and/or an approved `.claude/loop.md`) on opt-in. Stays **100% local**.
+- **New cadence signals** in `profile_transcripts.py`: `distinct_active_days` and `activity_span_days`
+  (density = daily-driver vs sporadic), so the goal/loop inference can tell a recurring loop from an
+  on-demand one. Aggregate counts only — privacy guarantee unchanged; covered by new tests.
 - **`SECURITY.md`** — how to report a security or privacy issue, and what counts as one (a break in
   the local-only / no-exfiltration privacy guarantee is treated as a security bug).
 
@@ -122,7 +151,8 @@ Initial release.
 - **Docs & trust** — full `README.md`, plain-language `docs/PRIVACY.md`, `CONTRIBUTING.md`,
   this changelog, and the MIT `LICENSE`.
 
-[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/pawelsloboda5/agentic-swarm/releases/tag/v0.1.0

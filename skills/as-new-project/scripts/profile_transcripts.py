@@ -87,9 +87,12 @@ def parse_ts(ts):
     if not isinstance(ts, str):
         return None
     try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(timezone.utc)
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
+    # Treat a naive timestamp as UTC so date bucketing (distinct_active_days / span) is deterministic
+    # regardless of host timezone; aware timestamps are normalized to UTC. Real transcripts carry 'Z'.
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
 
 
 def aggregate(root, include_subagents):
@@ -114,6 +117,7 @@ def aggregate(root, include_subagents):
     malformed_lines = 0
     first_ts = None
     last_ts = None
+    active_dates = set()   # distinct UTC calendar dates with >=1 timestamped event (cadence signal)
     weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
     for path, is_sub in iter_jsonl(root):
@@ -168,6 +172,7 @@ def aggregate(root, include_subagents):
                 if dt:
                     agg["activity_by_hour"][str(dt.hour)] += 1
                     agg["activity_by_weekday"][weekdays[dt.weekday()]] += 1
+                    active_dates.add(dt.date())
                     if first_ts is None or dt < first_ts:
                         first_ts = dt
                     if last_ts is None or dt > last_ts:
@@ -211,11 +216,20 @@ def aggregate(root, include_subagents):
         "malformed_lines": malformed_lines,
         "first_ts": first_ts,
         "last_ts": last_ts,
+        "n_active_days": len(active_dates),
     }
 
 
 def build_output(root, data, include_subagents):
     agg = data["agg"]
+
+    # Cadence signals (loop-fit inference): how many distinct calendar days were active, and over
+    # how wide a span. Density = distinct_active_days / activity_span_days tells "daily driver"
+    # (near-1.0 -> a recurring /loop fits) from "sporadic" (low -> self-paced/on-demand only).
+    if data["first_ts"] and data["last_ts"]:
+        activity_span_days = (data["last_ts"].date() - data["first_ts"].date()).days + 1
+    else:
+        activity_span_days = None
 
     # Scrub + bound the per-project list; sort by events desc.
     projects = []
@@ -247,6 +261,8 @@ def build_output(root, data, include_subagents):
         },
         "first_activity_utc": data["first_ts"].strftime("%Y-%m-%dT%H:%M:%SZ") if data["first_ts"] else None,
         "last_activity_utc": data["last_ts"].strftime("%Y-%m-%dT%H:%M:%SZ") if data["last_ts"] else None,
+        "distinct_active_days": data["n_active_days"],
+        "activity_span_days": activity_span_days,
         "event_types": dict(agg["event_types"].most_common()),
         "models": dict(agg["models"].most_common()),
         "tools": dict(agg["tools"].most_common()),
