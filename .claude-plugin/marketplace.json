@@ -1,0 +1,16 @@
+{
+  "name": "agentic-swarm",
+  "owner": { "name": "Pawel Sloboda" },
+  "description": "Marketplace for agentic-swarm — safely fan out large swarms of parallel Claude Code subagents, plus a local first-run profiler/scaffolder.",
+  "plugins": [
+    {
+      "name": "agentic-swarm",
+      "source": "./",
+      "description": "Run large swarms of parallel Claude Code subagents safely — bounded waves, stall watchdog, resume — plus a local first-run profiler/scaffolder.",
+      "homepage": "https://github.com/pawelsloboda5/agentic-swarm",
+      "license": "MIT",
+      "category": "orchestration",
+      "keywords": ["subagents", "workflow", "swarm", "parallel", "agents", "orchestration"]
+    }
+  ]
+}

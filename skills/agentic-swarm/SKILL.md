@@ -1,0 +1,420 @@
+---
+name: agentic-swarm
+description: >-
+  Safely fan out a large swarm of parallel subagents with the Workflow tool —
+  bounded waves, per-agent timeout + retry, a ScheduleWakeup watchdog against
+  silent stalls, checkpoint/resume, lean outputs, and partial-synthesis. Use
+  this skill WHENEVER you are about to run many agents at once or write a
+  Workflow() script that spans more than one wave — triggers include "run a
+  swarm", "agentic swarm", "parallel subagents", "fan out agents", "multi-agent
+  workflow", "orchestrate subagents", a research / audit / migration / review
+  swarm, or any Workflow() fan-out over ~10+ items — even if the user never says
+  the word "safely". A single pipeline()/parallel() barrier can deadlock for
+  HOURS with no notification; consult this skill BEFORE writing the script so the
+  swarm is safe by construction, not after it stalls.
+---
+
+# Agentic Swarm — run parallel subagents without the 2-hour stall
+
+This skill encodes the post-mortem of a real **41-agent research swarm** (full origin story in
+`reference/origin.md`). That swarm **did** eventually succeed (18/19 sub-areas), but only after
+**two stops, a ~2-hour silent stall, and 17 agent failures**, with **3 agents left hung**. The
+point of this skill is that the *next* swarm pays none of that tax.
+
+**The one thing to internalize:** the Workflow harness notifies you on **completion**,
+**never on stall**. A hung connection inside one giant `pipeline()`/`parallel()` barrier
+makes the whole workflow `await` forever — no synthesis, no completion event, no
+notification. The only thing that caught it last time was a manual watchdog. So we build
+the watchdog in **by default**, and we shrink the blast radius so a bad window damages one
+wave, not everything.
+
+## When to use this
+
+- You're about to call `Workflow` (or hand-write a workflow script) that fans out **more
+  than one wave** of agents (≈8+ agents, or any time over multiple rounds).
+- Research / audit / migration / review swarms; anything with a discover→verify→synthesize
+  shape; loop-until-dry or loop-until-budget fan-outs.
+- You're **resuming** a swarm that stopped, stalled, or partially failed.
+
+## When NOT to use this
+
+- A single `agent()` call, or one small `parallel()` of ≤6 quick agents that finishes in a
+  minute — the overhead isn't worth it. Just call it and `.filter(Boolean)`.
+- Plain inline work with the `Agent` tool that isn't orchestrated through `Workflow`.
+
+## Failure model (why each rule exists)
+
+The dominant failure was `API Error: Connection closed mid-response` — the model API
+stream dropping mid-generation. It is **environmental/transient, not a logic bug**:
+different agents failed each run (3 → 4 → 13), and the **heaviest agents failed most** (the
+ones doing the most `WebFetch`/`WebSearch` with the longest structured outputs spend the
+longest on the wire, so they have the highest drop probability). Two distinct bad outcomes:
+
+1. **Clean failure** — `agent()` retries internally, then returns `null`. Survivable; just
+   `.filter(Boolean)` and retry the nulls later.
+2. **The killer — a hung connection** that never resolves *or* rejects. `agent()` never
+   returns (not even `null`), so any barrier `await`-ing it deadlocks forever. This is the
+   2-hour stall. Every pattern below exists to make this survivable.
+
+---
+
+## Safe-swarm pre-flight checklist
+
+Before you launch, confirm every line. If you can't tick one, fix the script first.
+
+- [ ] **Waves, not a mega-pipeline.** Items are chunked into waves of **6–8**; each wave is
+      its own `parallel()`/`pipeline()`, awaited separately. (Pattern 1)
+- [ ] **Every `agent()` goes through a retry wrapper** that tolerates `null` and defers
+      failures to a retry wave. (Pattern 2)
+- [ ] **No single hard barrier over all items.** Results accumulate per wave; synthesis runs
+      at the end over whatever is present. (Pattern 3)
+- [ ] **A `ScheduleWakeup` watchdog is armed** right after launch (≥1200 s), checking
+      journal mtime, ready to `TaskStop` + resume on stall. (Pattern 4 + `reference/watchdog.md`)
+- [ ] **Resume is designed in:** finder prompts are stable (no `Date.now()`/`Math.random()`/
+      index-randomized text → cache hits); synthesis embeds its inputs so it re-runs when
+      they grow. (Pattern 5)
+- [ ] **Outputs are lean:** capped array sizes, short evidence (URLs not page-dumps), so
+      streams are short and the `.output` file doesn't blow the ~192 KB cap. (Pattern 6)
+- [ ] **Synthesis tolerates partial input** and is told to **flag gaps explicitly** — never
+      silently drop a missing item. (Pattern 7)
+- [ ] **Instability backoff:** if a wave returns many `null`s, **stop** rather than hammer
+      the next wave; resume after the window clears. (Pattern 8)
+- [ ] You will extract final data from **`journal.jsonl`** (parsed with **Python**),
+      not the truncated `.output`.
+
+The full assembled script that satisfies every box is `reference/safe-swarm-template.js` —
+copy it and fill in your items, prompts, and schema.
+
+---
+
+## The 8 patterns
+
+Each pattern is **problem → rule → snippet**. They compose into the template.
+
+### Pattern 1 — Bound the blast radius: waves of 6–8, not one 41-agent pipeline
+
+**Problem.** The original ran one `pipeline()` over 19 sub-areas (38 agents) then synthesized
+*after* it. `pipeline()` returns only after **all** items finish (an implicit barrier at the
+end) — so 3 hung items deadlocked the entire workflow. A bad API window hit *everything* at once.
+
+**Rule.** Chunk items into waves of 6–8. Await each wave separately and accumulate results.
+A bad window then damages **one wave**, and you can react between waves.
+
+```js
+const WAVE_SIZE = 6
+const chunk = (arr, n) => { const o = []; for (let i = 0; i < arr.length; i += n) o.push(arr.slice(i, i + n)); return o }
+
+const waves = chunk(ITEMS, WAVE_SIZE)
+const done = []                 // every result we've collected so far
+let failed = []                 // items whose agent returned null this run (rebuilt in the retry wave)
+for (let w = 0; w < waves.length; w++) {
+  phase(`Wave ${w + 1}/${waves.length}`)
+  const batch = await parallel(waves[w].map(it => () => runItem(it)))   // wave-sized barrier only
+  batch.forEach((r, i) => (r ? done.push(r) : failed.push(waves[w][i])))
+  log(`Wave ${w + 1}: ${done.length}/${ITEMS.length} ok, ${failed.length} to retry`)
+  // Pattern 8 backoff check goes here.
+}
+```
+
+> Concurrency is already capped at `min(16, cores − 2)` per workflow, so a 6–8 wave runs
+> truly in parallel. The wave size is about **exposure window and reaction granularity**, not
+> the concurrency limit.
+
+### Pattern 2 — Per-agent timeout + retry-with-backoff (timer-free)
+
+**Problem.** No per-agent guard means one hung `agent()` deadlocks its wave's barrier.
+
+**Rule.** Wrap every `agent()`. `agent()` already retries internally and returns `null` on
+terminal API failure — so the script-level job is: **tolerate `null`, and get a fresh attempt
+later.** Do the retry as a **retry wave at the end** — the time the other waves take *is* your
+backoff, with no timer needed (the sandbox blocks non-deterministic APIs like `Date.now()`/
+`Math.random()` and **may block timers too**, so don't rely on a `setTimeout` sleep).
+
+```js
+// Single source of truth for spawning one item's agent(s). Keep the prompt STABLE (Pattern 5).
+function runItem(it) {
+  return agent(buildPrompt(it), { label: `item:${it.key}`, phase: 'Find', schema: ITEM_SCHEMA, effort: 'medium' })
+  // returns the schema object, or null after agent()'s own internal retries are exhausted
+}
+
+// After all primary waves: one retry wave over the nulls (natural backoff = elapsed time).
+if (failed.length) {
+  phase('Retry')
+  const retried = await parallel(failed.map(it => () => runItem(it)))
+  const stillFailed = []
+  retried.forEach((r, i) => (r ? done.push(r) : stillFailed.push(failed[i])))
+  failed = stillFailed   // declare `failed` with `let` so it can be rebuilt here
+  log(`Retry wave recovered ${retried.filter(Boolean).length}; still missing ${failed.length}`)
+}
+```
+
+**Optional in-script soft timeout (only if `setTimeout` exists in your runtime).** A
+`Promise.race` lets a wave's barrier proceed even if one agent hangs forever (the orphaned
+agent keeps running but is ignored). Treat it as **best-effort** — the sandbox blocks
+non-deterministic APIs and *may* block timers too, so **the watchdog (Pattern 4) is the
+authoritative timeout, not this.** Probe `setTimeout` before relying on it:
+
+```js
+// ONLY if a one-line probe shows setTimeout is available in the Workflow sandbox.
+const withTimeout = (p, ms) => Promise.race([p, new Promise(r => setTimeout(() => r(null), ms))])
+// usage: await withTimeout(runItem(it), 240_000)
+```
+
+### Pattern 3 — Avoid the single hard barrier; commit per wave
+
+**Problem.** Synthesis ran *after* the one big barrier, so a stuck barrier meant **no
+synthesis at all**, and synthesis was computed on whatever partial set existed.
+
+**Rule.** Never `await` one barrier over all items and then synthesize. Accumulate results
+**per wave** into `done`, so the deliverable survives even if a later wave never completes.
+Synthesize at the very end over `done` (Pattern 7). Within a wave you may still pipeline the
+per-item stages (discover→verify) — that's fine; the barrier is only wave-sized.
+
+```js
+// Per-item multi-stage WITHOUT a global barrier — pipeline INSIDE a wave:
+const batch = await pipeline(
+  waves[w],
+  it    => agent(discoverPrompt(it), { label: `discover:${it.key}`, phase: 'Discover', schema: CANDIDATES_SCHEMA }),
+  cands => cands ? agent(verifyPrompt(cands), { label: `verify`, phase: 'Verify', schema: VERDICTS_SCHEMA }) : null
+)
+```
+
+### Pattern 4 — Always arm a ScheduleWakeup watchdog (the non-negotiable one)
+
+**Problem.** The harness only fires a notification on **completion**. A silent stall fires
+nothing. Last time, a manual watchdog was the *only* signal in 2 hours.
+
+**Rule.** Right after launching the swarm, arm a one-shot `ScheduleWakeup` (≥1200 s). When it
+fires, run the **journal-mtime staleness check**: if the journal hasn't grown in N minutes and
+the workflow isn't complete → `TaskStop` the run, then resume it (Pattern 5 + the runbook).
+Re-arm after each check; stop arming once the workflow completes.
+
+```text
+ScheduleWakeup({
+  delaySeconds: 1200,
+  reason: "watchdog: swarm wf_<id> may stall silently; check journal mtime",
+  prompt: "Watchdog for swarm run wf_<id> (task <taskId>, journal at <path>): run the
+           journal-staleness check in agentic-swarm/reference/watchdog.md. If the journal
+           mtime is older than 20 min AND the workflow task is not 'completed', TaskStop the
+           task then resume with Workflow({scriptPath, resumeFromRunId}). Otherwise re-arm
+           another 1200s ScheduleWakeup. Do NOT use the autonomous-loop sentinel — this is a
+           plain one-shot watchdog, not a /loop."
+})
+```
+
+Compact staleness check (full version + a background-shell fallback in `reference/watchdog.md`):
+
+```python
+# python - <<'PY'  ... PY   (if your shell has no jq, use Python — no jq dependency)
+import os, time, glob
+j = glob.glob(os.path.expanduser("~/.claude/projects/*/*/subagents/workflows/wf_<id>/journal.jsonl"))[0]
+age_min = (time.time() - os.path.getmtime(j)) / 60
+print(f"STALE age_min={age_min:.1f} -> {'RESUME' if age_min > 20 else 'still-moving'}")
+PY
+```
+
+> The harness *does* track workflow completion (you get a `<task-notification>`), but it does
+> **not** track a stall — so a long (1200 s+) fallback wakeup is exactly the sanctioned use of
+> `ScheduleWakeup` here. If the swarm completes normally first, the completion notification
+> arrives and you simply don't re-arm.
+
+### Pattern 5 — Checkpoint + resume; keep finder prompts stable, make synthesis re-run
+
+**Problem.** Resume is what saved the run (32 cached agents reused across 2 stops, zero
+completed work lost). But resume's cache is keyed by the **`(prompt, opts)` hash** — and that
+cuts both ways.
+
+**Rule, two halves:**
+- **Finder/worker agents → stable prompts** so resume serves them from cache. No `Date.now()`,
+  no `Math.random()` (both throw in the sandbox anyway), no run-varying text. Identify items by
+  a stable key, not randomness.
+- **Synthesis → must re-run on the fuller set.** A *completed* agent returns cached; a *failed*
+  one (returned `null`) re-runs. So if your synthesis prompt is **static**, resume serves a
+  **stale partial** synthesis from cache. Fix: **embed the input set in the synthesis prompt**
+  (sorted for stability). When `done` grows on resume, the prompt string changes → cache miss →
+  synthesis re-runs over everything now present.
+
+```js
+// Stable finder identity (cache hit on resume):
+agent(buildPrompt(it), { label: `item:${it.key}`, schema: ITEM_SCHEMA })   // it.key is stable
+
+// Synthesis that re-runs when inputs grow (sort so the string is deterministic within a run):
+const payload = JSON.stringify([...done].sort((a, b) => (a.key > b.key ? 1 : -1)))
+const synthesis = await agent(
+  `Synthesize the deliverable from these ${done.length} results. ${payload}\n` +
+  `Missing items (no result): ${JSON.stringify(missing)}. Flag every gap; never silently drop.`,
+  { label: 'synth', phase: 'Synthesize', schema: SYNTH_SCHEMA, effort: 'high' }
+)
+```
+
+### Pattern 6 — Keep per-agent outputs lean
+
+**Problem.** Heavy JSON per agent = longer streams = more drops, **and** the 58 results last
+run summed to ~885 KB (biggest single 32 KB), blowing the `.output` file's **~192 KB**
+truncation cap.
+
+**Rule.** Cap array sizes and keep evidence short in the **prompt and schema**. Ask for **≤8
+items, ≤3 evidence URLs each, one-line rationales** — not inline walls of text. Long evidence
+lives behind URLs/references, not in the payload. Shorter outputs also drop less often
+(Pattern 1/2 reinforcement). For the *full* dataset you parse the journal anyway (extraction
+recipe), so the agents don't need to be verbose.
+
+```text
+In the prompt:  "Return at most 8 candidates. Each: name, url, one-line why, ≤3 evidence URLs.
+                 No long quotes — link the source. Your output IS data; fill the schema."
+In the schema:  keep fields short/scalar; avoid free-text 'full_analysis' blobs.
+```
+
+### Pattern 7 — Synthesize gracefully from partial results; flag gaps
+
+**Problem.** Synthesis on partial data that doesn't *say* it's partial reads as complete — a
+silent truncation. Last run's synthesis was computed on partial data with no gap list.
+
+**Rule.** Never block the deliverable on 100%. Compute the missing set explicitly, pass it to
+synthesis, instruct synthesis to produce the deliverable **and** an explicit "gaps / thin
+evidence / not verified" section. Return the missing set to the caller too.
+
+```js
+const haveKeys = new Set(done.map(r => r.key ?? r.subarea))
+const missing = ITEMS.filter(it => !haveKeys.has(it.key)).map(it => it.key)
+if (missing.length) log(`⚠ partial: missing ${missing.length}/${ITEMS.length}: ${missing.join(', ')}`)
+// pass `missing` into the synthesis prompt (Pattern 5) and into the return value:
+return { results: done, missing, synthesis }
+```
+
+### Pattern 8 — Detect instability and back off
+
+**Problem.** Hammering the next wave during a connection-error spike just burns agents into
+the same bad window (last run's failures came in a 13-failure storm).
+
+**Rule.** After each wave, measure the `null`-rate. If it's high (e.g. > 40 %), it's a spike:
+**stop launching new waves**, return partial + the remaining items, and resume **later** — the
+gap until you resume is the backoff (timer-free, controlled by the watchdog or you).
+
+```js
+const nulls = batch.filter(r => r === null).length
+if (nulls / batch.length > 0.4) {
+  log(`⚠ instability: ${nulls}/${batch.length} failed this wave — backing off. Returning partial; resume later.`)
+  break   // exit the wave loop; remaining items recover cheaply on resume (cache keeps the rest)
+}
+```
+
+---
+
+## Resume runbook
+
+When a swarm stops, stalls, or partially fails — recover it, don't restart it.
+
+1. **Get the IDs.** From the original `Workflow` tool result: the **`runId`** (`wf_…`) and the
+   **`scriptPath`** (every invocation persists its script under the session dir and returns the
+   path). The workflow's **task id** comes from the launch `<task-notification>`.
+2. **Stop the stuck run first.** Resume refuses to run alongside the old one:
+   `TaskStop(<taskId>)`. (Confirm it's stopped before step 3.)
+3. **Resume:** `Workflow({ scriptPath: "<path>", resumeFromRunId: "<runId>" })`. Completed
+   `agent()` calls with unchanged `(prompt, opts)` return **cached instantly**; only `null`/new
+   calls re-run. Same script + same args → up to 100 % cache hit.
+4. **If you edited the script:** the **longest unchanged prefix** of `agent()` calls is cached;
+   the first edited call and everything after it re-runs. So **append new waves at the end** and
+   leave earlier prompts byte-identical to preserve the cache.
+5. **Re-arm the watchdog** (Pattern 4) for the resumed run.
+6. **Fallback (no journal / cross-session):** hand-author a continuation script from the
+   journal — parse it with the extractor below to see exactly which keys lack a `result`, then
+   write a small workflow that only spawns those.
+
+---
+
+## Partial-synthesis & extraction (Python journal parser)
+
+The `.output` file truncates at **~192 KB**. The append-only **`journal.jsonl`** has every
+agent's full `result`. Parse it with **Python** (if your shell has no `jq`, there is no jq
+dependency here — it's pure-stdlib Python).
+
+**Journal schema (verified against a real swarm journal):**
+- Lives at `~/.claude/projects/<project-slug>/<session-id>/subagents/workflows/<runId>/journal.jsonl`
+  — **one file per `runId`, appended across every resume** (so "union across runs" = dedup within
+  this one file).
+- `{"type":"started","key":"v2:<hash>","agentId":"…"}` — emitted when an agent begins.
+- `{"type":"result","key":"v2:<hash>","agentId":"…","result":{…}}` — `result` IS the schema
+  object the agent returned, so it **self-identifies** (e.g. `result.subarea`); you don't need
+  the label.
+- **`started_keys − result_keys` is an *upper bound* on hung work, not an exact count.** A
+  result-less key is "an agent that didn't return on **that node**." But an **in-script retry
+  re-calls `agent()` as a NEW node with a NEW cache key** (we proved this live) — so when a retry
+  wave recovers an item, the *first* (failed) node's key stays in `started − result` even though
+  the work IS done. So that diff counts **recovered-by-retry agents too**. The **authoritative
+  coverage check** is to dedupe the *deliverable* by its own **content key** (e.g. `result.key` /
+  `result.subarea`) and diff that against your **planned item list** — which is exactly what the
+  extractor's `--group-by` view lets you do. (Origin run: 61 started, 58 resulted → 3 truly hung,
+  because no retry wave had run yet.)
+
+Run the bundled extractor (it auto-globs the journal, dedups by `key`, lists the result-less
+agents, and writes a UTF-8 merge — encoding-safe):
+
+```bash
+python skills/agentic-swarm/reference/extract_journal.py \
+  --run wf_<id> \
+  --out <scratch-dir>/swarm-merged.json
+# or point it straight at one or more journals with --journal <path> [--journal <path> ...]
+# coverage check: add --group-by <your content key> and diff the printed groups vs your planned items
+```
+
+Minimal inline version of the core idea:
+
+```python
+# python - <<'PY'  ... PY
+import os, json, glob
+path = glob.glob(os.path.expanduser("~/.claude/projects/*/*/subagents/workflows/wf_<id>/journal.jsonl"))[0]
+started, results = set(), {}
+for line in open(path, encoding="utf-8"):
+    line = line.strip()
+    if not line: continue
+    o = json.loads(line)
+    if o.get("type") == "started": started.add(o["key"])
+    elif o.get("type") == "result": results[o["key"]] = o["result"]   # dedup by key, last wins
+missing = started - results.keys()   # upper bound: includes retry-recovered nodes (see note above)
+json.dump(list(results.values()), open("merged.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+print(f"results={len(results)} unreturned_nodes={len(missing)}")   # ASCII-only print (cp1252-safe)
+PY
+```
+
+---
+
+## Operational gotchas (portable)
+
+- **JSON parsing without `jq`.** If your shell has no `jq` installed, parse JSON with **Python**
+  (`python - <<'PY' … PY`) — every recipe here does. A stray `jq` on a box without it is swallowed
+  as "command not found" and silently returns nothing.
+- **`.output` truncates at ~192 KB** — for full swarm data, parse `journal.jsonl`, never `.output`.
+- **Windows console encoding.** On Windows, Python stdout may be **cp1252** — `print()`-ing `→`/`—`/
+  emoji raises `UnicodeEncodeError`. Write UTF-8 files (`open(p, "w", encoding="utf-8")`) or set
+  `PYTHONIOENCODING=utf-8`; keep `print` **ASCII-only** to stay portable across consoles.
+- **Sandbox blocks `Date.now()` / `Math.random()` / argless `new Date()`** in workflow scripts
+  (they'd break deterministic resume) — hence timer-free backoff and stable, key-based item
+  identity instead of randomness.
+- **`ScheduleWakeup` here is a one-shot watchdog, not a `/loop`** — pass a plain descriptive
+  `prompt`, **not** the `<<autonomous-loop-dynamic>>` sentinel (and never the CronCreate
+  `<<autonomous-loop>>` one). Confusing the two turns a watchdog into an autonomous loop.
+
+## "Before" (what NOT to do) vs "after"
+
+```js
+// BEFORE — the one-barrier shape that stalled for 2 hours:
+const results = await pipeline(SUBAREAS,                       // 19 items, 38 agents, ONE barrier
+  sa    => agent(discoverPrompt(sa), { schema: CANDIDATES_SCHEMA }),
+  cands => agent(verifyPrompt(cands), { schema: VERDICTS_SCHEMA }))   // no timeout, no retry, no waves
+const [gov, foundation] = await parallel([...])                // synthesis ONLY after the big barrier
+//                                                                ^ 3 hung items => never gets here
+
+// AFTER — see reference/safe-swarm-template.js: waves of 6-8, runItem() retry wrapper,
+// per-wave commit into `done`, instability backoff, synthesis embeds `done`+`missing`,
+// and a ScheduleWakeup watchdog armed at launch.
+```
+
+## Reference files
+
+| File | When to read it |
+|---|---|
+| `reference/safe-swarm-template.js` | **Start here to build.** The full copy-paste workflow script implementing all 8 patterns — fill in items, prompts, schema. |
+| `reference/watchdog.md` | The complete `ScheduleWakeup` watchdog + journal-staleness check, the stop/resume decision tree, and a background-shell fallback watchdog. |
+| `reference/extract_journal.py` | The runnable journal parser: dedup by key, list result-less agents, write a UTF-8 merge. Use for final extraction and for resume diagnosis. |
+| `reference/origin.md` | The anonymized post-mortem this skill distills — the failure signature, the 8 lessons, and what saved the run. Read for the full evidence and "why". |

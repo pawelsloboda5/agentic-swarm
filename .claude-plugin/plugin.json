@@ -1,0 +1,22 @@
+{
+  "name": "agentic-swarm",
+  "version": "0.1.0",
+  "description": "Run large swarms of parallel Claude Code subagents safely — bounded waves, stall watchdog, resume — plus a local first-run profiler/scaffolder.",
+  "author": {
+    "name": "Pawel Sloboda",
+    "url": "https://github.com/pawelsloboda5"
+  },
+  "homepage": "https://github.com/pawelsloboda5/agentic-swarm",
+  "repository": "https://github.com/pawelsloboda5/agentic-swarm.git",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "plugin",
+    "subagents",
+    "workflow",
+    "orchestration",
+    "swarm",
+    "parallel",
+    "agents"
+  ]
+}
