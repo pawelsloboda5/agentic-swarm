@@ -140,6 +140,40 @@ def test_positive_signals_are_captured(tmp_path):
     assert out["distinct_git_branches"] == 1
     assert out["first_activity_utc"] == "2026-06-20T09:00:00Z"
     assert out["last_activity_utc"] == "2026-06-21T10:00:00Z"
+    # Cadence signals: events fall on 06-20 (x2) and 06-21 (x1) -> 2 distinct days over a 2-day span.
+    assert out["distinct_active_days"] == 2
+    assert out["activity_span_days"] == 2
+
+
+def test_cadence_signals_span_and_distinct_days(tmp_path):
+    # Three events on three calendar days spread across a two-week window: distinct=3, span=15.
+    # density = 3/15 = sporadic -> the synthesizer should NOT recommend a recurring /loop.
+    proj = tmp_path / "projects" / "slug"
+    proj.mkdir(parents=True)
+    events = [
+        {"type": "user", "timestamp": "2026-01-01T08:00:00Z", "message": {"content": []}},
+        {"type": "user", "timestamp": "2026-01-02T09:00:00Z", "message": {"content": []}},
+        {"type": "user", "timestamp": "2026-01-15T23:30:00Z", "message": {"content": []}},
+    ]
+    with open(proj / "s.jsonl", "w", encoding="utf-8") as fh:
+        for ev in events:
+            fh.write(json.dumps(ev) + "\n")
+    out = _profile(str(tmp_path / "projects"))
+    assert out["distinct_active_days"] == 3
+    assert out["activity_span_days"] == 15           # (2026-01-15 - 2026-01-01).days + 1
+    assert out["first_activity_utc"] == "2026-01-01T08:00:00Z"
+    assert out["last_activity_utc"] == "2026-01-15T23:30:00Z"
+
+
+def test_cadence_signals_absent_without_timestamps(tmp_path):
+    # No parseable timestamps -> cadence fields are 0 / None, never a crash.
+    proj = tmp_path / "projects" / "slug"
+    proj.mkdir(parents=True)
+    with open(proj / "s.jsonl", "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"type": "user", "message": {"content": []}}) + "\n")
+    out = _profile(str(tmp_path / "projects"))
+    assert out["distinct_active_days"] == 0
+    assert out["activity_span_days"] is None
 
 
 def test_malformed_only_transcript(tmp_path):
