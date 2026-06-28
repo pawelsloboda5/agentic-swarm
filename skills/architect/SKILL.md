@@ -1,38 +1,48 @@
 ---
 name: architect
 description: >-
-  Turn a one-line goal into excellent, complete, end-to-end output by orchestrating a researched,
+  Turn a one-line goal into complete, gated, auditable, end-to-end output by orchestrating a researched,
   gate-aware subagent swarm — not just a swarm that survives. Use WHENEVER a goal is big or multi-part
-  enough to fan out and you want the result to be genuinely good: "build an app / feature / landing page
-  / dashboard / game", a large audit, migration, or review, or any "make this excellent end-to-end"
-  request. It runs five phases (0-4): (0) research what GOOD looks like, classify the use-case, decompose into
-  workstreams, and select the skill-set + quality GATES per workstream; then present a PLAN for approval
-  (plan-then-confirm) before the expensive fan-out; (1) synthesize a zero-context brief per workstream
-  that FORWARD-COUPLES each gate's concrete pass-criteria into the worker's brief (the headline novelty)
-  and tells it which skills to invoke; (2) run the fan-out on the /agentic-swarm safe-swarm rails;
-  (3) integrate and verify each output against ITS gates; (4) optionally loop across sessions via /loop.
-  This is the QUALITY layer over /agentic-swarm's SAFETY layer — reach for it before hand-writing a
-  big multi-workstream Workflow, so the swarm aims to produce better work than one agent could.
+  enough to fan out and you want the result complete and checked against named criteria: "build an app /
+  feature / landing page / dashboard / game", a large audit, migration, or review, or any "decompose this
+  and verify it end-to-end" request. It runs five phases (0-4): (0) research what GOOD looks like, classify
+  the use-case, decompose into workstreams, and select the skill-set + quality GATES per workstream; then
+  present a PLAN for approval (plan-then-confirm) before the expensive fan-out; (1) synthesize a zero-context
+  brief per workstream that FORWARD-COUPLES each gate's concrete pass-criteria into the worker's brief (the
+  headline novelty) and tells it which skills to invoke; (2) run the fan-out on the /agentic-swarm safe-swarm
+  rails; (3) integrate and verify each output against ITS gates; (4) optionally loop across sessions via /loop.
+  This is the QUALITY-PROCESS layer over /agentic-swarm's SAFETY layer — reach for it before hand-writing a
+  big multi-workstream Workflow, for its process guarantees (gated forward-coupling, bounded repair,
+  completeness-faithful integration, auditability). Measured across three showcases to add no artifact-quality
+  uplift over a fair single shot — use it for those guarantees, not to beat one capable agent.
 ---
 
-# Architect — turn a one-line goal into excellent, gated, end-to-end output
+# Architect — turn a one-line goal into complete, gated, integrated, end-to-end output
 
 `/agentic-swarm` makes a large fan-out **survive** (bounded waves, retry, watchdog, resume). This skill
-aims to make it **excellent**: it researches what "good" looks like, decomposes the goal, and — the headline
-move — **forward-couples each workstream's quality GATE into that workstream's brief**, so every worker
-builds *toward* a named, checkable bar instead of producing generic output that's verified (or not)
-after the fact.
+aims to make it **complete and measurably gated**: it researches what "good" looks like, decomposes the
+goal, and — the headline move — **forward-couples each workstream's quality GATE into that workstream's
+brief**, so every worker builds *toward* a named, checkable bar instead of producing generic output that's
+verified (or not) after the fact.
 
 > **Three layers (see [the design](../../docs/plans/2026-06-27-swarm-architecture-harness-v1-design.md)).**
-> **SAFETY** (shipped — `/agentic-swarm`): the fan-out survives. **QUALITY** (this skill): the fan-out
-> *aims to* produce better work than one agent could — research-driven decomposition + skill+gate-aware briefs +
-> gated integration. **PERSISTENCE** (shipped — `/loop`): the work spans turns/sessions.
+> **SAFETY** (shipped — `/agentic-swarm`): the fan-out survives. **QUALITY-PROCESS** (this skill): the
+> fan-out is research-driven decomposition + skill+gate-aware briefs + gated integration — **measured to add
+> no artifact-quality uplift over a fair single shot, shipped for its process guarantees**
+> ([`MEASURED.md`](../../evals/loop-demo/MEASURED.md)). **PERSISTENCE** (shipped — `/loop`): the work spans
+> turns/sessions.
 
 **Headline novelty:** *forward-coupling the named gate into the brief.* No surveyed framework feeds the
 gate definition forward into the subagent's brief — they author briefs independently of any rubric and
-apply gates only *after* production. Honest caveat: this is **integration + packaging**, not a new
-algorithm, and the quality uplift is **unproven until the v0.8 showcase measures it** ("measured, not
-asserted"). Use it, but don't oversell its output — let the gates produce *evidence*, not assertions.
+apply gates only *after* production. **Measured posture (three pre-registered, held-out showcases — v0.8
+game · v0.9 engine · v0.10 library):** this is **integration + packaging**, not a new algorithm, and it
+adds **no measurable artifact-quality or completeness uplift** over a fair single shot on self-contained,
+objectively-scorable build tasks — at ~5× the token cost. What it *does* guarantee are **process**
+properties: safe parallel throughput, bounded repair, gated forward-coupling of disclosed criteria,
+auditability, and **completeness-faithful integration** (it matches the single-shot ceiling without
+dropping requirements). Reach for those guarantees — not "better work than one agent." Let the gates
+produce *evidence*, not assertions ("measured, not asserted" — see
+[`evals/loop-demo/MEASURED.md`](../../evals/loop-demo/MEASURED.md)).
 
 ## When to use this
 
@@ -151,8 +161,10 @@ lowered confidence), never silently.
 > bundled [`gates/lib/wcag_contrast.py`](gates/lib/wcag_contrast.py) WCAG util), and
 > [`gates/a11y.md`](gates/a11y.md) (mixed — a scoped axe/pa11y/Lighthouse runner via
 > [`gates/lib/a11y_report.py`](gates/lib/a11y_report.py) + a keyboard/semantics critic; cheap a11y stays
-> `ui-ux`-owned, "PASS ≠ conformance") — each a self-contained 7-key gate file. The **measured showcase**
-> that proves the uplift lands in **v0.8.0**.
+> `ui-ux`-owned, "PASS ≠ conformance") — each a self-contained 7-key gate file. The **measured showcases**
+> (v0.8 game · v0.9 engine · v0.10 library) found **no artifact-quality uplift** over a fair single shot —
+> the gates buy *evidence + auditability*, not better output; see
+> [`evals/loop-demo/MEASURED.md`](../../evals/loop-demo/MEASURED.md).
 
 ---
 

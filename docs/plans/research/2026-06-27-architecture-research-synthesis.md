@@ -1,5 +1,11 @@
 # Research Synthesis — Multi-Agent Orchestration Architectures (for the v1.0 quality-layer harness)
 
+> ⚠️ **Superseded by measurement (2026-06-28).** This research framed the harness's quality benefit as
+> "unproven empirically." It was then measured: three pre-registered, held-out showcases (v0.8/v0.9/v0.10)
+> found **NO** artifact-quality/completeness uplift over a fair single shot — only ~5× cost. v1.0 narrows
+> the claim to **process guarantees**; see [`evals/loop-demo/MEASURED.md`](../../../evals/loop-demo/MEASURED.md)
+> and `CHANGELOG.md [1.0.0]`. The dated body below is preserved as research provenance.
+
 **Status:** research complete, awaiting convergence · **Date:** 2026-06-27 · **Feeds:**
 [`2026-06-27-swarm-architecture-harness-v1-design.md`](../2026-06-27-swarm-architecture-harness-v1-design.md)
 
