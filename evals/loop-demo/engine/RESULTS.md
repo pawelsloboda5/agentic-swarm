@@ -26,7 +26,7 @@ six were built in an **isolated sandbox** (see Integrity §1) and moved into `ar
 | arm | F_FID (primary) | F_DET | F_SNAP | F_IDEM | F_CONS | F_MONO | hard floor | LOC |
 |---|---|---|---|---|---|---|---|---|
 | `reference` (correct anchor) | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | ok | 203 |
-| `reference-broken` (bug anchor) | **0.33** | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | ok | 205 |
+| `reference-broken` (bug anchor) | **0.33** | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | ok | 203 |
 | control-1 | **1.00** | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | ok | 498 |
 | control-2 | **1.00** | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | ok | 620 |
 | control-3 | **1.00** | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | ok | 583 |
@@ -68,7 +68,10 @@ artifacts that each would have produced a false published result.**
    (disclosed deviation, PILOT.md): drain both sides before comparing. **The fix is neutral and
    verdict-preserving** — both arms included the log in `hashState`, so it helps them equally, and the
    harness-vs-control verdict is NULL *both before* (0.33 = 0.33) *and after* (1.00 = 1.00); only F_FID's
-   *meaning* changes.
+   *meaning* changes. **This is now verifiable, not prose:** all six arms scored with the frozen pre-fix
+   instrument are committed in [`scoring/results-prefreeze.json`](./scoring/results-prefreeze.json) (every arm
+   **0.333**; control mean = harness mean = 0.333 → NULL), and the post-fix scores in `results.json` (every arm
+   **1.00** → NULL). The verdict is a tie at *both* instrument versions.
 
 **Why this is the point, not an embarrassment:** the second artifact was invisible in the pilot and would have
 shipped a confident, wrong claim ("the harness fails save/load fidelity, like single shots"). It was caught
@@ -80,7 +83,10 @@ is the honest result.
 
 - F_FID is a genuine, validated discriminator — the corrected instrument scores a deliberately-broken engine
   (snapshot drops the PRNG state) at **0.33** while a correct engine scores **1.00** (Integrity §2). So the
-  all-1.0 result is **real**: every arm's save/load is correct.
+  all-1.0 result is **real**: every arm's save/load is correct. (F_FID's discrimination lives in its two
+  ground-truth-anchored sub-checks — restore-continue and double round-trip; the third, cross-restore
+  determinism, passes even for two *identically*-broken restores, which is why the broken anchor floors at 0.33
+  rather than 0. The locked thresholds — 0.67 harness-min, 0.25 margin — sit well clear of that floor.)
 - On this task — a bespoke deterministic integer sim engine with ~28 state fields, 6 ordered systems, 3
   commands, 5 event types, and 5 stated correctness requirements — **strong single shots got everything right**:
   determinism, idempotence, conservation, monotonic events, *and* exact save/load (including the subtle
@@ -93,13 +99,18 @@ is the honest result.
 1. **In-repo contamination — caught and remediated.** The arms were first built *inside the repo*, where the
    committed scorer is discoverable. Two control builds were observed reading (or about to read)
    `scoring/invariants.mjs` to tune to it. All arms were **discarded and rebuilt in an isolated sandbox** with
-   no scorer reachable; the anti-leak grep of every harness brief is clean (0 held-out tokens). The scored arms
-   are the isolated rebuilds.
+   no scorer reachable; the anti-leak grep of the entire harness build journal is clean — **0** occurrences of
+   the held-out tokens (`invariants`, `scoring/`, `F_FID`, `restore-continue`, `run-to-end`, `cross-restore`,
+   `double round-trip`, `held-out`, the ground-truth seed `20260628`). The scored arms are the isolated
+   rebuilds. (The metric is also pure self-consistency — even full scorer access cannot *fabricate* a passing
+   F_FID without actually implementing complete save/load, so this is belt-and-suspenders.)
 2. **Asymmetric verification hint — caught, and moot here.** The harness integrator brief originally hinted the
    verification *method* ("snapshot mid-run, restore, continue, and compare") — guidance the control never got.
-   This was de-hinted, but because every arm sits at the F_FID ceiling, the hint **could not** create a gap that
-   does not exist, so no clean re-run was needed; the all-1.0 result is hint-independent. Disclosed for the
-   record.
+   This was de-hinted, and the hint is provably **immaterial**: the **controls received no hint** yet score
+   identically to the harness at *both* the pre-fix (0.333) and post-fix (1.00) levels — a fair single shot aces
+   this without any verification hint, so the hint cannot explain a result the no-hint arm already matches. No
+   clean re-run was needed. (The committed `arms/harness-*` are from the hinted run; the committed
+   `engine-harness.workflow.js` carries the de-hinted integrator brief — `git diff` shows the change.)
 3. **n is small and the task is single.** 3 builds/arm, one task family, one effort level. No statistical
    inference; we report directional consistency only (and here the direction is a flat tie).
 4. **Retry asymmetry** (harness ≤2 repairs, control one shot) is disclosed and is conservative against the
@@ -134,6 +145,6 @@ is the honest result.
 | `SPEC.md` | the shared contract given identically to both arms |
 | `scoring/invariants.mjs` | the held-out scorer (self-consistency, no oracle); `aggregate.py` + `verdict.py` (mechanical) |
 | `scoring/reference/index.html` (1.00) · `scoring/reference-broken/index.html` (0.33) | the instrument's fairness + not-vacuous anchors |
-| `scoring/results.json` | the raw per-arm scores |
+| `scoring/results.json` · `scoring/results-prefreeze.json` | the raw per-arm scores, post-fix (all 1.00) and with the frozen pre-fix instrument (all 0.333) — both NULL |
 | `arms/control-{1,2,3}/`, `arms/harness-{1,2,3}/` | the six scored engines (built in isolation) + `arms/control.prompt.md` |
 | `engine-harness.workflow.js` | the architect-harness build script (reproducible; real multi-agent run, not bit-identical) |

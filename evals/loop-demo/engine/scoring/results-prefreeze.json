@@ -1,0 +1,26 @@
+[
+  {
+    "label": "control-1",
+    "F_FID": 0.333
+  },
+  {
+    "label": "control-2",
+    "F_FID": 0.333
+  },
+  {
+    "label": "control-3",
+    "F_FID": 0.333
+  },
+  {
+    "label": "harness-1",
+    "F_FID": 0.333
+  },
+  {
+    "label": "harness-2",
+    "F_FID": 0.333
+  },
+  {
+    "label": "harness-3",
+    "F_FID": 0.333
+  }
+]
