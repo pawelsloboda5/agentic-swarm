@@ -136,19 +136,20 @@ architect's job is *what to brief*; `/agentic-swarm`'s job is *running it safely
 
 ## Phase 3 — gated integration + verify
 
-Integrate the workers' outputs against the contract, then run **each output through ITS gates** =
-skill-backed adversarial verification in a **separate context** (the producer never grades itself).
-Gates are **tiered + objective-anchored** and **report `confidence`** — never a silent pass: `objective`
-(machine-checkable), `critic` (separate-context, binary per-criterion, one grounded pass with
-citations), `advisory` (surfaced, not a hard pass). On fail, re-brief the workstream with the **exact
-unmet criteria** and re-run (bounded N=2), then honestly `flag` the remainder.
+Integrate the workers' outputs against the contract, then run **each output through ITS gates** using the
+**gate runner** ([`reference/gate-runner.md`](reference/gate-runner.md)): load the gate file, detect any
+backing skill, run by tier (objective machine check / separate-context critic / advisory), and emit one
+honest `verdict` per applicable gate. Gates are **tiered + objective-anchored** and **report `confidence`**
+— never a silent pass: the **anti-theater invariant** forbids `pass` without ≥1 evidence + tier +
+confidence. On fail, re-brief the workstream with the **exact unmet criteria** and re-run (bounded N=2),
+then honestly `flag` the remainder; missing backing skill/runner degrades *loudly* (`degraded: true` +
+lowered confidence), never silently.
 
-> **v0.6.0 scope:** the **gate runner + gate library** (`tests` / `assets` / `ui-ux` files, the
-> detection-probe implementation, the verdict schema, the shared WCAG util) ship in **v0.7.0** — see
-> [`2026-06-27-mvp-gate-library-and-versioning-plan.md`](../../docs/plans/2026-06-27-mvp-gate-library-and-versioning-plan.md)
-> §3 (version track) + §5 (build roadmap); the runner contract is §2. Until then this skill
-> forward-couples the gate *criteria* into briefs and verifies with the
-> existing separate-context critic patterns; the runnable, schema'd gates arrive next version.
+> **Starter gate library (v0.7.0):** [`gates/tests.md`](gates/tests.md) (objective),
+> [`gates/assets.md`](gates/assets.md) (mixed), [`gates/ui-ux.md`](gates/ui-ux.md) (mixed; uses the
+> bundled [`gates/lib/wcag_contrast.py`](gates/lib/wcag_contrast.py) WCAG util) — each a self-contained
+> 7-key gate file. Cheap a11y is folded into `ui-ux`; the **full standalone `a11y`** gate (axe/pa11y/
+> Lighthouse) is deferred to **v0.7.x**, and the **measured showcase** that proves the uplift to **v0.8.0**.
 
 ---
 

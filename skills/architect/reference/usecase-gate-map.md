@@ -3,26 +3,25 @@
 Default GATE-set per use-case. The orchestrator may extend this from research, but obeys one
 **load-bearing rule**:
 
-> **Anti-theater scoping.** Only **forward-couple a gate into a brief** if that gate has **concrete,
-> self-contained pass-criteria you can inline today** (present here + in the brief template) — in v0.6.0
-> that is `{tests, assets, ui-ux}`. The runnable, schema'd gate files + the gate runner that *checks*
-> them ship in v0.7.0, so v0.6 forward-couples the criteria now and the verifier arrives next version.
-> Gates marked **`future /
+> **Anti-theater scoping.** Only **forward-couple a gate into a brief** if that gate has a **shipped,
+> self-contained gate file** (`gates/<id>.md`) the [gate runner](gate-runner.md) can execute — as of
+> v0.7.0 that is `{tests, assets, ui-ux}` (each a 7-key definition with a zero-dep objective floor;
+> `ui-ux` uses the bundled WCAG util). Gates marked **`future /
 > not-yet-built`** below may be **named in the PLAN** ("this would also want an `api-contract` gate") so
 > the human sees the full quality surface, but they must **not** appear in a worker's "MUST PASS GATES"
 > block — never tell a worker it must pass a gate that has no criteria and no verifier. As gates ship,
 > they flip from `future` to active and start being forward-coupled.
 
-## Gate status (MVP = v0.7.0 target)
+## Gate status
 
-> *"active" = its concrete criteria are inlinable into briefs **now** (v0.6.0); the runnable gate file +
-> runner that verify it ship in **v0.7.0**. "future / not-yet-built" = criteria not yet defined.*
+> *"active" = it has a shipped, runnable gate file (`gates/<id>.md`) + the [gate runner](gate-runner.md),
+> and is forward-coupled into briefs. "future / not-yet-built" = criteria not yet defined; PLAN-only.*
 
 | Gate | Status | Notes |
 |---|---|---|
-| **tests** | **active (MVP)** | objective: runner detected, exit 0 AND >0 tests collected, typecheck/build, diff-coverage presence. |
-| **assets** | **active (MVP)** | mixed: local assets exist & >0 bytes, SVG well-formed, no placeholders; remote refs + "AI-filler" advisory. |
-| **ui-ux** | **active (MVP)** | mixed: browser-free objective floor (WCAG contrast, spacing, hover+focus-visible, breakpoints, **folded cheap a11y**: alt/accessible-name/tap-target) + screenshot critic if a browser is available. |
+| **tests** | **active (runner shipped)** | objective: runner detected, exit 0 AND >0 tests collected, typecheck/build, diff-coverage presence. |
+| **assets** | **active (runner shipped)** | mixed: local assets exist & >0 bytes, SVG well-formed, no placeholders; remote refs + "AI-filler" advisory. |
+| **ui-ux** | **active (runner shipped)** | mixed: browser-free objective floor (WCAG contrast, spacing, hover+focus-visible, breakpoints, **folded cheap a11y**: alt/accessible-name/tap-target) + screenshot critic if a browser is available. |
 | **a11y** (full) | **future / not-yet-built** | cheap a11y checks are folded into `ui-ux` for the MVP; the standalone axe/pa11y/Lighthouse runner + keyboard/semantics critic ships **v0.7.x**. |
 | **api-contract** | **future / not-yet-built** | request/response shape, schema/contract conformance. |
 | **security** | **future / not-yet-built** | secret/exposure + common-vuln checks. |
