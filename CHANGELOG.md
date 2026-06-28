@@ -20,9 +20,8 @@ correct), and the harness **matches** that ceiling exactly — completeness-fait
 at **~5.4× the tokens**. Reported as measured, not inflated — see
 [`evals/loop-demo/lib/RESULTS.md`](evals/loop-demo/lib/RESULTS.md).
 
-> **Version note:** this milestone is built off `main` (v0.8.0) and **follows the in-flight v0.9.0** (the
-> discriminating-showcase attempt, PR #9). It assumes v0.9.0 merges first; if merged before it, the version
-> jumps 0.8.0 → 0.10.0 (and the CHANGELOG / `plugin.json` will conflict-resolve with PR #9 at the top).
+> **Version note:** this milestone **follows v0.9.0** (the discriminating-showcase attempt, PR #9). It was
+> developed off `main` (v0.8.0) in parallel with v0.9.0 and merged after it.
 
 ### Added
 
@@ -58,7 +57,52 @@ at **~5.4× the tokens**. Reported as measured, not inflated — see
 
 ### Changed
 
-- `.claude-plugin/plugin.json` version **0.8.0 → 0.10.0**. (`marketplace.json` stays version-less by design.)
+- `.claude-plugin/plugin.json` version **0.9.0 → 0.10.0**. (`marketplace.json` stays version-less by design.)
+
+## [0.9.0] — 2026-06-28
+
+The **discriminating-showcase attempt** — an honest **NULL**, and (more valuably) a **measurement-integrity
+case study**. We set out to build a *sharper* primary than v0.8.0's coarse "does it boot" (which discriminated
+zero arms): a held-out **state-fidelity** check on a bespoke deterministic integer simulation engine, scored by
+pure self-consistency. After correcting **two** instrument artifacts caught during the run, the task turned out
+**not to discriminate** — strong single-shot workers produce **fully-correct** engines, and the architect
+harness matches them at **~5× the token cost**. Reported as measured — see
+[`evals/loop-demo/engine/RESULTS.md`](evals/loop-demo/engine/RESULTS.md). The v1.0 gate ("ship only after a
+showcase measures the uplift") remains **not met**.
+
+### Added
+
+- **Discriminating-showcase eval** under `evals/loop-demo/engine/` — a bespoke deterministic integer sim engine
+  (`SPEC.md`, `window.ENGINE`) built K=3× by a fair single-shot control vs K=3× through the architect harness
+  (`engine-harness.workflow.js`), scored by ONE held-out **self-consistency** instrument
+  (`scoring/invariants.mjs`; no external oracle, integer state → no float/NaN marshaling). Includes
+  `PREREGISTRATION.md` (held-out primary + binary decision rule, committed before any arm), `PILOT.md` (the
+  calibration + the disclosed post-freeze instrument-correction deviation), `RESULTS.md`, the mechanical
+  `scoring/verdict.py`, the `reference`/`reference-broken` instrument anchors (1.00 / 0.33),
+  `results.json` + `results-prefreeze.json`, the six scored arms, and `engine-shipgate.workflow.js`.
+- **Provisioned (showcase-only)** Playwright under `evals/.../engine/scoring/` — the shipped plugin stays
+  **zero-provision / zero-dependency**.
+
+### Measured result (honest)
+
+- **PRIMARY (F_FID — state fidelity under continuation): NULL — degenerate ceiling.** Harness mean F_FID =
+  control mean = **1.00** (delta 0.00, mechanical `verdict.py`). On this task a fair single shot already
+  produces a fully-correct engine (determinism, idempotence, conservation, monotonic events, *and* exact
+  save/load), so there is **no correctness gap** for the harness to close; it matches at ~5× the token cost.
+- **Two instrument artifacts caught + corrected** before either could ship a false result — (1) event-field-name
+  coupling (caught in the pilot, before the prereg locked); (2) an event-log/draining asymmetry in F_FID
+  (caught *after* the builds, because a fair control's self-report contradicted its score). The fix is a
+  disclosed, neutral, **verdict-preserving** deviation (NULL both before `0.33=0.33` and after `1.00=1.00`,
+  verifiable from `results-prefreeze.json` + `results.json`); the corrected instrument is validated **not
+  vacuous** (`reference-broken` scores 0.33).
+- **Integrity:** arms were built in an isolated sandbox after two in-repo controls were caught reading the
+  scorer; a 5-lens **measurement-integrity** ship-gate returned **0 blockers**.
+- **Implication:** corroborates v0.8.0 — the harness adds **no measurable artifact-quality uplift** over a fair
+  single shot, now shown on two task families with a *validated* fine-grained instrument (not just a coarse
+  one). The harness's *strongest* case — **completeness under scale** (many independent requirements where a
+  single shot's attention might drop some) — remains **untested** and is the honest next experiment. v1.0
+  should ship the harness for its **process** guarantees (throughput, bounded repair, gated forward-coupling,
+  auditability), **not** artifact quality.
 
 ## [0.8.0] — 2026-06-28
 
@@ -372,7 +416,8 @@ Initial release.
 - **Docs & trust** — full `README.md`, plain-language `docs/PRIVACY.md`, `CONTRIBUTING.md`,
   this changelog, and the MIT `LICENSE`.
 
-[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.6.0...v0.7.0

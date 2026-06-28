@@ -1,0 +1,637 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Carousel — deterministic tick-engine</title>
+<style>
+  body { font: 13px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace;
+         margin: 0; padding: 16px; background: #0d1117; color: #c9d1d9; }
+  h1 { font-size: 15px; margin: 0 0 8px; color: #58a6ff; }
+  pre { white-space: pre-wrap; margin: 0; }
+  .muted { color: #8b949e; }
+</style>
+</head>
+<body>
+<h1>Carousel — deterministic integer tick-engine</h1>
+<p class="muted">Headless engine. The full API is on <code>window.ENGINE</code>.</p>
+<pre id="status">booting…</pre>
+
+<script>
+"use strict";
+// ============================================================================
+// "Carousel" — a deterministic, integer-only tick-simulation engine.
+// Single self-contained, offline file. All simulation state is integer-only;
+// all randomness flows through one seeded 31-bit LCG (Math.imul, never *).
+//
+// Four internal IIFE modules compose into window.ENGINE:
+//   Model        — data model, PRNG, event funnel, mint/burn funnels
+//   Systems       — the fixed six-system per-tick pipeline
+//   Commands     — player commands + idempotency
+//   Persistence  — snapshot / restore / hashState
+// Dependency direction: Systems, Commands, Persistence depend ONLY on Model.
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// Model — the foundation every other module calls.
+// ---------------------------------------------------------------------------
+const Model = (function () {
+  // Coerce any value to a finite integer, else fall back to `def`.
+  function toInt(v, def) {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.floor(n) : def;
+  }
+
+  // §1 createWorld — builds the authoritative world-state object. Never throws
+  // on bad config: every numeric is coerced to an integer and clamped to its
+  // floor. SPAWN_PERIOD floored at 1 so `tick % SPAWN_PERIOD` is never NaN/div0.
+  function createWorld(seed, config) {
+    config = (config && typeof config === "object") ? config : {};
+
+    const intSeed        = toInt(seed, 0);
+    const S              = Math.max(4, toInt(config.S, 6));
+    const CAP            = Math.max(0, toInt(config.CAP, 1000));
+    const MAX_UNITS      = Math.max(0, toInt(config.MAX_UNITS, 12));
+    const SPAWN_PERIOD   = Math.max(1, toInt(config.SPAWN_PERIOD, 3));
+    const UNIT_CARGO_CAP = Math.max(0, toInt(config.UNIT_CARGO_CAP, 50));
+    const HP0            = Math.max(1, toInt(config.HP0, 10));
+    const DMG            = Math.max(0, toInt(config.DMG, 3));
+    const COOLDOWN_RANGE = Math.max(0, toInt(config.COOLDOWN_RANGE, 4));
+    const prod0          = Math.max(0, toInt(config.prod, 5));
+
+    const stations = new Array(S).fill(0);
+    const prod     = new Array(S).fill(prod0);
+    const cooldown = new Array(S).fill(0);
+
+    return {
+      // Config/constants (frozen for the world's life).
+      seed: intSeed,
+      S: S,
+      CAP: CAP,
+      MAX_UNITS: MAX_UNITS,
+      SPAWN_PERIOD: SPAWN_PERIOD,
+      UNIT_CARGO_CAP: UNIT_CARGO_CAP,
+      HP0: HP0,
+      DMG: DMG,
+      COOLDOWN_RANGE: COOLDOWN_RANGE,
+      // Mutable simulation state.
+      rng: intSeed & 0x7fffffff,   // non-negative 31-bit PRNG state
+      tick: 0,
+      nextUnitId: 0,
+      seq: 0,
+      minted: 0,
+      burned: 0,
+      stations: stations,          // int[S], 0..CAP
+      prod: prod,                  // int[S], >=0
+      cooldown: cooldown,          // int[S], >=0
+      units: [],                   // Unit[], always ascending id
+      events: [],                  // undrained event buffer
+      appliedCmds: new Set()       // idempotency: applied command ids
+    };
+  }
+
+  // §2 nextRand — advance PRNG and return new state. MUST use Math.imul; plain
+  // `*` overflows MAX_SAFE_INTEGER and silently corrupts determinism.
+  function nextRand(world) {
+    world.rng = (Math.imul(world.rng, 1103515245) + 12345) & 0x7fffffff;
+    return world.rng;
+  }
+
+  // §2 randInt — every random choice funnels through here.
+  function randInt(world, n) {
+    return n <= 0 ? 0 : nextRand(world) % n;
+  }
+
+  // §4 emit — THE ONLY way to append an event. Assigns seq, pushes, and
+  // accumulates minted/burned so report() matches the ledger by construction.
+  function emit(world, type, amount, extra) {
+    const ev = { seq: world.seq, type: type, amount: amount };
+    if (extra) for (const k in extra) ev[k] = extra[k];
+    world.seq += 1;
+    world.events.push(ev);
+    if (type === "mint") world.minted += amount;
+    else if (type === "burn") world.burned += amount;
+  }
+
+  // §5 produceInto — THE ONLY way to add resources to a station. Mints the full
+  // quantity, then burns any CAP overflow. Net board change = +qty - overflow.
+  function produceInto(world, idx, qty) {
+    if (qty <= 0) return;
+    emit(world, "mint", qty);
+    world.stations[idx] += qty;
+    if (world.stations[idx] > world.CAP) {
+      const overflow = world.stations[idx] - world.CAP;
+      world.stations[idx] = world.CAP;
+      emit(world, "burn", overflow);
+    }
+  }
+
+  // §5 destroyCargo — THE ONLY exit for unit cargo. Burns remaining cargo to 0.
+  function destroyCargo(world, unit) {
+    if (unit.cargo > 0) {
+      emit(world, "burn", unit.cargo);
+      unit.cargo = 0;
+    }
+  }
+
+  // §2 report — telemetry. totalResources is the live sum of every stockpile
+  // plus every unit's cargo; by the conservation discipline (§5) it always
+  // equals minted - burned.
+  function report(world) {
+    let total = 0;
+    const stations = world.stations;
+    for (let i = 0; i < stations.length; i++) total += stations[i];
+    const units = world.units;
+    for (let i = 0; i < units.length; i++) total += units[i].cargo;
+    return {
+      tick: world.tick,
+      unitCount: units.length,
+      totalResources: total,
+      minted: world.minted,
+      burned: world.burned
+    };
+  }
+
+  // §2 drainEventLog — return the buffered events and reset the buffer.
+  function drainEventLog(world) {
+    const out = world.events;
+    world.events = [];
+    return out;
+  }
+
+  return {
+    createWorld: createWorld,
+    nextRand: nextRand,
+    randInt: randInt,
+    emit: emit,
+    produceInto: produceInto,
+    destroyCargo: destroyCargo,
+    report: report,
+    drainEventLog: drainEventLog
+  };
+})();
+
+// ---------------------------------------------------------------------------
+// Systems — the fixed six-system per-tick pipeline. Depends only on Model.
+// ---------------------------------------------------------------------------
+const Systems = (function () {
+  // ---- 1. spawn -----------------------------------------------------------
+  // If on the spawn cadence AND under the live-unit cap, create one unit at
+  // station 0 with fresh hp and empty cargo. Ids ascend monotonically, so a
+  // plain push keeps `units` sorted by id. cargo == 0 => no mint.
+  function spawnSystem(world) {
+    if (world.tick % world.SPAWN_PERIOD === 0 && world.units.length < world.MAX_UNITS) {
+      const id = world.nextUnitId++;
+      world.units.push({ id: id, pos: 0, hp: world.HP0, cargo: 0 });
+      Model.emit(world, "spawn", 0, { unit: id });
+    }
+  }
+
+  // ---- 2. produce ---------------------------------------------------------
+  // Walk stations in fixed ascending index order so PRNG draws are
+  // deterministic. A station on cooldown ticks down; an available station
+  // produces (mint + CAP-overflow burn inside produceInto) then re-rolls its
+  // cooldown from the documented LCG.
+  function produceSystem(world) {
+    const S = world.S;
+    for (let idx = 0; idx < S; idx++) {
+      if (world.cooldown[idx] > 0) {
+        world.cooldown[idx] -= 1;
+      } else {
+        Model.produceInto(world, idx, world.prod[idx]);
+        world.cooldown[idx] = Model.randInt(world, world.COOLDOWN_RANGE);
+      }
+    }
+  }
+
+  // ---- 3. move ------------------------------------------------------------
+  // Every unit advances one station clockwise around the ring, in id order.
+  function moveSystem(world) {
+    const S = world.S;
+    const units = world.units;
+    for (let i = 0; i < units.length; i++) {
+      const u = units[i];
+      u.pos = (u.pos + 1) % S;
+    }
+  }
+
+  // ---- 4. transfer --------------------------------------------------------
+  // Pure conservative move: each unit, at its current station s, first DROPS
+  // as much cargo as the station can still hold (capped at CAP), then PICKS UP
+  // as much stockpile as it can still carry (capped at UNIT_CARGO_CAP).
+  // Resources only shuffle between cargo and stockpile => total unchanged =>
+  // emit nothing. Process in id order for determinism.
+  function transferSystem(world) {
+    const CAP = world.CAP;
+    const UCC = world.UNIT_CARGO_CAP;
+    const stations = world.stations;
+    const units = world.units;
+    for (let i = 0; i < units.length; i++) {
+      const u = units[i];
+      const s = u.pos;
+      // drop
+      let room = CAP - stations[s];
+      if (room < 0) room = 0;
+      const d = u.cargo < room ? u.cargo : room;
+      stations[s] += d;
+      u.cargo -= d;
+      // pick up
+      let space = UCC - u.cargo;
+      if (space < 0) space = 0;
+      const p = stations[s] < space ? stations[s] : space;
+      stations[s] -= p;
+      u.cargo += p;
+    }
+  }
+
+  // ---- 5. interact --------------------------------------------------------
+  // Any station shared by >= 2 units inflicts DMG hp on every unit standing on
+  // it; each affected unit emits exactly one "hit". Deterministic: tally a
+  // per-position count first, then apply damage + emit in id order.
+  function interactSystem(world) {
+    const units = world.units;
+    if (units.length < 2) return;
+    const counts = {};
+    for (let i = 0; i < units.length; i++) {
+      const p = units[i].pos;
+      counts[p] = (counts[p] || 0) + 1;
+    }
+    for (let i = 0; i < units.length; i++) {
+      const u = units[i];
+      if (counts[u.pos] >= 2) {
+        u.hp -= world.DMG;
+        Model.emit(world, "hit", 0, { unit: u.id });
+      }
+    }
+  }
+
+  // ---- 6. cleanup ---------------------------------------------------------
+  // Remove every unit with hp <= 0, in id order: burn its remaining cargo
+  // (destroyCargo => "burn"), emit "dead", then drop it. Survivors keep their
+  // ascending-id ordering (filter preserves order).
+  function cleanupSystem(world) {
+    const units = world.units;
+    let anyDead = false;
+    for (let i = 0; i < units.length; i++) {
+      if (units[i].hp <= 0) { anyDead = true; break; }
+    }
+    if (!anyDead) return;
+    const survivors = [];
+    for (let i = 0; i < units.length; i++) {
+      const u = units[i];
+      if (u.hp <= 0) {
+        Model.destroyCargo(world, u);          // burns remaining cargo
+        Model.emit(world, "dead", 0, { unit: u.id });
+      } else {
+        survivors.push(u);
+      }
+    }
+    world.units = survivors;
+  }
+
+  // ---- the tick -----------------------------------------------------------
+  function step(world) {
+    spawnSystem(world);
+    produceSystem(world);
+    moveSystem(world);
+    transferSystem(world);
+    interactSystem(world);
+    cleanupSystem(world);
+    world.tick += 1;
+  }
+
+  return { step: step };
+})();
+
+// ---------------------------------------------------------------------------
+// Commands — player input + idempotency. Depends only on Model.
+// ---------------------------------------------------------------------------
+const Commands = (function () {
+  // True when `s` is a valid station index for this world: integer in [0, S-1].
+  function isStation(world, s) {
+    return Number.isInteger(s) && s >= 0 && s < world.S;
+  }
+
+  // Coerce an arbitrary value to a non-negative integer (>= 0), never NaN/Inf.
+  function toNonNegInt(value) {
+    let n = Number(value);
+    if (!Number.isFinite(n)) n = 0;     // NaN, +/-Infinity, non-numeric -> 0
+    n = Math.floor(n);                  // integer-only
+    return n > 0 ? n : 0;               // clamp to >= 0
+  }
+
+  function applyCommand(world, cmd) {
+    // Untrackable input: not an object, or missing id -> ignore (no-op, no throw).
+    if (cmd === null || typeof cmd !== "object") return;
+    if (cmd.id === null || cmd.id === undefined) return;
+
+    const id = cmd.id;
+
+    // Idempotency: a previously-applied id is a strict no-op (state unchanged).
+    if (world.appliedCmds.has(id)) return;
+
+    // Record the id FIRST so that even an out-of-range / unknown command that
+    // performs no state mutation is still permanently de-duplicated.
+    world.appliedCmds.add(id);
+
+    switch (cmd.type) {
+      case "setProd": {
+        // Change a station's production output per fire (>= 0). Out-of-range
+        // station -> ignore (id already recorded above).
+        if (isStation(world, cmd.station)) {
+          world.prod[cmd.station] = toNonNegInt(cmd.value);
+        }
+        return;
+      }
+
+      case "inject": {
+        // Add resources to a station via the mint funnel. Requires a valid
+        // station AND a finite numeric amount. Negative / zero / NaN / wrong
+        // type / out-of-range -> ignore (no resources created).
+        if (isStation(world, cmd.station) && typeof cmd.amount === "number" &&
+            Number.isFinite(cmd.amount)) {
+          const a = Math.floor(cmd.amount);
+          if (a > 0) {
+            Model.produceInto(world, cmd.station, a);
+          }
+        }
+        return;
+      }
+
+      case "kill": {
+        // Remove a live unit by id. units is kept sorted by ascending id; find
+        // it by id (linear scan, order-stable). Nonexistent unit -> ignore.
+        const uid = cmd.unit;
+        const units = world.units;
+        for (let i = 0; i < units.length; i++) {
+          if (units[i].id === uid) {
+            Model.destroyCargo(world, units[i]);   // burn cargo (conservation)
+            Model.emit(world, "dead", 0, { unit: uid });
+            units.splice(i, 1);                     // preserves ascending order
+            break;
+          }
+        }
+        return;
+      }
+
+      default:
+        // Unknown command type -> do nothing (id already recorded above).
+        return;
+    }
+  }
+
+  return { applyCommand: applyCommand };
+})();
+
+// ---------------------------------------------------------------------------
+// Persistence — snapshot / restore / hashState. Depends only on Model.
+// ---------------------------------------------------------------------------
+const Persistence = (function () {
+  const SCHEMA_VERSION = 1;
+
+  // The §3 checklist fields 1..15 that are plain scalars, IN ORDER.
+  const SCALAR_FIELDS = [
+    "seed",            // 1
+    "S",               // 2
+    "CAP",             // 3
+    "MAX_UNITS",       // 4
+    "SPAWN_PERIOD",    // 5
+    "UNIT_CARGO_CAP",  // 6
+    "HP0",             // 7
+    "DMG",             // 8
+    "COOLDOWN_RANGE",  // 9
+    "rng",             // 10  PRNG state
+    "tick",            // 11
+    "nextUnitId",      // 12  unit-id counter
+    "seq",             // 13  event-id counter
+    "minted",          // 14
+    "burned"           // 15
+  ];
+
+  // Deterministic total order for applied-command ids (§3.21). Tagging by typeof
+  // gives a stable total order and keeps number 1 distinct from string "1".
+  function cmdKey(x) {
+    return typeof x + ":" + String(x);
+  }
+  function sortedAppliedCmds(world) {
+    const arr = [];
+    if (world.appliedCmds && typeof world.appliedCmds.forEach === "function") {
+      world.appliedCmds.forEach(function (id) { arr.push(id); });
+    }
+    arr.sort(function (a, b) {
+      const ka = cmdKey(a), kb = cmdKey(b);
+      return ka < kb ? -1 : ka > kb ? 1 : 0;
+    });
+    return arr;
+  }
+
+  // Canonical (sorted) list of an event's extra keys beyond seq/type/amount.
+  function eventExtraKeys(ev) {
+    const keys = [];
+    for (const k in ev) {
+      if (k === "seq" || k === "type" || k === "amount") continue;
+      if (Object.prototype.hasOwnProperty.call(ev, k)) keys.push(k);
+    }
+    keys.sort();
+    return keys;
+  }
+
+  // snapshot(world) -> string : serialize EVERY §3 field (1..21) + v:1 tag.
+  function snapshot(world) {
+    const S = world.S;
+    const out = { v: SCHEMA_VERSION };
+
+    for (let i = 0; i < SCALAR_FIELDS.length; i++) {
+      const f = SCALAR_FIELDS[i];
+      out[f] = world[f];
+    }
+
+    out.stations = [];
+    out.prod = [];
+    out.cooldown = [];
+    for (let i = 0; i < S; i++) {
+      out.stations[i] = world.stations[i];
+      out.prod[i] = world.prod[i];
+      out.cooldown[i] = world.cooldown[i];
+    }
+
+    out.units = [];
+    for (let i = 0; i < world.units.length; i++) {
+      const u = world.units[i];
+      out.units.push({ id: u.id, pos: u.pos, hp: u.hp, cargo: u.cargo });
+    }
+
+    out.events = [];
+    for (let i = 0; i < world.events.length; i++) {
+      const ev = world.events[i];
+      const copy = { seq: ev.seq, type: ev.type, amount: ev.amount };
+      const extras = eventExtraKeys(ev);
+      for (let j = 0; j < extras.length; j++) copy[extras[j]] = ev[extras[j]];
+      out.events.push(copy);
+    }
+
+    out.appliedCmds = sortedAppliedCmds(world);   // Set -> sorted array
+
+    return JSON.stringify(out);
+  }
+
+  // restore(string) -> world : rebuild the FULL §1 object.
+  function restore(str) {
+    const data = JSON.parse(str);
+    const S = data.S;
+
+    const world = {
+      seed: data.seed,
+      S: data.S,
+      CAP: data.CAP,
+      MAX_UNITS: data.MAX_UNITS,
+      SPAWN_PERIOD: data.SPAWN_PERIOD,
+      UNIT_CARGO_CAP: data.UNIT_CARGO_CAP,
+      HP0: data.HP0,
+      DMG: data.DMG,
+      COOLDOWN_RANGE: data.COOLDOWN_RANGE,
+      rng: data.rng,
+      tick: data.tick,
+      nextUnitId: data.nextUnitId,
+      seq: data.seq,
+      minted: data.minted,
+      burned: data.burned,
+      stations: [],
+      prod: [],
+      cooldown: [],
+      units: [],
+      events: [],
+      appliedCmds: new Set()
+    };
+
+    for (let i = 0; i < S; i++) {
+      world.stations[i] = data.stations[i];
+      world.prod[i] = data.prod[i];
+      world.cooldown[i] = data.cooldown[i];
+    }
+
+    for (let i = 0; i < data.units.length; i++) {
+      const u = data.units[i];
+      world.units.push({ id: u.id, pos: u.pos, hp: u.hp, cargo: u.cargo });
+    }
+    world.units.sort(function (a, b) { return a.id - b.id; });
+
+    for (let i = 0; i < data.events.length; i++) {
+      const ev = data.events[i];
+      const copy = { seq: ev.seq, type: ev.type, amount: ev.amount };
+      for (const k in ev) {
+        if (k === "seq" || k === "type" || k === "amount") continue;
+        if (Object.prototype.hasOwnProperty.call(ev, k)) copy[k] = ev[k];
+      }
+      world.events.push(copy);
+    }
+
+    const ac = data.appliedCmds || [];
+    for (let i = 0; i < ac.length; i++) world.appliedCmds.add(ac[i]);
+
+    return world;
+  }
+
+  // hashState(world) -> string : deterministic fingerprint over §3 fields in §3
+  // order, folded with 32-bit FNV-1a (Math.imul), returned as 8 hex chars.
+  function hashState(world) {
+    const S = world.S;
+    const parts = [];
+
+    parts.push("v=" + SCHEMA_VERSION);
+
+    for (let i = 0; i < SCALAR_FIELDS.length; i++) {
+      const f = SCALAR_FIELDS[i];
+      parts.push(f + "=" + String(world[f]));
+    }
+
+    let s16 = "stations=";
+    for (let i = 0; i < S; i++) s16 += (i ? "," : "") + String(world.stations[i]);
+    parts.push(s16);
+
+    let s17 = "prod=";
+    for (let i = 0; i < S; i++) s17 += (i ? "," : "") + String(world.prod[i]);
+    parts.push(s17);
+
+    let s18 = "cooldown=";
+    for (let i = 0; i < S; i++) s18 += (i ? "," : "") + String(world.cooldown[i]);
+    parts.push(s18);
+
+    let s19 = "units=";
+    for (let i = 0; i < world.units.length; i++) {
+      const u = world.units[i];
+      s19 += "[" + u.id + ":" + u.pos + ":" + u.hp + ":" + u.cargo + "]";
+    }
+    parts.push(s19);
+
+    let s20 = "events=";
+    for (let i = 0; i < world.events.length; i++) {
+      const ev = world.events[i];
+      s20 += "{" + ev.seq + ":" + ev.type + ":" + ev.amount;
+      const extras = eventExtraKeys(ev);
+      for (let j = 0; j < extras.length; j++) {
+        s20 += ":" + extras[j] + "=" + String(ev[extras[j]]);
+      }
+      s20 += "}";
+    }
+    parts.push(s20);
+
+    const ac = sortedAppliedCmds(world);
+    let s21 = "appliedCmds=";
+    for (let i = 0; i < ac.length; i++) s21 += "<" + cmdKey(ac[i]) + ">";
+    parts.push(s21);
+
+    const canonical = parts.join("|");
+
+    let h = 0x811c9dc5; // FNV offset basis
+    for (let i = 0; i < canonical.length; i++) {
+      h ^= canonical.charCodeAt(i);
+      h = Math.imul(h, 0x01000193); // FNV prime
+    }
+    return (h >>> 0).toString(16).padStart(8, "0");
+  }
+
+  return { snapshot: snapshot, restore: restore, hashState: hashState };
+})();
+
+// ---------------------------------------------------------------------------
+// Assemble the public API.
+// ---------------------------------------------------------------------------
+const ENGINE = {
+  createWorld:   Model.createWorld,
+  step:          Systems.step,
+  applyCommand:  Commands.applyCommand,
+  snapshot:      Persistence.snapshot,
+  restore:       Persistence.restore,
+  hashState:     Persistence.hashState,
+  drainEventLog: Model.drainEventLog,
+  report:        Model.report
+};
+
+if (typeof window !== "undefined") {
+  window.ENGINE = ENGINE;
+  try {
+    const w = ENGINE.createWorld(12345, {});
+    for (let i = 0; i < 10; i++) ENGINE.step(w);
+    const r = ENGINE.report(w);
+    const el = document.getElementById("status");
+    if (el) {
+      el.textContent =
+        "ENGINE ready.\n" +
+        "tick=" + r.tick + "  units=" + r.unitCount +
+        "  totalResources=" + r.totalResources +
+        "  minted=" + r.minted + "  burned=" + r.burned + "\n" +
+        "hashState=" + ENGINE.hashState(w) + "\n" +
+        "conservation ok: " + (r.totalResources === r.minted - r.burned);
+    }
+  } catch (e) {
+    const el = document.getElementById("status");
+    if (el) el.textContent = "ENGINE error: " + (e && e.message);
+  }
+}
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = ENGINE;
+}
+</script>
+</body>
+</html>

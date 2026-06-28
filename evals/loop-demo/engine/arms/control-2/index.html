@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Carousel — deterministic tick-simulation engine</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+         background: #0d1117; color: #c9d1d9; padding: 16px; }
+  h1 { font-size: 16px; margin: 0 0 4px; color: #58a6ff; }
+  .sub { color: #8b949e; margin: 0 0 14px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  button { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px;
+           padding: 6px 12px; cursor: pointer; font: inherit; }
+  button:hover { background: #30363d; }
+  pre { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 10px;
+        white-space: pre-wrap; word-break: break-word; margin: 0 0 12px; max-height: 40vh; overflow:auto; }
+  .ok { color: #3fb950; } .bad { color: #f85149; }
+  #tests div { padding: 1px 0; }
+  .k { color: #8b949e; }
+</style>
+</head>
+<body>
+<h1>Carousel</h1>
+<p class="sub">A deterministic, integer-only tick-simulation engine. The API lives at
+  <span class="k">window.ENGINE</span>. The page below is a thin viewer over it.</p>
+
+<div class="row">
+  <button id="bStep">step ×1</button>
+  <button id="bStep10">step ×10</button>
+  <button id="bInject">inject 50 → station 0</button>
+  <button id="bReset">reset (seed 42)</button>
+</div>
+
+<pre id="report">(loading…)</pre>
+<div class="k" style="margin-bottom:6px">self-tests (run on load):</div>
+<pre id="tests">(running…)</pre>
+
+<!-- ============================================================================
+     ENGINE  (the deliverable). Pure logic, no DOM dependency.
+     Module boundaries below:
+       (A) PRNG               — the documented 31-bit LCG, the ONLY entropy source
+       (B) helpers            — integer coercion / clamping
+       (C) data model         — world construction & config sanitization
+       (D) events             — the event ledger (seq, mint/burn totals)
+       (E) step pipeline      — the six systems in fixed order
+       (F) commands           — lexer + dispatch (setProd / inject / kill)
+       (G) serialization      — canonical stable stringify, snapshot/restore/hash
+       (H) public API         — window.ENGINE
+   ============================================================================ -->
+<script id="engine">
+(function (root) {
+  "use strict";
+
+  /* ===== (A) PRNG — documented 31-bit LCG ================================= *
+   * rngState_next = (rngState * 1103515245 + 12345) & 0x7fffffff
+   * Math.imul gives the exact low 32 bits of the product, and masking with
+   * 0x7fffffff keeps the low 31 bits — identical to the documented formula
+   * while staying exact (the raw product exceeds 2^53). This is the ONLY
+   * source of randomness; no Math.random / Date / external entropy anywhere. */
+  function rngNext(world) {
+    world.rng = (Math.imul(world.rng, 1103515245) + 12345) & 0x7fffffff;
+    return world.rng;
+  }
+  function normalizeSeed(seed) {
+    var s = Math.trunc(Number(seed));
+    if (!Number.isFinite(s)) s = 0;
+    return s & 0x7fffffff; // -> [0, 2^31)
+  }
+
+  /* ===== (B) integer helpers ============================================= */
+  function toInt(v, def) {
+    var n = Math.trunc(Number(v));
+    return Number.isFinite(n) ? n : def;
+  }
+  function clampInt(v, lo, hi, def) {
+    var n = toInt(v, def);
+    if (!Number.isFinite(n)) n = def;
+    if (n < lo) n = lo;
+    if (hi != null && n > hi) n = hi;
+    return n;
+  }
+  function fixLen(arr, len, fill) {
+    while (arr.length < len) arr.push(fill);
+    if (arr.length > len) arr.length = len;
+    return arr;
+  }
+  // hard ceilings keep every integer well inside the 2^53 safe range.
+  var INJECT_MAX = 1000000000;
+  var RATE_MAX = 1000000000;
+
+  /* ===== (C) data model ================================================== */
+  function sanitizeConfig(cfg) {
+    cfg = (cfg && typeof cfg === "object") ? cfg : {};
+    // Keys created in a fixed order; serialization sorts keys anyway, so the
+    // config is canonical regardless of how the caller ordered its object.
+    return {
+      S:             clampInt(cfg.S, 4, 4096, 6),       // ring size (>= 4)
+      CAP:           clampInt(cfg.CAP, 1, 1e12, 1000),  // per-station stockpile cap
+      MAX_UNITS:     clampInt(cfg.MAX_UNITS, 0, 100000, 8),
+      SPAWN_CADENCE: clampInt(cfg.SPAWN_CADENCE, 1, 1e9, 3),
+      BASE_PROD:     clampInt(cfg.BASE_PROD, 0, RATE_MAX, 5),
+      BASE_HP:       clampInt(cfg.BASE_HP, 1, 1e9, 10),
+      HP_RANGE:      clampInt(cfg.HP_RANGE, 1, 1e9, 6),  // hp = BASE_HP + rng%HP_RANGE
+      COOLDOWN_MAX:  clampInt(cfg.COOLDOWN_MAX, 0, 1e6, 2),
+      CARGO_CAP:     clampInt(cfg.CARGO_CAP, 0, 1e9, 50),
+      DMG:           clampInt(cfg.DMG, 0, 1e9, 4)        // damage per co-located opponent
+    };
+  }
+
+  function createWorld(seed, config) {
+    var c = sanitizeConfig(config);
+    // optional per-station production override
+    var prod = new Array(c.S);
+    var src = Array.isArray(config && config.prod) ? config.prod : null;
+    for (var i = 0; i < c.S; i++) {
+      prod[i] = src ? clampInt(src[i], 0, RATE_MAX, c.BASE_PROD) : c.BASE_PROD;
+    }
+    return {
+      config: c,
+      rng: normalizeSeed(seed),
+      tick: 0,
+      stations: new Array(c.S).fill(0), // integer stockpiles, start empty -> ledger starts at 0
+      prod: prod,                        // mutable production rate per station
+      cooldown: new Array(c.S).fill(0),  // per-station produce cooldown (seeded)
+      units: [],                          // kept sorted by ascending id
+      nextUnitId: 1,
+      seq: 0,        // event sequence counter (strictly increasing)
+      minted: 0,     // cumulative sum of all mint amounts
+      burned: 0,     // cumulative sum of all burn amounts
+      events: [],    // undrained event buffer
+      appliedCmds: Object.create(null) // set of applied command ids (string keys)
+    };
+  }
+
+  /* ===== (D) events / ledger ============================================ *
+   * Every state change that creates resources emits "mint" and every change
+   * that destroys them emits "burn", so that at all times:
+   *   totalResources(board)  ===  minted - burned                          */
+  function emit(world, type, amount, extra) {
+    var a = Math.trunc(Number(amount));
+    if (!Number.isFinite(a)) a = 0;
+    world.seq += 1;
+    // Canonical key order (seq,type,amount, then sorted extras) so a restored
+    // event buffer is byte-for-byte identical to a freshly emitted one.
+    var ev = { seq: world.seq, type: type, amount: a };
+    if (extra) {
+      var ek = Object.keys(extra).sort();
+      for (var ei = 0; ei < ek.length; ei++) ev[ek[ei]] = extra[ek[ei]];
+    }
+    world.events.push(ev);
+    if (type === "mint") world.minted += a;
+    else if (type === "burn") world.burned += a;
+    return ev;
+  }
+  // Add `amount` resources to a station, burning whatever overflows CAP.
+  // Mints `amount` (the quantity created) then burns the overflow.
+  function addToStation(world, st, amount, reason) {
+    if (amount <= 0) return;
+    var cap = world.config.CAP;
+    var space = cap - world.stations[st];
+    var overflow = amount - space;
+    if (overflow < 0) overflow = 0;
+    world.stations[st] = world.stations[st] + amount - overflow; // = min(cur+amount, cap)
+    emit(world, "mint", amount, { station: st, reason: reason });
+    if (overflow > 0) emit(world, "burn", overflow, { station: st, reason: "overflow" });
+  }
+
+  /* ===== (E) the six systems, run in this FIXED order each tick ========== */
+
+  // 1. SPAWN — a new unit appears at station 0 on the spawn cadence.
+  function sysSpawn(world) {
+    var c = world.config;
+    if ((world.tick % c.SPAWN_CADENCE) === 0 && world.units.length < c.MAX_UNITS) {
+      var hp = c.BASE_HP + (c.HP_RANGE > 0 ? rngNext(world) % c.HP_RANGE : 0);
+      var u = { id: world.nextUnitId++, hp: hp, cargo: 0, pos: 0 };
+      world.units.push(u); // ids ascend -> array stays id-sorted
+      emit(world, "spawn", 0, { unit: u.id, hp: hp });
+    }
+  }
+
+  // 2. PRODUCE — each station adds output (capped), per-station cooldown seeded by PRNG.
+  function sysProduce(world) {
+    var c = world.config;
+    for (var st = 0; st < c.S; st++) {
+      if (world.cooldown[st] > 0) { world.cooldown[st]--; continue; }
+      addToStation(world, st, world.prod[st], "produce");
+      world.cooldown[st] = (c.COOLDOWN_MAX > 0) ? (rngNext(world) % (c.COOLDOWN_MAX + 1)) : 0;
+    }
+  }
+
+  // 3. MOVE — every unit advances one station along the ring, in id order.
+  function sysMove(world) {
+    var S = world.config.S;
+    var u = world.units;
+    for (var i = 0; i < u.length; i++) u[i].pos = (u[i].pos + 1) % S;
+  }
+
+  // 4. TRANSFER — load at even stations, unload at odd ones. Conservation-neutral
+  //    (resources only move between a unit and the station it stands on).
+  function sysTransfer(world) {
+    var c = world.config;
+    var u = world.units;
+    for (var i = 0; i < u.length; i++) {
+      var unit = u[i], st = unit.pos;
+      if ((st % 2) === 0) { // load
+        var space = c.CARGO_CAP - unit.cargo; if (space < 0) space = 0;
+        var pick = space < world.stations[st] ? space : world.stations[st];
+        if (pick > 0) { unit.cargo += pick; world.stations[st] -= pick; }
+      } else {              // unload
+        var room = c.CAP - world.stations[st]; if (room < 0) room = 0;
+        var drop = unit.cargo < room ? unit.cargo : room;
+        if (drop > 0) { unit.cargo -= drop; world.stations[st] += drop; }
+      }
+    }
+  }
+
+  // 5. INTERACT — units sharing a station deal deterministic damage to each other.
+  function sysInteract(world) {
+    var S = world.config.S, DMG = world.config.DMG;
+    if (DMG <= 0 || world.units.length < 2) return;
+    var byPos = new Map();
+    for (var i = 0; i < world.units.length; i++) {
+      var u = world.units[i], arr = byPos.get(u.pos);
+      if (!arr) { arr = []; byPos.set(u.pos, arr); }
+      arr.push(u); // pushed in id order (world.units is id-sorted)
+    }
+    for (var st = 0; st < S; st++) { // fixed station order
+      var grp = byPos.get(st);
+      if (!grp || grp.length < 2) continue;
+      var dmg = DMG * (grp.length - 1);
+      for (var j = 0; j < grp.length; j++) {
+        grp[j].hp -= dmg;
+        emit(world, "hit", 0, { unit: grp[j].id, dmg: dmg });
+      }
+    }
+  }
+
+  // 6. CLEANUP — remove dead units; their cargo leaves the board, so burn it.
+  function sysCleanup(world) {
+    var survivors = [];
+    for (var i = 0; i < world.units.length; i++) {
+      var u = world.units[i];
+      if (u.hp <= 0) {
+        if (u.cargo > 0) emit(world, "burn", u.cargo, { unit: u.id, reason: "dead" });
+        emit(world, "dead", 0, { unit: u.id });
+      } else {
+        survivors.push(u);
+      }
+    }
+    world.units = survivors;
+  }
+
+  function step(world) {
+    if (!world || typeof world !== "object") return;
+    sysSpawn(world);
+    sysProduce(world);
+    sysMove(world);
+    sysTransfer(world);
+    sysInteract(world);
+    sysCleanup(world);
+    world.tick += 1;
+  }
+
+  /* ===== (F) commands — lexer + dispatch ================================ */
+
+  // Optional string form, e.g. "inject 2 100 #c7" -> a command object.
+  function parseCommand(str) {
+    try {
+      var t = String(str).trim().split(/\s+/);
+      if (!t[0]) return null;
+      var type = t[0];
+      if (type === "setProd") return { id: t[3], type: type, station: t[1], value: t[2] };
+      if (type === "inject")  return { id: t[3], type: type, station: t[1], amount: t[2] };
+      if (type === "kill")    return { id: t[2], type: type, unitId: t[1] };
+      return { id: t[t.length - 1], type: type };
+    } catch (e) { return null; }
+  }
+
+  function applyCommand(world, cmd) {
+    if (!world || typeof world !== "object") return;
+    if (typeof cmd === "string") cmd = parseCommand(cmd);
+    if (!cmd || typeof cmd !== "object") return;
+
+    // (3) idempotency: a command id is applied at most once, ever.
+    var key = String(cmd.id);
+    if (key in world.appliedCmds) return;        // already applied -> no-op
+    world.appliedCmds[key] = 1;
+
+    switch (cmd.type) {
+      case "setProd": {
+        var st = toInt(cmd.station, -1);
+        if (st >= 0 && st < world.config.S) {
+          world.prod[st] = clampInt(cmd.value, 0, RATE_MAX, 0); // rate, not a stockpile
+        }
+        break;
+      }
+      case "inject": {
+        var sti = toInt(cmd.station, -1);
+        var amt = clampInt(cmd.amount, 0, INJECT_MAX, 0);
+        if (sti >= 0 && sti < world.config.S && amt > 0) {
+          addToStation(world, sti, amt, "inject"); // mints amt, burns any overflow
+        }
+        break;
+      }
+      case "kill": {
+        var uid = toInt(cmd.unitId, NaN);
+        if (Number.isFinite(uid)) {
+          for (var i = 0; i < world.units.length; i++) {
+            if (world.units[i].id === uid) {
+              var u = world.units[i];
+              if (u.cargo > 0) emit(world, "burn", u.cargo, { unit: u.id, reason: "kill" });
+              emit(world, "dead", 0, { unit: u.id, reason: "kill" });
+              world.units.splice(i, 1);
+              break;
+            }
+          }
+        }
+        break;
+      }
+      default: /* unknown type -> ignore gracefully (id already recorded) */ break;
+    }
+  }
+
+  /* ===== (G) serialization ============================================== *
+   * Canonical stable JSON (keys sorted) so equal logical state -> equal
+   * string -> equal hash, and snapshot is a fixed point under restore.    */
+  function stableStringify(x) {
+    if (x === null || typeof x !== "object") return JSON.stringify(x);
+    if (Array.isArray(x)) {
+      var parts = [];
+      for (var i = 0; i < x.length; i++) parts.push(stableStringify(x[i]));
+      return "[" + parts.join(",") + "]";
+    }
+    var keys = Object.keys(x).sort(), out = [];
+    for (var k = 0; k < keys.length; k++) {
+      out.push(JSON.stringify(keys[k]) + ":" + stableStringify(x[keys[k]]));
+    }
+    return "{" + out.join(",") + "}";
+  }
+
+  // The COMPLETE state — PRNG, tick, stockpiles, prod, cooldowns, units,
+  // counters (seq/minted/burned/nextUnitId), undrained events, applied ids.
+  function snapshotObj(world) {
+    var units = [];
+    for (var i = 0; i < world.units.length; i++) {
+      var u = world.units[i];
+      units.push({ id: u.id, hp: u.hp, cargo: u.cargo, pos: u.pos });
+    }
+    var applied = Object.keys(world.appliedCmds).sort();
+    return {
+      v: 1,
+      config: world.config,
+      rng: world.rng,
+      tick: world.tick,
+      stations: world.stations.slice(),
+      prod: world.prod.slice(),
+      cooldown: world.cooldown.slice(),
+      units: units,
+      nextUnitId: world.nextUnitId,
+      seq: world.seq,
+      minted: world.minted,
+      burned: world.burned,
+      events: world.events.slice(),
+      applied: applied
+    };
+  }
+  function snapshot(world) { return stableStringify(snapshotObj(world)); }
+
+  function normalizeEvent(e) {
+    if (!e || typeof e !== "object") return { seq: 0, type: "", amount: 0 };
+    // Mirror emit()'s canonical key order: seq, type, amount, then sorted extras.
+    var ev = { seq: toInt(e.seq, 0), type: String(e.type), amount: toInt(e.amount, 0) };
+    var ek = Object.keys(e).sort();
+    for (var i = 0; i < ek.length; i++) {
+      var k = ek[i];
+      if (k === "seq" || k === "type" || k === "amount") continue;
+      ev[k] = e[k];
+    }
+    return ev;
+  }
+
+  function restore(str) {
+    var p;
+    try { p = JSON.parse(str); } catch (e) { return createWorld(0, {}); }
+    if (!p || typeof p !== "object") return createWorld(0, {});
+    var c = sanitizeConfig(p.config || {});
+    var world = {
+      config: c,
+      rng: normalizeSeed(p.rng),
+      tick: toInt(p.tick, 0),
+      stations: Array.isArray(p.stations) ? p.stations.map(function (x) { return toInt(x, 0); }) : new Array(c.S).fill(0),
+      prod: Array.isArray(p.prod) ? p.prod.map(function (x) { return toInt(x, 0); }) : new Array(c.S).fill(c.BASE_PROD),
+      cooldown: Array.isArray(p.cooldown) ? p.cooldown.map(function (x) { return toInt(x, 0); }) : new Array(c.S).fill(0),
+      units: Array.isArray(p.units) ? p.units.map(function (u) {
+        return { id: toInt(u && u.id, 0), hp: toInt(u && u.hp, 0), cargo: toInt(u && u.cargo, 0), pos: toInt(u && u.pos, 0) };
+      }) : [],
+      nextUnitId: toInt(p.nextUnitId, 1),
+      seq: toInt(p.seq, 0),
+      minted: toInt(p.minted, 0),
+      burned: toInt(p.burned, 0),
+      events: Array.isArray(p.events) ? p.events.map(normalizeEvent) : [],
+      appliedCmds: Object.create(null)
+    };
+    fixLen(world.stations, c.S, 0);
+    fixLen(world.prod, c.S, c.BASE_PROD);
+    fixLen(world.cooldown, c.S, 0);
+    if (Array.isArray(p.applied)) {
+      for (var i = 0; i < p.applied.length; i++) world.appliedCmds[String(p.applied[i])] = 1;
+    }
+    return world;
+  }
+
+  // cyrb53 — a stable 53-bit string hash (deterministic, no entropy).
+  function cyrb53(str) {
+    var h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+    for (var i = 0; i < str.length; i++) {
+      var ch = str.charCodeAt(i);
+      h1 = Math.imul(h1 ^ ch, 2654435761);
+      h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    var n = 4294967296 * (2097151 & h2) + (h1 >>> 0);
+    return ("0000000000000" + n.toString(16)).slice(-14);
+  }
+  function hashState(world) { return cyrb53(snapshot(world)); }
+
+  /* ===== drain + report ================================================= */
+  function drainEventLog(world) {
+    if (!world || typeof world !== "object") return [];
+    var out = world.events;
+    world.events = [];
+    return out;
+  }
+  function report(world) {
+    var total = 0, i;
+    for (i = 0; i < world.stations.length; i++) total += world.stations[i];
+    for (i = 0; i < world.units.length; i++) total += world.units[i].cargo;
+    return {
+      tick: world.tick,
+      unitCount: world.units.length,
+      totalResources: total,
+      minted: world.minted,
+      burned: world.burned
+    };
+  }
+
+  /* ===== (H) public API ================================================= */
+  var ENGINE = {
+    createWorld: createWorld,
+    step: step,
+    applyCommand: applyCommand,
+    snapshot: snapshot,
+    restore: restore,
+    hashState: hashState,
+    drainEventLog: drainEventLog,
+    report: report,
+    parseCommand: parseCommand // sugar; not required by the spec
+  };
+
+  if (typeof window !== "undefined") window.ENGINE = ENGINE;
+  if (typeof root !== "undefined" && root) root.ENGINE = ENGINE;
+})(typeof globalThis !== "undefined" ? globalThis : this);
+</script>
+
+<!-- ============================================================================
+     VIEWER + SELF-TESTS (not part of the deliverable; DOM-only, guarded).
+   ============================================================================ -->
+<script>
+(function () {
+  if (typeof document === "undefined") return;
+  var E = window.ENGINE;
+  var world = E.createWorld(42, {});
+
+  var $report = document.getElementById("report");
+  var $tests = document.getElementById("tests");
+
+  function render() {
+    var r = E.report(world);
+    var inv = (r.totalResources === r.minted - r.burned);
+    $report.innerHTML =
+      "tick=" + r.tick + "  units=" + r.unitCount +
+      "  totalResources=" + r.totalResources +
+      "  minted=" + r.minted + "  burned=" + r.burned + "\n" +
+      "invariant (total === minted - burned): " +
+      (inv ? "<span class='ok'>OK</span>" : "<span class='bad'>BROKEN</span>") + "\n" +
+      "hashState: " + E.hashState(world) + "\n" +
+      "stations: [" + world.stations.join(", ") + "]\n" +
+      "units: " + (world.units.length
+        ? world.units.map(function (u) { return "#" + u.id + "(hp" + u.hp + ",c" + u.cargo + ",@" + u.pos + ")"; }).join(" ")
+        : "—");
+  }
+
+  document.getElementById("bStep").onclick = function () { E.step(world); E.drainEventLog(world); render(); };
+  document.getElementById("bStep10").onclick = function () { for (var i = 0; i < 10; i++) E.step(world); E.drainEventLog(world); render(); };
+  document.getElementById("bInject").onclick = function () {
+    E.applyCommand(world, { id: "ui-" + Date.now(), type: "inject", station: 0, amount: 50 }); render();
+  };
+  document.getElementById("bReset").onclick = function () { world = E.createWorld(42, {}); render(); };
+
+  /* ---- self-tests: exercise all five correctness requirements ---------- */
+  function runSelfTests() {
+    var results = [];
+    function check(name, cond) { results.push([name, !!cond]); }
+
+    function runOps(w) {
+      var drained = [];
+      for (var i = 0; i < 50; i++) {
+        E.step(w);
+        if (i === 5)  E.applyCommand(w, { id: "a" + i, type: "inject", station: 2, amount: 300 });
+        if (i === 10) E.applyCommand(w, { id: "b" + i, type: "setProd", station: 1, value: 9 });
+        if (i === 15) E.applyCommand(w, { id: "c" + i, type: "kill", unitId: 1 });
+        var d = E.drainEventLog(w);
+        for (var j = 0; j < d.length; j++) drained.push(d[j]);
+      }
+      return drained;
+    }
+
+    // (1) determinism
+    var w1 = E.createWorld(12345, {}), e1 = runOps(w1);
+    var w2 = E.createWorld(12345, {}), e2 = runOps(w2);
+    check("(1) determinism — identical hash", E.hashState(w1) === E.hashState(w2));
+    check("(1) determinism — identical events", JSON.stringify(e1) === JSON.stringify(e2));
+
+    // (4) conservation + (5) monotonic seq + integer-only, over a long run
+    var w3 = E.createWorld(777, {}), allEv = [], consOK = true, seqOK = true, lastSeq = 0, intOK = true;
+    for (var i = 0; i < 120; i++) {
+      E.step(w3);
+      if (i % 7 === 0) E.applyCommand(w3, { id: "x" + i, type: "inject", station: i % 6, amount: 40 + i });
+      var r = E.report(w3);
+      if (r.totalResources !== r.minted - r.burned) consOK = false;
+      var s, u;
+      for (s = 0; s < w3.stations.length; s++) if (!Number.isInteger(w3.stations[s])) intOK = false;
+      for (u = 0; u < w3.units.length; u++) if (!Number.isInteger(w3.units[u].cargo) || !Number.isInteger(w3.units[u].hp)) intOK = false;
+      var evs = E.drainEventLog(w3);
+      for (var k = 0; k < evs.length; k++) {
+        if (!(evs[k].seq > lastSeq)) seqOK = false;
+        lastSeq = evs[k].seq;
+        allEv.push(evs[k]);
+      }
+    }
+    check("(4) conservation — total === minted - burned each tick", consOK);
+    check("(5) monotonic — strictly increasing unique seq", seqOK);
+    check("integer-only state", intOK);
+    var m = 0, b = 0;
+    for (var z = 0; z < allEv.length; z++) { if (allEv[z].type === "mint") m += allEv[z].amount; if (allEv[z].type === "burn") b += allEv[z].amount; }
+    var rep = E.report(w3);
+    check("(4) ledger matches event amounts", rep.minted === m && rep.burned === b && rep.totalResources === m - b);
+
+    // (2) snapshot/restore — exact + behaves identically going forward
+    var w4 = E.createWorld(999, {});
+    for (var q = 0; q < 30; q++) { E.step(w4); if (q === 10) E.applyCommand(w4, { id: "kk", type: "inject", station: 0, amount: 120 }); }
+    var snap = E.snapshot(w4), h4 = E.hashState(w4);
+    var w5 = E.restore(snap);
+    check("(2) restore — hash equals original", E.hashState(w5) === h4);
+    var same = true;
+    for (var p2 = 0; p2 < 40; p2++) {
+      E.step(w4); E.step(w5);
+      if (E.hashState(w4) !== E.hashState(w5)) same = false;
+      if (JSON.stringify(E.drainEventLog(w4)) !== JSON.stringify(E.drainEventLog(w5))) same = false;
+    }
+    check("(2) restore — identical behavior & events forward", same);
+
+    // (3) idempotent commands
+    var w6 = E.createWorld(55, {});
+    for (var f = 0; f < 5; f++) E.step(w6);
+    var cmd = { id: "dup1", type: "inject", station: 1, amount: 77 };
+    E.applyCommand(w6, cmd); E.drainEventLog(w6);
+    var hA = E.hashState(w6);
+    E.applyCommand(w6, cmd);
+    var evDup = E.drainEventLog(w6);
+    var hB = E.hashState(w6);
+    check("(3) idempotent — repeat id leaves hash unchanged", hA === hB);
+    check("(3) idempotent — repeat id emits no events", evDup.length === 0);
+
+    // robustness — odd inputs must never throw / hang
+    var threw = false, robustCons = true;
+    try {
+      var w7 = E.createWorld("notseed", { S: 2, CAP: -5, MAX_UNITS: -3 }); // clamps to S>=4, CAP>=1, MAX>=0
+      E.applyCommand(w7, { id: 1, type: "inject", station: 999, amount: 50 });   // out-of-range station
+      E.applyCommand(w7, { id: 2, type: "inject", station: 0, amount: -50 });    // negative amount
+      E.applyCommand(w7, { id: 3, type: "kill", unitId: 99999 });                 // nonexistent unit
+      E.applyCommand(w7, { id: 4, type: "totally-unknown", foo: "bar" });         // unknown type
+      E.applyCommand(w7, null);                                                    // non-object
+      E.applyCommand(w7, { type: "inject", station: 0, amount: 10 });             // missing id
+      E.applyCommand(w7, "inject 0 30 #strcmd");                                   // string lexer form
+      E.applyCommand(w7, "  ");                                                     // empty string
+      for (var g = 0; g < 80; g++) E.step(w7);
+      var r7 = E.report(w7);
+      if (r7.totalResources !== r7.minted - r7.burned) robustCons = false;
+      E.restore("{ not json");  // malformed snapshot
+      E.restore("null");
+      E.restore("123");
+    } catch (err) { threw = true; }
+    check("robust — no throw on odd inputs", !threw);
+    check("robust — conservation still holds", robustCons);
+
+    return results;
+  }
+
+  try {
+    var results = runSelfTests();
+    var pass = 0, html = "";
+    for (var i = 0; i < results.length; i++) {
+      var ok = results[i][1]; if (ok) pass++;
+      html += "<div><span class='" + (ok ? "ok'>PASS" : "bad'>FAIL") + "</span> " + results[i][0] + "</div>";
+    }
+    html = "<div><b>" + pass + " / " + results.length + " checks passed</b></div>" + html;
+    $tests.innerHTML = html;
+  } catch (e) {
+    $tests.innerHTML = "<span class='bad'>self-tests threw: " + (e && e.message) + "</span>";
+  }
+
+  render();
+})();
+</script>
+</body>
+</html>
