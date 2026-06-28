@@ -7,6 +7,58 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-06-28
+
+The **completeness-under-scale showcase** — and an honest **third NULL**. We tested the architect harness's
+*strongest theoretical case*: on a single artifact with **40 mutually-independent requirements** (a
+zero-dependency "wire-format & canonical-form toolkit" library), does decomposition into 6 disjoint
+workstream slices + gated integration produce a **more complete** result — fewer **silently dropped
+requirements** — than a fair single-shot worker given the identical spec? Measured against a **decomposed,
+validated, held-out** instrument, **pre-registered before any scored arm**, the answer is **no**: strong
+single shots produce **fully-complete, fully-correct** libraries in one pass (no drops, every held-out edge
+correct), and the harness **matches** that ceiling exactly — completeness-faithful, no integration drops —
+at **~5.4× the tokens**. Reported as measured, not inflated — see
+[`evals/loop-demo/lib/RESULTS.md`](evals/loop-demo/lib/RESULTS.md).
+
+> **Version note:** this milestone **follows v0.9.0** (the discriminating-showcase attempt, PR #9). It was
+> developed off `main` (v0.8.0) in parallel with v0.9.0 and merged after it.
+
+### Added
+
+- **Completeness-under-scale showcase** under `evals/loop-demo/lib/` — six self-contained 40-export
+  ES-module libraries scored by **one per-export-isolated held-out instrument**: K=3 architect-harness
+  builds (`arms/harness-{1,2,3}/lib.mjs`, built by a real contract → 6-slice fan-out → gated-integration
+  Workflow) vs K=3 **fair single-shot controls** (`arms/control-{1,2,3}/lib.mjs`, given the identical
+  frozen `SPEC.md`). Includes `PREREGISTRATION.md` (the **decomposed** OMISSION/EDGE/CASCADE metric +
+  per-axis decision rule + frozen SHA-256s, committed first), `DESIGN.md` + `CRITIQUE.md` (the Phase-0
+  design + the adversarial critic's 3 resolved blockers), `PILOT.md` + `SCRUB.md` (the disclosed
+  pre-flight), `RESULTS.md`, the **pure-node** scorer (`scoring/` — zero provisioning, no Playwright), and
+  the reproducible `lib-harness.workflow.js` / `lib-shipgate.workflow.js` / `design-swarm.workflow.js`.
+- **Per-export-isolated scorer** — each of the 40 exports is scored in its own child process with an 8 s
+  timeout, so a single non-terminating export costs exactly **1/40**. Validated against a correct reference
+  (1.00), a deliberately-incomplete reference (**0.80** omission / **0.65** complete), and a hang stub
+  (**0.975**) — the ruler measures coverage, not schema.
+
+### Measured result (honest)
+
+- **PRIMARY (OMISSION-completeness = completeness under scale): NULL — degenerate ceiling.** harness mean
+  **1.00**, control mean **1.00**, delta **0.00**; mechanical `verdict.py` = `NULL (ceiling)`. A checklist
+  of 40 enumerated, objectively-specified functions is within a capable model's one-pass capacity, so there
+  are **no silent drops** for the harness's decomposition to prevent.
+- **SECONDARY (also flat):** EDGE-correctness delta **0.00** (single shots got all 186 held-out edges
+  right); no failures → no shared-helper cascades. New sub-finding: the harness's integration is
+  **completeness-faithful** (matches the ceiling without dropping requirements), so the case is "no uplift
+  at ~5.4× cost," **not** "it degrades the work."
+- **Implication:** the **third** honest null across three task families (game, engine, library) — now with
+  an instrument **decomposed by mechanism** that could have attributed a win to the correct cause and found
+  none. v1.0 posture: ship the harness for its **process** guarantees (parallel throughput, bounded repair,
+  gated forward-coupling, auditability, faithful integration) and **do not** claim artifact-quality /
+  completeness uplift from orchestration.
+
+### Changed
+
+- `.claude-plugin/plugin.json` version **0.9.0 → 0.10.0**. (`marketplace.json` stays version-less by design.)
+
 ## [0.9.0] — 2026-06-28
 
 The **discriminating-showcase attempt** — an honest **NULL**, and (more valuably) a **measurement-integrity
