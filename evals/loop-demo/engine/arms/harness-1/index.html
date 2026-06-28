@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Carousel — deterministic integer tick-simulation engine</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin: 2rem; max-width: 60rem; }
+  h1 { font-size: 1.1rem; }
+  code { background: rgba(127,127,127,.18); padding: 0 .3em; border-radius: 3px; }
+  #out { white-space: pre-wrap; background: rgba(127,127,127,.10); padding: 1rem; border-radius: 6px; }
+  .muted { opacity: .7; }
+</style>
+</head>
+<body>
+<h1>Carousel — deterministic integer tick-simulation engine</h1>
+<p class="muted">
+  The engine is exposed as <code>window.ENGINE</code> for a headless driver. This page is a thin,
+  offline harness; the simulation is integer-only, fully deterministic, and self-contained.
+</p>
+<div id="out">loading…</div>
+
+<script>
+"use strict";
+// ============================================================================
+// "Carousel" — single self-contained, offline, zero-dependency engine.
+// Four namespace objects assembled in dependency order (Model -> Systems /
+// Commands / Persistence), then wired into window.ENGINE exactly per SPEC.
+//
+// Integer-only state. Randomness ONLY via the documented 31-bit LCG. No
+// Math.random, no Date, no network, no external files.
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// Model — core data model + RNG + ledger/event chokepoint (deps: none)
+// ----------------------------------------------------------------------------
+const Model = (function () {
+  // clamp on integer operands only (SPEC robustness).
+  function clamp(x, lo, hi) { return x < lo ? lo : (x > hi ? hi : x); }
+
+  // Read a config field as an integer with a default; coerce missing/non-finite
+  // to the default. Caller applies any further range clamp.
+  function cfgInt(config, key, def) {
+    if (config && config[key] != null) {
+      var v = config[key];
+      if (typeof v === 'number' && isFinite(v)) return Math.trunc(v);
+    }
+    return def | 0;
+  }
+
+  // ---- world construction (SPEC createWorld; full integer shape) ----
+  function createWorld(seed, config) {
+    var S            = Math.max(4, Math.abs(cfgInt(config, 'S', 6)));          // clamp >= 4
+    var CAP          = Math.max(0, cfgInt(config, 'CAP', 1000));               // >= 0
+    var MAX_UNITS    = Math.max(0, cfgInt(config, 'MAX_UNITS', 8));            // >= 0
+    var SPAWN_CADENCE= Math.max(1, cfgInt(config, 'SPAWN_CADENCE', 3));        // >= 1
+    var PROD_BASE    = Math.max(0, cfgInt(config, 'PROD_BASE', 5));            // >= 0
+    var COOLDOWN_MAX = Math.max(0, cfgInt(config, 'COOLDOWN_MAX', 3));         // >= 0
+    var UNIT_HP      = Math.max(0, cfgInt(config, 'UNIT_HP', 10));             // >= 0
+    var UNIT_CARGO_CAP = Math.max(0, cfgInt(config, 'UNIT_CARGO_CAP', 50));    // >= 0
+    var COMBAT_DMG   = Math.max(0, cfgInt(config, 'COMBAT_DMG', 3));           // >= 0
+    var XFER_RATE    = Math.max(0, cfgInt(config, 'XFER_RATE', 20));           // >= 0
+
+    var stations = new Array(S);
+    var prod     = new Array(S);
+    var cooldown = new Array(S);
+    for (var i = 0; i < S; i++) {
+      stations[i] = 0;          // empty stockpiles
+      prod[i]     = PROD_BASE;  // default production each station starts with
+      cooldown[i] = 0;          // produce cooldown counter
+    }
+
+    return {
+      config: {
+        seed:           seed | 0,   // original seed (provenance)
+        S:              S,
+        CAP:            CAP,
+        MAX_UNITS:      MAX_UNITS,
+        SPAWN_CADENCE:  SPAWN_CADENCE,
+        PROD_BASE:      PROD_BASE,
+        COOLDOWN_MAX:   COOLDOWN_MAX,
+        UNIT_HP:        UNIT_HP,
+        UNIT_CARGO_CAP: UNIT_CARGO_CAP,
+        COMBAT_DMG:     COMBAT_DMG,
+        XFER_RATE:      XFER_RATE,
+      },
+      tick:       0,
+      rngState:   (seed >>> 0) || 1,  // 31-bit LCG seed, never 0
+      seq:        0,
+      nextUnitId: 0,
+      minted:     0,
+      burned:     0,
+      stations:   stations,
+      prod:       prod,
+      cooldown:   cooldown,
+      units:      [],   // sorted ascending by id (empty at start)
+      appliedCommands: [],
+      eventLog:        [],
+    };
+  }
+
+  // ---- randomness (SPEC: 31-bit LCG; the ONLY entropy source) ----
+  // NOTE: rngState*1103515245 exceeds 2^53, but the computation is fully
+  // deterministic in IEEE-754 (identical inputs -> identical output every run),
+  // which is all SPEC #1 requires. We follow the SPEC formula verbatim.
+  function rngNext(world) {
+    world.rngState = (world.rngState * 1103515245 + 12345) & 0x7fffffff;
+    return world.rngState;
+  }
+  function rngRange(world, n) {
+    n = n | 0;
+    if (n <= 0) return 0;
+    return rngNext(world) % n;
+  }
+
+  // ---- event helper (SPEC monotonic seq; ONLY place seq advances / events push) ----
+  function emit(world, type, amount) {
+    var ev = { seq: ++world.seq, type: type, amount: amount | 0 };
+    world.eventLog.push(ev);
+    return ev;
+  }
+
+  // ---- ledger (SPEC conservation; sole writers of minted / burned) ----
+  function mint(world, qty) {
+    qty = qty | 0;
+    if (qty <= 0) return 0;
+    world.minted += qty;
+    emit(world, 'mint', qty);
+    return qty;
+  }
+  function burn(world, qty) {
+    qty = qty | 0;
+    if (qty <= 0) return 0;
+    world.burned += qty;
+    emit(world, 'burn', qty);
+    return qty;
+  }
+
+  // deposit: place EXISTING on-board qty into station idx, capped at CAP.
+  // Caller mints first if the resource is newly created; deposit only burns the
+  // cap overflow. (Net board delta == accepted.)
+  function deposit(world, idx, qty) {
+    qty = qty | 0;
+    idx = idx | 0;
+    if (idx < 0 || idx >= world.config.S) return 0; // defensive
+    if (qty <= 0) return 0;
+    var accepted = clamp(qty, 0, world.config.CAP - world.stations[idx]);
+    world.stations[idx] += accepted;
+    var overflow = qty - accepted;
+    if (overflow > 0) burn(world, overflow);
+    return accepted;
+  }
+  // withdraw: pull up to `want` from station idx (a pure conserving move; no ledger).
+  function withdraw(world, idx, want) {
+    want = want | 0;
+    idx = idx | 0;
+    if (idx < 0 || idx >= world.config.S) return 0; // defensive
+    var taken = clamp(want, 0, world.stations[idx]);
+    world.stations[idx] -= taken;
+    return taken;
+  }
+
+  // ---- telemetry ----
+  function totalResources(world) {
+    var total = 0;
+    var st = world.stations;
+    for (var i = 0; i < st.length; i++) total += st[i];
+    var u = world.units;
+    for (var j = 0; j < u.length; j++) total += u[j].cargo;
+    return total;
+  }
+  function report(world) {
+    return {
+      tick:           world.tick,
+      unitCount:      world.units.length,
+      totalResources: totalResources(world),
+      minted:         world.minted,
+      burned:         world.burned,
+    };
+  }
+
+  return {
+    createWorld:    createWorld,
+    rngNext:        rngNext,
+    rngRange:       rngRange,
+    emit:           emit,
+    mint:           mint,
+    burn:           burn,
+    deposit:        deposit,
+    withdraw:       withdraw,
+    totalResources: totalResources,
+    report:         report,
+  };
+})();
+
+// ----------------------------------------------------------------------------
+// Systems — the fixed per-tick step pipeline (SPEC order; deps: Model)
+// ----------------------------------------------------------------------------
+const Systems = (function () {
+  // -- SPEC system 1: spawn --
+  function spawn(world) {
+    var cfg = world.config;
+    if ((world.tick % cfg.SPAWN_CADENCE) === 0 && world.units.length < cfg.MAX_UNITS) {
+      world.units.push({
+        id: world.nextUnitId++,
+        pos: 0,
+        hp: cfg.UNIT_HP | 0,
+        cargo: 0,
+      });
+      Model.emit(world, 'spawn', 0); // cargo always 0 -> no ledger
+    }
+  }
+
+  // -- SPEC system 2: produce (the ONLY rng consumer) --
+  function produce(world) {
+    var cfg = world.config;
+    var S = cfg.S | 0;
+    for (var i = 0; i < S; i++) {
+      if (world.cooldown[i] > 0) {
+        world.cooldown[i] = (world.cooldown[i] - 1) | 0;
+      } else {
+        var out = world.prod[i] | 0;
+        Model.mint(world, out);          // mint FULL output (newly created)
+        Model.deposit(world, i, out);    // caps at CAP, burns the overflow
+        world.cooldown[i] = Model.rngRange(world, (cfg.COOLDOWN_MAX | 0) + 1);
+      }
+    }
+  }
+
+  // -- SPEC system 3: move --
+  function move(world) {
+    var S = world.config.S | 0;
+    var units = world.units;
+    for (var u = 0; u < units.length; u++) {
+      var unit = units[u];
+      unit.pos = ((unit.pos + 1) % S) | 0;
+    }
+  }
+
+  // -- SPEC system 4: transfer (drop first, then pick up) --
+  function transfer(world) {
+    var cfg = world.config;
+    var rate = cfg.XFER_RATE | 0;
+    var cap = cfg.UNIT_CARGO_CAP | 0;
+    var units = world.units;
+    for (var u = 0; u < units.length; u++) {
+      var unit = units[u];
+      var p = unit.pos | 0;
+      // drop
+      var give = unit.cargo < rate ? unit.cargo : rate;
+      if (give < 0) give = 0;
+      unit.cargo = (unit.cargo - give) | 0;
+      Model.deposit(world, p, give);     // cargo->station; burns overflow
+      // pick up
+      var room = (cap - unit.cargo) | 0;
+      if (room < 0) room = 0;
+      var want = rate < room ? rate : room;
+      var got = Model.withdraw(world, p, want); // pure station->cargo move
+      unit.cargo = (unit.cargo + got) | 0;
+    }
+  }
+
+  // -- SPEC system 5: interact (deterministic combat; no rng) --
+  function interact(world) {
+    var dmg = world.config.COMBAT_DMG | 0;
+    var units = world.units;
+    var counts = Object.create(null);
+    for (var i = 0; i < units.length; i++) {
+      var pos = units[i].pos | 0;
+      counts[pos] = (counts[pos] || 0) + 1;
+    }
+    for (var j = 0; j < units.length; j++) {   // id order (array stays sorted)
+      var unit = units[j];
+      if (counts[unit.pos | 0] >= 2) {
+        unit.hp = (unit.hp - dmg) | 0;
+        Model.emit(world, 'hit', 0);
+      }
+    }
+  }
+
+  // -- SPEC system 6: cleanup (remove dead; burn their cargo) --
+  function cleanup(world) {
+    var units = world.units;
+    var survivors = [];
+    for (var i = 0; i < units.length; i++) {
+      var unit = units[i];
+      if (unit.hp <= 0) {
+        if (unit.cargo > 0) Model.burn(world, unit.cargo);
+        Model.emit(world, 'dead', 0);
+        // dropped
+      } else {
+        survivors.push(unit);
+      }
+    }
+    world.units = survivors; // preserves ascending-id order
+  }
+
+  // -- step: the fixed documented order --
+  function step(world) {
+    world.tick = (world.tick + 1) | 0;   // increment tick FIRST
+    spawn(world);       // 1
+    produce(world);     // 2
+    move(world);        // 3
+    transfer(world);    // 4
+    interact(world);    // 5
+    cleanup(world);     // 6
+  }
+
+  return {
+    step: step,
+    spawn: spawn,
+    produce: produce,
+    move: move,
+    transfer: transfer,
+    interact: interact,
+    cleanup: cleanup,
+  };
+})();
+
+// ----------------------------------------------------------------------------
+// Commands — applyCommand + idempotency (deps: Model)
+// ----------------------------------------------------------------------------
+const Commands = (function () {
+  function isInt(x) { return typeof x === 'number' && Number.isInteger(x); }
+
+  function validStation(world, idx) {
+    return isInt(idx) && idx >= 0 && idx < world.config.S;
+  }
+
+  // setProd: set a station's production. No resources move.
+  function doSetProd(world, cmd) {
+    if (!validStation(world, cmd.station)) return;
+    if (!isInt(cmd.amount)) return;
+    world.prod[cmd.station] = cmd.amount < 0 ? 0 : cmd.amount;
+  }
+
+  // inject: create NEW resources at a station (mint then deposit caps+burns).
+  function doInject(world, cmd) {
+    if (!validStation(world, cmd.station)) return;
+    if (!isInt(cmd.amount) || cmd.amount <= 0) return;
+    Model.mint(world, cmd.amount);
+    Model.deposit(world, cmd.station, cmd.amount);
+  }
+
+  // kill: remove a unit by id (burn its cargo, emit "dead").
+  function doKill(world, cmd) {
+    if (!isInt(cmd.unitId)) return;
+    var units = world.units;
+    for (var i = 0; i < units.length; i++) {
+      if (units[i].id === cmd.unitId) {
+        var u = units[i];
+        if (u.cargo > 0) Model.burn(world, u.cargo);
+        Model.emit(world, 'dead', 0);
+        units.splice(i, 1); // preserves ascending-id order
+        return;
+      }
+    }
+    // not found -> graceful no-op
+  }
+
+  // applyCommand: validate, idempotency-guard, record FIRST, then dispatch.
+  function applyCommand(world, cmd) {
+    if (world == null || typeof world !== 'object') return;
+    if (cmd == null || typeof cmd !== 'object') return;
+    if (!isInt(cmd.id)) return;
+
+    var applied = world.appliedCommands;
+    for (var i = 0; i < applied.length; i++) {
+      if (applied[i] === cmd.id) return;   // SPEC idempotency: no-op
+    }
+
+    applied.push(cmd.id); // record FIRST so a repeated id never re-runs
+
+    try {
+      switch (cmd.type) {
+        case 'setProd': doSetProd(world, cmd); break;
+        case 'inject':  doInject(world, cmd);  break;
+        case 'kill':    doKill(world, cmd);    break;
+        default: break; // unknown type -> recorded no-op
+      }
+    } catch (e) {
+      // Never propagate: a malformed command must not crash the simulation.
+    }
+  }
+
+  return { applyCommand: applyCommand };
+})();
+
+// ----------------------------------------------------------------------------
+// Persistence — snapshot / restore / hashState / drainEventLog (deps: Model)
+// ----------------------------------------------------------------------------
+const Persistence = (function () {
+  // Magnitude-preserving integer coercion (NOT 32-bit-truncating) — minted/burned
+  // can exceed 2^31 over a long run.
+  function toInt(x) {
+    var n = Math.trunc(Number(x));
+    return Number.isFinite(n) ? n : 0;
+  }
+  function toStr(x) { return typeof x === 'string' ? x : String(x); }
+
+  function intArray(a) {
+    var out = [];
+    if (a && typeof a.length === 'number') {
+      for (var i = 0; i < a.length; i++) out.push(toInt(a[i]));
+    }
+    return out;
+  }
+
+  // canonical world -> plain object with FIXED key order (deterministic string).
+  function canonical(world) {
+    var w = world || {};
+    var cfg = w.config || {};
+
+    var units = [];
+    var srcUnits = w.units;
+    if (srcUnits && typeof srcUnits.length === 'number') {
+      for (var i = 0; i < srcUnits.length; i++) {
+        var u = srcUnits[i] || {};
+        units.push({ id: toInt(u.id), pos: toInt(u.pos), hp: toInt(u.hp), cargo: toInt(u.cargo) });
+      }
+    }
+
+    var events = [];
+    var srcLog = w.eventLog;
+    if (srcLog && typeof srcLog.length === 'number') {
+      for (var j = 0; j < srcLog.length; j++) {
+        var e = srcLog[j] || {};
+        events.push({ seq: toInt(e.seq), type: toStr(e.type), amount: toInt(e.amount) });
+      }
+    }
+
+    return {
+      v: 1,
+      config: {
+        seed: toInt(cfg.seed),
+        S: toInt(cfg.S),
+        CAP: toInt(cfg.CAP),
+        MAX_UNITS: toInt(cfg.MAX_UNITS),
+        SPAWN_CADENCE: toInt(cfg.SPAWN_CADENCE),
+        PROD_BASE: toInt(cfg.PROD_BASE),
+        COOLDOWN_MAX: toInt(cfg.COOLDOWN_MAX),
+        UNIT_HP: toInt(cfg.UNIT_HP),
+        UNIT_CARGO_CAP: toInt(cfg.UNIT_CARGO_CAP),
+        COMBAT_DMG: toInt(cfg.COMBAT_DMG),
+        XFER_RATE: toInt(cfg.XFER_RATE),
+      },
+      tick: toInt(w.tick),
+      rngState: toInt(w.rngState),
+      seq: toInt(w.seq),
+      nextUnitId: toInt(w.nextUnitId),
+      minted: toInt(w.minted),
+      burned: toInt(w.burned),
+      stations: intArray(w.stations),
+      prod: intArray(w.prod),
+      cooldown: intArray(w.cooldown),
+      units: units,
+      appliedCommands: intArray(w.appliedCommands),
+      eventLog: events,
+    };
+  }
+
+  function snapshot(world) {
+    return JSON.stringify(canonical(world));
+  }
+
+  // restore: exact inverse of snapshot; rebuilds EVERY field. Never throws.
+  function restore(str) {
+    var parsed;
+    try { parsed = JSON.parse(str); } catch (err) { parsed = null; }
+    if (!parsed || typeof parsed !== 'object') parsed = {};
+    var cfg = parsed.config || {};
+
+    var world = {
+      config: {
+        seed: toInt(cfg.seed),
+        S: toInt(cfg.S),
+        CAP: toInt(cfg.CAP),
+        MAX_UNITS: toInt(cfg.MAX_UNITS),
+        SPAWN_CADENCE: toInt(cfg.SPAWN_CADENCE),
+        PROD_BASE: toInt(cfg.PROD_BASE),
+        COOLDOWN_MAX: toInt(cfg.COOLDOWN_MAX),
+        UNIT_HP: toInt(cfg.UNIT_HP),
+        UNIT_CARGO_CAP: toInt(cfg.UNIT_CARGO_CAP),
+        COMBAT_DMG: toInt(cfg.COMBAT_DMG),
+        XFER_RATE: toInt(cfg.XFER_RATE),
+      },
+      tick: toInt(parsed.tick),
+      rngState: toInt(parsed.rngState),
+      seq: toInt(parsed.seq),
+      nextUnitId: toInt(parsed.nextUnitId),
+      minted: toInt(parsed.minted),
+      burned: toInt(parsed.burned),
+      stations: intArray(parsed.stations),
+      prod: intArray(parsed.prod),
+      cooldown: intArray(parsed.cooldown),
+      units: [],
+      appliedCommands: intArray(parsed.appliedCommands),
+      eventLog: [],
+    };
+
+    var srcUnits = parsed.units;
+    if (srcUnits && typeof srcUnits.length === 'number') {
+      for (var i = 0; i < srcUnits.length; i++) {
+        var u = srcUnits[i] || {};
+        world.units.push({ id: toInt(u.id), pos: toInt(u.pos), hp: toInt(u.hp), cargo: toInt(u.cargo) });
+      }
+    }
+
+    var srcLog = parsed.eventLog;
+    if (srcLog && typeof srcLog.length === 'number') {
+      for (var j = 0; j < srcLog.length; j++) {
+        var e = srcLog[j] || {};
+        world.eventLog.push({ seq: toInt(e.seq), type: toStr(e.type), amount: toInt(e.amount) });
+      }
+    }
+
+    return world;
+  }
+
+  // FNV-1a (32-bit) over the snapshot string -> 8-hex.
+  function fnv1aHex(s) {
+    var h = 0x811c9dc5;
+    for (var i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return (h >>> 0).toString(16).padStart(8, '0');
+  }
+
+  // hashState = fnv1aHex(snapshot(world)) — provably covers every serialized field.
+  function hashState(world) {
+    return fnv1aHex(snapshot(world));
+  }
+
+  // drainEventLog: return pending events, then clear. Cumulative minted/burned
+  // live on the world (not recomputed), so draining loses nothing.
+  function drainEventLog(world) {
+    if (!world || !Array.isArray(world.eventLog)) {
+      if (world) world.eventLog = [];
+      return [];
+    }
+    var out = world.eventLog;
+    world.eventLog = [];
+    return out;
+  }
+
+  return {
+    snapshot: snapshot,
+    restore: restore,
+    hashState: hashState,
+    drainEventLog: drainEventLog,
+  };
+})();
+
+// ----------------------------------------------------------------------------
+// Public API — window.ENGINE (exact per SPEC / contract)
+// ----------------------------------------------------------------------------
+window.ENGINE = {
+  createWorld:   function (seed, config) { return Model.createWorld(seed, config); },
+  step:          function (w)    { return Systems.step(w); },
+  applyCommand:  function (w, c) { return Commands.applyCommand(w, c); },
+  snapshot:      function (w)    { return Persistence.snapshot(w); },
+  restore:       function (s)    { return Persistence.restore(s); },
+  hashState:     function (w)    { return Persistence.hashState(w); },
+  drainEventLog: function (w)    { return Persistence.drainEventLog(w); },
+  report:        function (w)    { return Model.report(w); },
+};
+
+// ----------------------------------------------------------------------------
+// Thin, offline visible harness (the engine is the deliverable, not the visuals).
+// ----------------------------------------------------------------------------
+(function () {
+  function render() {
+    var out = document.getElementById('out');
+    if (!out) return;
+    try {
+      var w = window.ENGINE.createWorld(12345, {});
+      for (var i = 0; i < 12; i++) window.ENGINE.step(w);
+      var r = window.ENGINE.report(w);
+      var lines = [
+        'window.ENGINE ready — sample run (seed 12345, 12 ticks):',
+        '  tick           = ' + r.tick,
+        '  unitCount      = ' + r.unitCount,
+        '  totalResources = ' + r.totalResources,
+        '  minted         = ' + r.minted,
+        '  burned         = ' + r.burned,
+        '  minted-burned  = ' + (r.minted - r.burned) + '   (must equal totalResources)',
+        '  hashState      = ' + window.ENGINE.hashState(w),
+      ];
+      out.textContent = lines.join('\n');
+    } catch (e) {
+      out.textContent = 'engine error: ' + (e && e.message ? e.message : e);
+    }
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', render);
+  } else {
+    render();
+  }
+})();
+</script>
+</body>
+</html>
