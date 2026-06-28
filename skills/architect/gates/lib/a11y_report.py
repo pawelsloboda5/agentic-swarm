@@ -49,6 +49,11 @@ class _ShapeError(Exception):
     """Raised internally when a payload does not match the expected runner shape (=> fail-closed)."""
 
 
+def _is_real_number(x):
+    """True for an int/float that is NOT a bool (bool subclasses int; a JSON bool is not a valid score)."""
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
 def _verdict(runner):
     return {
         "runner": runner,
@@ -66,10 +71,12 @@ def _verdict(runner):
 
 
 def _axe_pages(data):
-    """A dict result or a list of per-page result dicts -> list of page dicts. Fail-closed otherwise."""
+    """A dict result or a NON-EMPTY list of per-page result dicts -> list of page dicts. Fail-closed
+    otherwise. An empty top-level list means zero pages were audited (a real @axe-core/cli run emits >=1
+    page object), so it fails closed rather than reporting a clean count==0 pass."""
     if isinstance(data, dict):
         return [data]
-    if isinstance(data, list):
+    if isinstance(data, list) and data:
         return data
     raise _ShapeError()
 
@@ -120,10 +127,12 @@ def _normalize_pa11y(data, v):
         if not isinstance(it, dict):
             raise _ShapeError()
         if it.get("type") != "error":
-            continue  # warnings / notices are advisory by nature, not counted as failures
+            continue  # warnings / notices are not WCAG failures -> skipped (not added to any count)
         errors += 1
-        code = it.get("code") or ""
-        if any(sc in code for sc in UIUX_OWNED_SC):
+        # Match the SC as a whole dot-delimited code SEGMENT (e.g. '1_4_3'), not a raw substring, so an
+        # a11y-distinctive code is not mis-deferred just because an SC token appears inside another token.
+        segments = (it.get("code") or "").split(".")
+        if any(sc in segments for sc in UIUX_OWNED_SC):
             advisory += 1
         else:
             gating += 1
@@ -148,14 +157,16 @@ def _normalize_lighthouse(data, v):
     v["degraded"] = True
     if data.get("runtimeError") or score is None:
         v["error"] = "lighthouse run errored or accessibility score missing"
-        v["score"] = score if isinstance(score, (int, float)) else None
+        v["score"] = score if _is_real_number(score) else None
         v["pass"] = False
         return v
-    if not isinstance(score, (int, float)) or not (0.0 <= score <= 1.0):
+    if not _is_real_number(score) or not (0.0 <= score <= 1.0):
         raise _ShapeError()
     v["score"] = score
     v["advisory"] = True
-    v["pass"] = True  # an advisory score never hard-fails the gate
+    # pass==True here means "did not hard-fail" (advisory), NOT "objective floor satisfied" — the gate is
+    # always degraded for a lighthouse-only run, so the gate-runner caps confidence <= 0.6.
+    v["pass"] = True
     v["note"] = "lighthouse accessibility score is ADVISORY (weighted subset, not conformance)"
     return v
 

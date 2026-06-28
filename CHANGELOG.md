@@ -13,7 +13,8 @@ The standalone-`a11y` release: completes the v0.7 gate library with the full **`
 design deferred — an auto-detected accessibility-runner sweep + a keyboard/semantics critic — **without
 double-counting** the cheap checks `ui-ux` already owns and **without ever rubber-stamping** ("PASS ≠
 conformance"). Shipped as a patch because it is an **additive feature completing v0.7.0's originally-scoped
-a11y** (per the 0.7.0 deferral note), not a bugfix; the measured Three.js showcase remains **v0.8.0**.
+a11y** (per the 0.7.0 deferral note), not a bugfix — pre-1.0, additive work folds into the open `0.x` line,
+and `0.8.0` is reserved for the measured Three.js showcase.
 
 ### Added
 

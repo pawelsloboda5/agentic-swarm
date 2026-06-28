@@ -47,7 +47,7 @@ def test_pa11y_object_form_errors_only():
     data = {"issues": [
         {"code": "WCAG2AA.Principle1.Guideline1_3.1_3_1.H42.2", "type": "error"},  # structure -> gates
         {"code": "WCAG2AA.Principle1.Guideline1_4.1_4_3.G18", "type": "error"},     # 1_4_3 contrast -> advisory
-        {"code": "X", "type": "warning"},                                          # warning -> advisory
+        {"code": "X", "type": "warning"},                                          # warning -> skipped (not an error)
     ]}
     v = a.normalize(data, "pa11y")
     assert v["gating_violations"] == 1      # only the structure error gates
@@ -96,11 +96,32 @@ def test_lighthouse_runtime_error_is_degraded():
     assert v["degraded"] is True and v["error"] is not None and v["pass"] is False
 
 
-# --- fail-closed on garbage / wrong-shape ---
+# --- axe empty top-level array means zero pages audited => fail closed (not a clean count==0 pass) ---
+def test_axe_empty_top_level_array_fails_closed():
+    v = a.normalize([], "axe")
+    assert v["error"] is not None and v["pass"] is False
+    assert v["gating_violations"] == 0     # but NOT a pass — error is set
+
+
+# --- a JSON bool score is not a valid lighthouse score (bool subclasses int) ---
+def test_lighthouse_bool_score_rejected():
+    v = a.normalize({"categories": {"accessibility": {"score": True}}}, "lighthouse")
+    assert v["error"] is not None and v["pass"] is False
+
+
+# --- fail-closed on garbage / wrong-shape, for EVERY runner (not just axe) ---
 def test_garbage_json_does_not_pass():
-    for bad in [42, "nope", {"unexpected": 1}, {"violations": "notalist"}]:
-        v = a.normalize(bad, "axe")
-        assert v["error"] is not None and v["pass"] is False   # never count==0 => pass
+    cases = {
+        # axe `[]` is empty-pages => fail closed; pa11y `[]` is a clean page (legit pass) so it is NOT here.
+        "axe": [42, "nope", {"unexpected": 1}, {"violations": "notalist"}, []],
+        "pa11y": [42, "nope", {"unexpected": 1}, {"issues": "notalist"}, [1, 2]],   # bare array of non-dicts
+        "lighthouse": [42, "nope", {"categories": {}}, {"categories": {"accessibility": {}}},
+                       {"categories": {"accessibility": {"score": "0.9"}}}],
+    }
+    for runner, bads in cases.items():
+        for bad in bads:
+            v = a.normalize(bad, runner)
+            assert v["error"] is not None and v["pass"] is False, (runner, bad)   # never count==0 => pass
 
 
 def test_unknown_runner_errors():
@@ -118,4 +139,15 @@ def test_cli_exit_codes(tmp_path):
     assert a._main([str(p), "--runner", "axe"]) == 1
 
     p.write_text("{ not json", encoding="utf-8")
-    assert a._main([str(p), "--runner", "axe"]) == 2
+    assert a._main([str(p), "--runner", "axe"]) == 2          # unparseable JSON
+
+    p.write_text(json.dumps({"unexpected": 1}), encoding="utf-8")
+    assert a._main([str(p), "--runner", "axe"]) == 2          # valid JSON, wrong shape -> fail-closed exit 2
+
+
+def test_cli_bad_args():
+    assert a._main([]) == 2                                   # no path, no runner
+    assert a._main(["x.json"]) == 2                           # no --runner
+    assert a._main(["x.json", "--runner"]) == 2               # --runner without a value
+    assert a._main(["x.json", "--runner", "bogus"]) == 2      # unknown runner
+    assert a._main(["x.json", "--frobnicate"]) == 2           # unknown flag

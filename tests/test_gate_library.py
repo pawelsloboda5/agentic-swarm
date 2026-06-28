@@ -123,10 +123,11 @@ def test_a11y_gate_uses_the_normalizer():
     assert os.path.isfile(_A11Y_REPORT), "gates/lib/a11y_report.py must exist"
 
 
-def test_a11y_does_not_regate_uiux_checks():
-    """Single-owner decomposition guard: a11y must defer contrast/alt/name/tap-target to ui-ux (advisory)
-    and never re-gate them; its no-runner path must FLAG (not a borrowed-evidence pass); and it must carry
-    the PASS != conformance caveat. Cheap guard against a future edit silently double-gating ui-ux's checks."""
+def test_a11y_doc_declares_uiux_decomposition():
+    """DOC guard (not behavioral — the behavioral re-gate regression is caught by
+    test_a11y_report.test_only_uiux_owned_violations_do_not_gate_a11y): a11y.md must DECLARE that it defers
+    contrast/alt/name/tap-target to ui-ux (advisory) and never re-gates them, that its no-runner path
+    FLAGS (not a borrowed-evidence pass), and that it carries the PASS != conformance caveat."""
     text = _read(os.path.join(_GATES, "a11y.md")).lower()
     assert "ui-ux" in text, "a11y must reference ui-ux as the owner of the cheap checks"
     assert "advisory" in text, "a11y must surface ui-ux-owned violations as advisory (not gating)"
