@@ -109,6 +109,21 @@ expensive run, and a real SPEC bug was caught + fixed before the freeze.
    *cascade isolation* — never mislabeled. (Here all three are flat, so the point is moot but the
    discipline is in place.)
 
+## Ship-gate (measurement-integrity panel → 0 blockers)
+
+Before shipping, a 5-lens fresh-context adversarial measurement-integrity panel
+([`lib-shipgate.workflow.js`](./lib-shipgate.workflow.js)) audited the showcase (fair comparison · held-out
+guarantee · decomposed-metric honesty + attribution · scorer/isolation correctness · result-not-spun). **All
+five lenses returned `pass` with zero blockers**; the synthesizer elevated **one** blocker under the stricter
+"ships honestly" bar — an inaccurate anti-leak sentence in this file (it claimed `scoring/`/`vectors.json`
+had 0 occurrences, but they appear in the orchestrator's own isolation-*warning* comment). It was a
+documentation-accuracy flaw, **not** a measurement-validity flaw (no real leak; both arms tie at ceiling). It
+was **corrected** (Confounds §1 above), the two dismissed-but-recommended honesty items were folded in (cost
+figures labelled operator-recorded; effort asymmetry disclosed in §7), and the fix was **independently
+re-verified** by a fresh reader — **0 blockers remain**. The panel also re-derived held-out vectors by hand,
+re-ran the instrument anchors (reference 1.00, broken 0.80/0.65, hang 0.975), and confirmed all six frozen
+SHA-256s match `PREREGISTRATION.md §8`.
+
 ## Confounds & integrity notes (named, not hidden)
 
 1. **Anti-leak audit — clean.** Every arm was built in an isolated sandbox with **no `scoring/`
