@@ -4,9 +4,25 @@ The formula is the fixed W3C standard, so the anchor vectors are exact (black-on
 white-on-white = 1:1). The grey boundary (#767676 on white is the canonical darkest grey that passes
 AA normal text) is asserted as a tight range to avoid pinning a hand-computed constant too precisely.
 """
+import json
+import os
+import subprocess
+import sys
+
 import pytest
 
 import wcag_contrast as w
+
+_UTIL = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "skills", "architect", "gates", "lib", "wcag_contrast.py",
+)
+
+
+def _run_cli(*args):
+    return subprocess.run(
+        [sys.executable, _UTIL, *args], capture_output=True, text=True
+    )
 
 
 def test_black_on_white_is_21():
@@ -57,3 +73,32 @@ def test_rejects_bad_hex():
 def test_rejects_unknown_size():
     with pytest.raises(ValueError):
         w.passes(10.0, "enormous")
+
+
+# --- CLI (the bundled machine command IS the objective floor — cover it directly) ---
+
+def test_cli_pass_exits_0_and_reports_pass():
+    r = _run_cli("#000", "#fff")
+    assert r.returncode == 0
+    assert json.loads(r.stdout)["pass"] is True
+
+
+def test_cli_fail_exits_1_and_reports_fail():
+    r = _run_cli("#aaaaaa", "#ffffff", "normal")
+    assert r.returncode == 1
+    assert json.loads(r.stdout)["pass"] is False
+
+
+def test_cli_marginal_subthreshold_does_not_round_up_to_a_pass():
+    # rgb(118,119,118)=#767776 on white is ~4.4962 — a TRUE AA-normal FAIL whose display value rounds
+    # to 4.50. The verdict must be computed on the unrounded ratio, so this must exit 1 / pass:false
+    # even though the reported ratio shows 4.5. (Regression guard for the rounding blocker.)
+    r = _run_cli("#767776", "#ffffff", "normal")
+    out = json.loads(r.stdout)
+    assert out["ratio"] == 4.5  # display rounds up...
+    assert out["pass"] is False and r.returncode == 1  # ...but the verdict is an honest fail
+
+
+def test_cli_bad_input_exits_2():
+    r = _run_cli("#xyz", "#ffffff")
+    assert r.returncode == 2

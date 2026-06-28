@@ -28,6 +28,11 @@ verdict := {
 }
 ```
 
+**Confidence scale** (so "reported" isn't vacuous): **0.9–1.0** = a clean objective machine pass;
+**0.6–0.9** = a critic pass with strong agreement + citations; **≤ 0.6** = any **degraded** pass (missing
+backing skill, browserless critic downgraded to advisory, or a retry-exhausted near-miss). A degraded
+pass MUST cap at ≤ 0.6 — graceful degradation is never allowed to self-report high confidence.
+
 ## The run loop (per applicable gate)
 
 1. **LOAD + validate.** Read `gates/<id>.md`; confirm all **7 keys** are present and `tier` is valid. A
@@ -55,13 +60,13 @@ verdict := {
 5. **INVARIANT (anti-theater).** **No `status: pass` without ≥1 `evidence` item AND a reported `tier` AND
    a reported `confidence`.** A degraded pass is allowed **only when explicitly flagged + surfaced**
    (`degraded: true` + a visible note). A holistic "looks good" with no evidence is not a pass.
-6. **ON FAIL.** Re-brief the workstream with the **exact** `unmet_criteria` and re-run, **bounded N=2**;
-   then emit an honest `status: flag` with `unmet_criteria` enumerated — **never convert a fail to a
-   silent pass.** Confidence reflects attempts-exhausted (do not reset to 1.0 on a barely-passing retry).
-   Advisory fails never re-run.
+6. **ON FAIL.** Re-brief the workstream with the **exact** `unmet_criteria` and re-run, **bounded to N=2
+   re-attempts (i.e. ≤3 runs total)**; then emit an honest `status: flag` with `unmet_criteria` enumerated
+   — **never convert a fail to a silent pass.** Confidence reflects attempts-exhausted (do not reset to
+   1.0 on a barely-passing retry). Advisory fails never re-run.
 7. **GRACEFUL ≠ SILENT.**
-   - Missing `backing_skill` ⇒ still run the bundled criteria, set `degraded: true`, **lower confidence**,
-     emit a visible note.
+   - Missing `backing_skill` ⇒ still run the bundled criteria, set `degraded: true`, **lower confidence
+     (a degraded pass caps `confidence` at ≤ 0.6)**, emit a visible note.
    - Missing optional runner binary (axe / pa11y / Lighthouse / Playwright) ⇒ **skip that sub-check (not
      fail)** with an explicit "runner unavailable; bundled checks only" note.
 

@@ -58,10 +58,23 @@ def test_each_gate_id_matches_filename():
 def test_runner_encodes_the_contract():
     runner = _read(_RUNNER)
     low = runner.lower()
-    # anti-theater invariant: no pass without evidence + tier + confidence
-    assert "anti-theater" in low or "anti theater" in low
-    assert "evidence" in low and "confidence" in low
-    assert re.search(r"no\s+`?status:\s*pass`?|no\s+\*\*?status:\s*pass", low) or "without" in low
+    # Anti-theater invariant must be stated as a PROHIBITION, not merely a keyword. Mutation-resistant:
+    # require a single line that co-locates "status: pass" + "evidence" with a negation ("no"/"never")
+    # binding the pass. An inverted rule ("a status: pass MAY exist without evidence") has no negation
+    # before "status: pass" and must therefore FAIL this assertion.
+    invariant_ok = False
+    for ln in runner.splitlines():
+        l = ln.lower()
+        if "status: pass" in l and "evidence" in l:
+            prefix = l.split("status: pass")[0]
+            if "no " in prefix or "never" in prefix or prefix.rstrip().endswith("no"):
+                invariant_ok = True
+                break
+    assert invariant_ok, (
+        "gate-runner must PROHIBIT an evidence-less pass: a 'no/never ... status: pass without evidence' "
+        "line (keyword presence alone is insufficient — anti-theater)"
+    )
+    assert "tier" in low and "confidence" in low, "invariant must also require tier + confidence"
     # verdict schema keys present
     for key in ("gate_id", "status", "degraded", "unmet_criteria", "skill_used"):
         assert key in runner, "runner missing verdict key '%s'" % key

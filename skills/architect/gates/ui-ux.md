@@ -13,10 +13,12 @@ if a browser is available (else it downgrades to advisory with reported confiden
 - **criteria:**
   - **Objective floor (browser-free, always gates):**
     1. **WCAG AA contrast** on every token pair / text-on-background used — computed with
-       [`lib/wcag_contrast.py`](lib/wcag_contrast.py): `python lib/wcag_contrast.py <fg> <bg> <size>`
-       (exit 0 = pass). Normal ≥4.5, large (≥24px or ≥18.66px bold) ≥3.0, UI components ≥3.0. Unresolvable
-       pairs (gradients, image-behind-text, opacity stacks, unresolved tokens) are marked **advisory**,
-       never silently passed.
+       [`lib/wcag_contrast.py`](lib/wcag_contrast.py): `python gates/lib/wcag_contrast.py <fg> <bg> <size>`
+       (run from the skill root; **exit 0 = pass**). Normal ≥4.5, large (≥24px or ≥18.66px bold) ≥3.0, UI
+       components ≥3.0. Unresolvable pairs (gradients, image-behind-text, opacity stacks, unresolved
+       tokens) are marked **advisory**, never silently passed — **but if the *majority* of text pairs are
+       unresolvable, the objective floor can't be satisfied ⇒ `flag`, not pass** (the floor must retain at
+       least one enforced, machine-checked contrast result; an all-advisory floor is not a pass).
     2. **Consistent spacing scale** — spacing values come from a small defined scale, not arbitrary px.
     3. **Interaction states present** — `:hover` AND `:focus-visible` defined for interactive elements.
     4. **Responsive** — breakpoints present; no horizontal overflow at the standard widths.

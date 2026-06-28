@@ -63,8 +63,11 @@ def _main(argv):
     fg, bg = argv[0], argv[1]
     size = argv[2] if len(argv) > 2 else "normal"
     try:
-        r = round(ratio(fg, bg), 2)
-        ok = passes(r, size)
+        # Decide the verdict on the UNROUNDED ratio; round only for display. (Rounding before the
+        # compare would let a true fail like 4.4962 round up to 4.50 and silently pass the gate.)
+        raw = ratio(fg, bg)
+        ok = passes(raw, size)
+        r = round(raw, 2)
     except ValueError as exc:
         sys.stderr.write("error: %s\n" % exc)
         return 2
