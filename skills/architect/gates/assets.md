@@ -7,7 +7,7 @@ Run via [`../reference/gate-runner.md`](../reference/gate-runner.md). Mixed tier
 
 - **id:** `assets`
 - **applies_when:** the workstream references assets (images, icons, fonts, media) or renders HTML.
-- **tier:** `mixed` (objective floor + advisory)
+- **tier:** `mixed` (objective floor + a critic rung [the `verifier`] + an advisory layer [AI-filler])
 - **criteria:**
   - **Objective floor (gates):**
     1. **No placeholder markers** — a content sweep (scoped to the workstream's files, with an allowlist

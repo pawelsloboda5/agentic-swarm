@@ -22,7 +22,8 @@ into briefs — a tiered, objective-anchored gate library that reports confidenc
   `degraded: true` + lowered confidence + a visible note, never a silent pass).
 - **Starter gate library** `{tests, assets, ui-ux}` (`skills/architect/gates/*.md`) — each a
   self-contained 7-key definition (`id, applies_when, tier, criteria, verifier, confidence,
-  backing_skill`): **tests** (objective — green AND >0 collected, typecheck/build, diff-coverage),
+  backing_skill`): **tests** (mixed: objective floor — green AND >0 collected, typecheck/build,
+  diff-coverage — + a critic rung that checks the suite exercises the change),
   **assets** (mixed — placeholder sweep + stdlib stat + SVG well-formed + favicon; AI-filler advisory),
   **ui-ux** (mixed — WCAG contrast + spacing/states/breakpoints + folded cheap a11y; screenshot critic
   if a browser is available, else advisory). External skills are optional enhancers only (portability).

@@ -11,11 +11,15 @@ critic; it never requires an external skill or binary to function.
 gate := {
   id            // 'tests' | 'assets' | 'ui-ux' | ...   (matches the gates/<id>.md filename)
   applies_when  // when this gate is relevant (use-case / output triggers)
-  tier          // 'objective' | 'critic' | 'advisory'
+  tier          // 'objective' | 'critic' | 'advisory' | 'mixed'
                 //   ('mixed' = an objective floor that GATES + a non-gating rung: a separate-context
-                //    critic rung (e.g. ui-ux, tests) AND/OR an advisory layer (e.g. assets))
+                //    critic rung (e.g. ui-ux's screenshot critic, tests's exercise-check, assets's
+                //    placeholder-genuineness check) AND/OR an advisory layer (e.g. assets's AI-filler))
   criteria[]    // CONCRETE, self-contained pass conditions (shipped IN the gate file)
-  verifier      // a separate-context adversarial-verify prompt that checks the criteria
+  verifier      // a separate-context adversarial-verify prompt that checks the criteria. EVERY gate
+                //   declares one (7-key schema): for 'objective' it documents the check the machine
+                //   command embodies (run only as optional confirmation); for 'critic'/'mixed' the
+                //   runner MUST execute it as the critic rung — a declared verifier is never dead.
   confidence    // how trustworthy this verdict is — REPORTED, never a silent pass
   backing_skill // OPTIONAL external skill that strengthens the gate IF installed
 }

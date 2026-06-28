@@ -48,6 +48,27 @@ def test_each_gate_tier_is_valid():
         assert m.group(1) in VALID_TIERS, "gates/%s.md tier '%s' invalid" % (gid, m.group(1))
 
 
+def test_tier_labels_consistent_across_docs():
+    """The tier word describing each MVP gate must match the gate file's DECLARED tier — in the
+    gate-runner starter table AND in SKILL.md's '(tier)' annotation. Guards the cross-file tier-label
+    drift class (e.g. SKILL.md/CHANGELOG saying 'objective' after a gate was re-tiered to 'mixed')."""
+    skill = _read(os.path.join(_REPO_ROOT, "skills", "architect", "SKILL.md"))
+    runner = _read(_RUNNER)
+    for gid in MVP_GATES:
+        gate = _read(os.path.join(_GATES, gid + ".md"))
+        declared = re.search(r"\*\*tier:\*\*\s*`?([a-z]+)`?", gate).group(1)
+        sm = re.search(r"gates/%s\.md\)\s*\((\w+)" % re.escape(gid), skill)
+        assert sm, "SKILL.md must annotate gates/%s.md with a (tier)" % gid
+        assert sm.group(1) == declared, (
+            "SKILL.md labels %s '(%s)' but the gate file declares '%s'" % (gid, sm.group(1), declared)
+        )
+        rm = re.search(r"\|\s*%s\s*\|[^|]*\|\s*([a-z]+)\s*\|" % re.escape(gid), runner)
+        assert rm, "gate-runner starter table must have a row for %s" % gid
+        assert rm.group(1) == declared, (
+            "gate-runner table labels %s '%s' but the gate file declares '%s'" % (gid, rm.group(1), declared)
+        )
+
+
 def test_each_gate_id_matches_filename():
     for gid in MVP_GATES:
         text = _read(os.path.join(_GATES, gid + ".md"))

@@ -145,7 +145,7 @@ confidence. On fail, re-brief the workstream with the **exact unmet criteria** a
 then honestly `flag` the remainder; missing backing skill/runner degrades *loudly* (`degraded: true` +
 lowered confidence), never silently.
 
-> **Starter gate library (v0.7.0):** [`gates/tests.md`](gates/tests.md) (objective),
+> **Starter gate library (v0.7.0):** [`gates/tests.md`](gates/tests.md) (mixed),
 > [`gates/assets.md`](gates/assets.md) (mixed), [`gates/ui-ux.md`](gates/ui-ux.md) (mixed; uses the
 > bundled [`gates/lib/wcag_contrast.py`](gates/lib/wcag_contrast.py) WCAG util) — each a self-contained
 > 7-key gate file. Cheap a11y is folded into `ui-ux`; the **full standalone `a11y`** gate (axe/pa11y/
