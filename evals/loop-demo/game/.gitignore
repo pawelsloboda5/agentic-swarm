@@ -1,0 +1,4 @@
+node_modules/
+.workstreams/
+.contract.md
+scoring/scorecards_static.json

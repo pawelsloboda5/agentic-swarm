@@ -1,0 +1,3071 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Tower Defense — Three.js</title>
+<style id="ui-style">
+
+:root{
+  /* surfaces (backgrounds — not text) */
+  --bg-deep:#0c0f16; --panel:#161c2b; --panel-2:#202a40; --line:#2f3b57;
+  /* text + semantic accents (every pair used below is AA-verified, §5) */
+  --text:#f5f7fa; --muted:#c5d0e6; --accent:#ffd54a; --danger:#ff6b6b;
+  --success:#5ad1a0; --info:#6db8ff;
+  /* on-fill inks */
+  --ink:#11151c; --ink-info:#0c0f16; --on-danger:#ffffff; --danger-deep:#b3402f;
+
+  /* spacing scale (consistent rhythm everywhere) */
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+  --space-5:24px; --space-6:32px; --space-7:48px;
+
+  /* radii + elevation + motion */
+  --r-sm:6px; --r-md:10px;
+  --bevel:10px;                         /* cut-corner size for the console look */
+  --ring:0 0 0 2px var(--info);         /* focus ring */
+  --shadow-1:0 2px 6px rgba(0,0,0,.45);
+  --shadow-2:0 10px 28px rgba(0,0,0,.55);
+  --ease:cubic-bezier(.2,.7,.2,1);
+  --hud-font:ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  --num-font:ui-monospace,"Cascadia Code",Menlo,Consolas,monospace;
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg-deep);color:var(--text);
+  font-family:var(--hud-font);-webkit-font-smoothing:antialiased;overflow:hidden}
+
+#game-root{position:fixed;inset:0;z-index:0}
+#game-canvas{position:fixed;inset:0;display:block;width:100%;height:100%;z-index:0}
+
+/* HUD layers: containers ignore pointer events so map clicks reach the canvas;
+   interactive controls opt back in. */
+.hud{position:fixed;z-index:10;pointer-events:none;color:var(--text)}
+.hud button,.hud .shop-card,.hud [data-interactive]{pointer-events:auto}
+
+/* shared "console panel" surface: cut top-left + bottom-right corners */
+.panelish{
+  background:linear-gradient(180deg,var(--panel) 0%,var(--bg-deep) 140%);
+  border:1px solid var(--line);
+  clip-path:polygon(var(--bevel) 0,100% 0,100% calc(100% - var(--bevel)),
+                    calc(100% - var(--bevel)) 100%,0 100%,0 var(--bevel));
+  box-shadow:var(--shadow-1);
+}
+
+/* ---------- top status bar (banner landmark) ---------- */
+#hud-top{top:0;left:0;right:0;display:flex;align-items:center;gap:var(--space-4);
+  padding:var(--space-3) var(--space-5);
+  background:linear-gradient(180deg,rgba(12,15,22,.94),rgba(12,15,22,.66));
+  border-bottom:1px solid var(--line);backdrop-filter:blur(6px)}
+#hud-top::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;
+  background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.7}
+.hud-stat{display:flex;align-items:center;gap:var(--space-2);
+  padding:var(--space-1) var(--space-3);border:1px solid var(--line);border-radius:var(--r-sm);
+  background:rgba(32,42,64,.35)}
+.hud-icon{font-size:15px;line-height:1}
+#stat-lives .hud-icon{color:var(--danger)}
+#stat-gold  .hud-icon{color:var(--accent)}
+.hud-label{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.hud-val{font-family:var(--num-font);font-variant-numeric:tabular-nums;
+  font-weight:700;font-size:17px;color:var(--text);min-width:2ch;text-align:right}
+#stat-lives .hud-val{color:var(--danger)}
+#stat-gold  .hud-val{color:var(--accent)}
+#stat-score .hud-val{color:var(--text)}
+#stat-wave  .hud-val{color:var(--info)}
+#btn-mute{margin-left:auto}
+
+/* low-life pulse on the lives chip (motion-safe) */
+.hud-stat.is-critical{border-color:var(--danger);
+  animation:pulseCrit 1.1s var(--ease) infinite}
+@keyframes pulseCrit{0%,100%{box-shadow:0 0 0 0 rgba(255,107,107,0)}
+  50%{box-shadow:0 0 0 3px rgba(255,107,107,.30)}}
+
+/* ---------- buttons (shared) ---------- */
+.hud-btn{font-family:var(--hud-font);font-weight:650;font-size:13px;letter-spacing:.03em;
+  color:var(--text);background:var(--panel-2);border:1px solid var(--line);
+  border-radius:var(--r-sm);padding:var(--space-2) var(--space-4);cursor:pointer;
+  display:inline-flex;align-items:center;gap:var(--space-2);
+  transition:transform .12s var(--ease),background .15s var(--ease),
+             border-color .15s var(--ease),box-shadow .15s var(--ease)}
+.hud-btn:hover{background:#283450;border-color:var(--info);transform:translateY(-1px)}
+.hud-btn:active{transform:translateY(0)}
+.hud-btn:focus-visible{outline:none;box-shadow:var(--ring);border-color:var(--info)}
+.hud-btn[disabled],.hud-btn[aria-disabled="true"]{opacity:.45;cursor:not-allowed;
+  transform:none;box-shadow:none}
+
+/* primary action (Start Wave): --accent fill + --ink text => 12.95:1 */
+.hud-btn.primary{background:var(--accent);color:var(--ink);border-color:var(--accent);
+  font-weight:750;text-shadow:none}
+.hud-btn.primary:hover{background:#ffe07a;border-color:#ffe07a;
+  box-shadow:0 4px 18px rgba(255,213,74,.30)}
+.hud-btn.primary:focus-visible{box-shadow:0 0 0 2px var(--ink),0 0 0 4px var(--accent)}
+
+/* destructive (Sell): --danger-deep fill + white text => 5.69:1 (never --danger) */
+.hud-btn.danger{background:var(--danger-deep);color:var(--on-danger);border-color:var(--danger-deep)}
+.hud-btn.danger:hover{background:#c8493a;border-color:#c8493a}
+
+#btn-mute{font-size:16px;padding:var(--space-2);min-width:38px;justify-content:center}
+
+/* ---------- tower shop (complementary landmark, left rail) ---------- */
+#hud-shop{left:var(--space-4);top:50%;transform:translateY(-50%);
+  display:flex;flex-direction:column;gap:var(--space-3);width:188px}
+.shop-card{position:relative;text-align:left;cursor:pointer;color:var(--text);
+  background:linear-gradient(180deg,var(--panel),var(--bg-deep) 160%);
+  border:1px solid var(--line);border-left:3px solid var(--line);
+  border-radius:var(--r-md);padding:var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  display:grid;grid-template-columns:1fr auto;grid-template-rows:auto auto;
+  column-gap:var(--space-2);row-gap:var(--space-1);
+  transition:transform .12s var(--ease),border-color .15s var(--ease),
+             background .15s var(--ease),box-shadow .15s var(--ease)}
+.shop-card:hover{background:var(--panel-2);transform:translateX(2px);box-shadow:var(--shadow-1)}
+.shop-card:focus-visible{outline:none;box-shadow:var(--ring);border-color:var(--info)}
+.shop-card[aria-pressed="true"]{border-color:var(--accent);
+  box-shadow:0 0 0 1px var(--accent),0 6px 20px rgba(0,0,0,.5);transform:translateX(2px)}
+.shop-card[aria-disabled="true"]{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}
+/* per-tower accent stripe matches the 3D tower color tokens */
+.shop-card[data-tower="arrow"]{border-left-color:var(--accent)}
+.shop-card[data-tower="cannon"]{border-left-color:var(--danger)}
+.shop-card[data-tower="frost"]{border-left-color:var(--info)}
+.shop-name{grid-column:1;grid-row:1;font-weight:700;font-size:14px;letter-spacing:.02em}
+.shop-key{grid-column:2;grid-row:1;font-family:var(--num-font);font-size:11px;font-weight:700;
+  color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 6px;
+  align-self:start;justify-self:end}
+.shop-cost{grid-column:1;grid-row:2;display:flex;align-items:center;gap:var(--space-1);
+  font-family:var(--num-font);font-variant-numeric:tabular-nums;font-size:13px;font-weight:700;
+  color:var(--success)}
+.shop-cost.is-broke{color:var(--danger)}
+.shop-cost .coin{color:var(--accent)}
+.shop-stats{grid-column:2;grid-row:2;align-self:end;justify-self:end;
+  font-family:var(--num-font);font-size:11px;color:var(--muted);letter-spacing:.02em}
+
+/* ---------- selected-tower panel ---------- */
+#hud-tower-panel{left:var(--space-4);bottom:var(--space-6);width:240px;
+  padding:var(--space-4);display:flex;flex-direction:column;gap:var(--space-3)}
+#tp-title{font-weight:750;font-size:15px;letter-spacing:.02em;color:var(--text)}
+#tp-title .tp-sub{display:block;font-weight:600;font-size:12px;color:var(--muted);
+  margin-top:2px;letter-spacing:.01em}
+#hud-tower-panel .tp-row{display:flex;gap:var(--space-2)}
+#hud-tower-panel #btn-upgrade,#hud-tower-panel #btn-sell{flex:1;justify-content:center}
+#btn-tp-close{position:absolute;top:var(--space-2);right:var(--space-2);
+  min-width:30px;padding:var(--space-1) var(--space-2);font-size:13px}
+
+/* ---------- bottom wave controls (contentinfo landmark) ---------- */
+#hud-bottom{left:50%;bottom:var(--space-5);transform:translateX(-50%);
+  display:flex;gap:var(--space-3);padding:var(--space-2);align-items:center}
+#btn-start-wave{font-size:14px;padding:var(--space-3) var(--space-6)}
+
+/* ---------- toast ---------- */
+#hud-toast{top:var(--space-7);left:50%;transform:translateX(-50%) translateY(-8px);
+  z-index:50;pointer-events:none;max-width:min(86vw,460px);
+  padding:var(--space-2) var(--space-4);border-radius:var(--r-sm);
+  background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow-2);
+  font-weight:650;font-size:13px;color:var(--text);text-align:center;
+  opacity:0;transition:opacity .2s var(--ease),transform .2s var(--ease)}
+#hud-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+#hud-toast.kind-info{border-color:var(--info);color:var(--info)}
+#hud-toast.kind-good{border-color:var(--success);color:var(--success)}
+#hud-toast.kind-bad{border-color:var(--danger);color:var(--danger)}
+
+/* ---------- overlay (modal dialog) ---------- */
+#overlay{position:fixed;inset:0;z-index:100;display:grid;place-items:center;
+  background:rgba(6,9,14,.72);backdrop-filter:blur(4px)}
+.overlay-card{position:relative;width:min(92vw,420px);text-align:center;
+  padding:var(--space-7) var(--space-6);
+  background:linear-gradient(180deg,var(--panel),var(--bg-deep));
+  border:1px solid var(--line);border-radius:var(--r-md);box-shadow:var(--shadow-2)}
+/* tactical corner ticks — a small intentional flourish, not a generic card */
+.overlay-card::before,.overlay-card::after{content:"";position:absolute;width:18px;height:18px;
+  border:2px solid var(--accent);opacity:.85}
+.overlay-card::before{top:10px;left:10px;border-right:none;border-bottom:none}
+.overlay-card::after{bottom:10px;right:10px;border-left:none;border-top:none}
+#overlay-title{margin:0 0 var(--space-3);font-size:30px;font-weight:800;letter-spacing:.02em;
+  color:var(--accent)}
+#overlay-msg{margin:0 auto var(--space-6);max-width:34ch;line-height:1.55;color:var(--muted);
+  font-size:14px}
+#overlay-action{font-size:15px;padding:var(--space-3) var(--space-7)}
+.overlay-hint{margin-top:var(--space-4);font-size:12px;color:var(--muted);
+  font-family:var(--num-font);letter-spacing:.02em}
+.overlay-hint kbd{background:var(--panel-2);border:1px solid var(--line);border-radius:4px;
+  padding:1px 6px;color:var(--text);font-size:11px}
+
+.hidden{display:none !important}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0,0,0,0);white-space:nowrap;border:0}
+
+/* ---------- responsive: narrow screens reflow the shop to a bottom rail ---- */
+@media (max-width:720px){
+  #hud-top{padding:var(--space-2) var(--space-3);gap:var(--space-2);flex-wrap:wrap}
+  .hud-val{font-size:15px}
+  .hud-label{font-size:10px}
+  #hud-shop{top:auto;bottom:calc(var(--space-7) + var(--space-5));left:var(--space-2);
+    right:var(--space-2);width:auto;transform:none;
+    flex-direction:row;overflow-x:auto;gap:var(--space-2);padding-bottom:var(--space-1)}
+  .shop-card{min-width:148px;flex:0 0 auto}
+  #hud-tower-panel{left:var(--space-2);right:var(--space-2);width:auto;bottom:var(--space-3)}
+  #hud-bottom{bottom:var(--space-2);gap:var(--space-2)}
+  #btn-start-wave{padding:var(--space-3) var(--space-4)}
+  #overlay-title{font-size:24px}
+}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.001ms !important;animation-iteration-count:1 !important;
+    transition-duration:.001ms !important}
+}
+
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="game-root">
+
+<canvas id="game-canvas"></canvas>
+
+<header id="hud-top" class="hud" role="banner" aria-label="Game status">
+  <h2 class="sr-only">Game status</h2>
+  <div class="hud-stat" id="stat-lives" aria-label="Lives 20"><span class="hud-icon" aria-hidden="true">&#9829;</span><span class="hud-val" id="val-lives">20</span></div>
+  <div class="hud-stat" id="stat-gold" aria-label="Gold 120"><span class="hud-icon" aria-hidden="true">&#9679;</span><span class="hud-val" id="val-gold">120</span></div>
+  <div class="hud-stat" id="stat-score" aria-label="Score 0"><span class="hud-label">Score</span><span class="hud-val" id="val-score">0</span></div>
+  <div class="hud-stat" id="stat-wave" aria-label="Wave 0 of 20"><span class="hud-label">Wave</span><span class="hud-val" id="val-wave">0/20</span></div>
+  <button id="btn-mute" class="hud-btn" aria-label="Toggle sound" aria-pressed="false">&#128266;</button>
+</header>
+
+<aside id="hud-shop" class="hud panelish" aria-label="Tower shop">
+  <h2 class="sr-only">Tower shop</h2>
+  <button class="shop-card" id="shop-arrow" data-tower="arrow" aria-pressed="false" aria-keyshortcuts="1"></button>
+  <button class="shop-card" id="shop-cannon" data-tower="cannon" aria-pressed="false" aria-keyshortcuts="2"></button>
+  <button class="shop-card" id="shop-frost" data-tower="frost" aria-pressed="false" aria-keyshortcuts="3"></button>
+</aside>
+
+<div id="hud-tower-panel" class="hud panelish hidden" role="region" aria-label="Selected tower">
+  <div id="tp-title"></div>
+  <div class="tp-row">
+    <button id="btn-upgrade" class="hud-btn primary">Upgrade</button>
+    <button id="btn-sell" class="hud-btn danger">Sell</button>
+  </div>
+  <button id="btn-tp-close" class="hud-btn" aria-label="Close tower panel">&#10005;</button>
+</div>
+
+<footer id="hud-bottom" class="hud" role="contentinfo" aria-label="Wave controls">
+  <button id="btn-start-wave" class="hud-btn primary">Start Wave</button>
+  <button id="btn-pause" class="hud-btn">Pause</button>
+</footer>
+
+<div id="hud-toast" class="hidden" role="status" aria-live="polite"></div>
+
+<div id="overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="overlay-title" aria-describedby="overlay-msg">
+  <div class="overlay-card">
+    <h1 id="overlay-title">Tower Defense</h1>
+    <p id="overlay-msg"></p>
+    <button id="overlay-action" class="hud-btn primary">Play</button>
+    <p class="overlay-hint">Pick a tower <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> &middot; place on the map &middot; <kbd>P</kbd> pause &middot; <kbd>M</kbd> mute</p>
+  </div>
+</div>
+
+</div>
+<script type="module">
+import * as THREE from 'three';
+
+/* ---- shared namespace bootstrap (contract 3.0) ------------------------------ */
+window.GAME = window.GAME || {};
+GAME.events = GAME.events || (() => {
+  const m = new Map();
+  return {
+    on:  (e, fn) => { (m.get(e) || m.set(e, []).get(e)).push(fn); },
+    off: (e, fn) => { const a = m.get(e); if (a) m.set(e, a.filter(f => f !== fn)); },
+    emit:(e, p)  => { (m.get(e) || []).slice().forEach(fn => fn(p)); }
+  };
+})();
+GAME.config = GAME.config || {
+  GRID_COLS: 16, GRID_ROWS: 10, TILE: 2,
+  START_LIVES: 20, START_GOLD: 120,
+  PATH: [ {c:0,r:5},{c:4,r:5},{c:4,r:2},{c:9,r:2},{c:9,r:7},{c:13,r:7},{c:13,r:5},{c:15,r:5} ],
+  TOWERS: {
+    arrow:  { key:'arrow',  name:'Arrow',  cost:50,  range:5.5, dps:14, fireRate:2.0, color:'--accent',  upgradeCost:40 },
+    cannon: { key:'cannon', name:'Cannon', cost:100, range:4.5, dps:34, fireRate:0.8, splash:1.6, color:'--danger', upgradeCost:80 },
+    frost:  { key:'frost',  name:'Frost',  cost:75,  range:5.0, dps:6,  fireRate:1.5, slow:0.45, color:'--info',   upgradeCost:60 }
+  },
+  WAVE_BASE_COUNT: 8, WAVE_GROWTH: 1.25, ENEMY_HP_GROWTH: 1.18, MAX_WAVES: 20,
+  SELL_REFUND: 0.6
+};
+GAME.state = GAME.state || {
+  lives: 20, gold: 120, score: 0, wave: 0, phase: 'menu',
+  enemies: [], towers: [], projectiles: [],
+  selectedTowerType: null, hoverTile: null, selectedTower: null,
+  waveActive: false, spawnQueue: [], enemiesAlive: 0,
+  time: 0, dt: 0, muted: false
+};
+
+/* ===== GAME.art (workstream: art-audio) ===== */
+// =============================================================================
+// GAME.art  —  workstream: art-audio
+// Procedural geometry + materials, lighting mood, hit/particle FX, and
+// procedural WebAudio SFX. ZERO external assets — every mesh, color and sound
+// is synthesized in code. Three.js (r0.180.0) via the contract importmap only.
+//
+// Implements the contract §3.4 `GAME.art` surface EXACTLY:
+//   init()                       — build material/geometry caches; arm WebAudio (lazy)
+//   makeTileMesh(kind)           — 'build'|'path'|'base' -> THREE.Object3D
+//   makeEnemyMesh(type)          — 'grunt'|'runner'|'tank' -> THREE.Object3D
+//   makeTowerMesh(type, level)   — 'arrow'|'cannon'|'frost' -> THREE.Object3D (upgrades visibly)
+//   makeProjectileMesh(type)     — 'arrow'|'cannon'|'frost' -> THREE.Object3D
+//   hitFX(pos, kind)             — short-lived particle burst -> updatable handle
+//   muzzleFX(pos)                — small flash at a tower -> updatable handle
+//   sfx(name)                    — synthesized WebAudio cue (respects GAME.state.muted)
+//   color(token)                 — resolve a '--token' CSS var -> THREE.Color (single source of truth)
+//
+// Optional, contract-compatible helpers the integrator (engine) MAY call — they
+// add NO new globals and never touch game rules:
+//   makeLighting()               — THREE.Group of hemi+dir(shadow)+ambient+fill, the mood
+//   applyRenderer(renderer)      — set ACESFilmic tone mapping + exposure (engine may do this itself)
+//   makeSceneFog()               — THREE.Fog tuned to --bg-deep
+//   attachScene(scene)           — let art auto-manage FX lifecycle (add/tick/remove)
+//   update(dt)                   — tick all live FX (call from engine.update); safe no-op if none
+//   setMuted(bool) / toggleMute()/ isMuted() — sound toggle helpers for the mute button
+//   armAudioGesture()            — resume the AudioContext on the next user gesture (autoplay policy)
+//
+// art holds NO game rules and never mutates gameplay scalars.
+// =============================================================================
+/* THREE imported once at top of module */
+(function () {
+  const GAME = (window.GAME = window.GAME || {});
+
+  // --- Fallback palette (used only if the CSS vars are not yet on :root, e.g.
+  //     headless/unit context). Mirrors contract §5 verbatim so 3D == HUD. ----
+  const TOKEN_FALLBACK = {
+    '--bg-deep': '#0c0f16', '--panel': '#161c2b', '--panel-2': '#202a40',
+    '--line': '#2f3b57', '--text': '#f5f7fa', '--muted': '#c5d0e6',
+    '--accent': '#ffd54a', '--danger': '#ff6b6b', '--success': '#5ad1a0',
+    '--info': '#6db8ff', '--ink': '#11151c', '--ink-info': '#0c0f16',
+    '--on-danger': '#ffffff', '--danger-deep': '#b3402f'
+  };
+
+  const art = {
+    _ready: false,
+    _colorCache: new Map(),     // token -> THREE.Color
+    _geo: {},                   // shared geometry cache
+    _scene: null,               // optional, for auto-FX lifecycle
+    _fx: [],                    // live FX handles when scene attached
+    // ---- audio state ----
+    _audio: null,               // AudioContext
+    _master: null,              // master GainNode
+    _noiseBuf: null,            // cached white-noise AudioBuffer
+    _armed: false               // gesture listener installed
+  };
+
+  // ----------------------------------------------------------------------------
+  // color(token) — resolve a '--token' design token to a THREE.Color. Cached.
+  // Single source of truth: reads the live CSS custom property so the board and
+  // the HUD share one palette. Accepts '--accent' or 'accent' or a raw hex.
+  // ----------------------------------------------------------------------------
+  art.color = function (token) {
+    if (token instanceof THREE.Color) return token.clone();
+    let key = String(token).trim();
+    if (key && key[0] !== '-' && key[0] !== '#') key = '--' + key;
+    if (art._colorCache.has(key)) return art._colorCache.get(key).clone();
+
+    let hex = key;
+    if (key[0] === '-') {
+      let v = '';
+      try {
+        v = getComputedStyle(document.documentElement).getPropertyValue(key).trim();
+      } catch (_) { /* no DOM */ }
+      hex = v || TOKEN_FALLBACK[key] || '#ff00ff';
+    }
+    const c = new THREE.Color(hex);
+    art._colorCache.set(key, c);
+    return c.clone();
+  };
+
+  // Invalidate the color cache if the theme is swapped at runtime.
+  art.refreshTokens = function () { art._colorCache.clear(); };
+
+  // ----------------------------------------------------------------------------
+  // Material factory — physically-lit standard materials with token colors and a
+  // tuned emissive so the dark board reads with punch. Cached by signature.
+  // ----------------------------------------------------------------------------
+  const _matCache = new Map();
+  function mat(token, opts) {
+    opts = opts || {};
+    const sig = token + '|' + JSON.stringify(opts);
+    if (_matCache.has(sig)) return _matCache.get(sig);
+    const col = art.color(token);
+    const m = new THREE.MeshStandardMaterial({
+      color: col,
+      roughness: opts.roughness != null ? opts.roughness : 0.55,
+      metalness: opts.metalness != null ? opts.metalness : 0.15,
+      flatShading: !!opts.flat,
+      transparent: !!opts.transparent,
+      opacity: opts.opacity != null ? opts.opacity : 1
+    });
+    const em = opts.emissive != null ? opts.emissive : 0;
+    if (em > 0) {
+      m.emissive = art.color(opts.emissiveToken || token);
+      m.emissiveIntensity = em;
+    }
+    _matCache.set(sig, m);
+    return m;
+  }
+
+  // Cached shared geometry getter.
+  function geo(key, build) {
+    if (!art._geo[key]) art._geo[key] = build();
+    return art._geo[key];
+  }
+
+  function tileSize() {
+    return (GAME.config && GAME.config.TILE) ? GAME.config.TILE : 2;
+  }
+
+  // ----------------------------------------------------------------------------
+  // init() — build caches and arm audio. No DOM mutation, no scene creation.
+  // ----------------------------------------------------------------------------
+  art.init = function () {
+    if (art._ready) return art;
+    // Warm a few shared geometries (cheap; avoids per-spawn allocation).
+    const T = tileSize();
+    geo('tileSlab', () => new THREE.BoxGeometry(T * 0.94, 0.32, T * 0.94));
+    geo('tilePath', () => new THREE.BoxGeometry(T * 0.98, 0.16, T * 0.98));
+    geo('ico', () => new THREE.IcosahedronGeometry(0.5, 0));
+    geo('octa', () => new THREE.OctahedronGeometry(0.5, 0));
+    geo('sphere', () => new THREE.SphereGeometry(0.5, 16, 12));
+    art._armed || art.armAudioGesture();
+    art._ready = true;
+    return art;
+  };
+
+  // ============================================================================
+  // GEOMETRY FACTORIES
+  // ============================================================================
+
+  // --- Tiles ------------------------------------------------------------------
+  art.makeTileMesh = function (kind) {
+    const T = tileSize();
+    const g = new THREE.Group();
+    g.userData.kind = kind;
+
+    if (kind === 'path') {
+      const slab = new THREE.Mesh(
+        geo('tilePath', () => new THREE.BoxGeometry(T * 0.98, 0.16, T * 0.98)),
+        mat('--bg-deep', { roughness: 0.95, metalness: 0.0 })
+      );
+      slab.position.y = 0.08;
+      slab.receiveShadow = true;
+      g.add(slab);
+      // Faint travel groove glow so the route reads on the dark board.
+      const groove = new THREE.Mesh(
+        new THREE.BoxGeometry(T * 0.6, 0.02, T * 0.6),
+        mat('--line', { emissive: 0.5, emissiveToken: '--info', roughness: 0.6 })
+      );
+      groove.position.y = 0.17;
+      g.add(groove);
+      return g;
+    }
+
+    if (kind === 'base') {
+      const pad = new THREE.Mesh(
+        new THREE.CylinderGeometry(T * 0.55, T * 0.6, 0.3, 24),
+        mat('--panel-2', { roughness: 0.5, metalness: 0.3 })
+      );
+      pad.position.y = 0.15; pad.receiveShadow = true; pad.castShadow = true;
+      g.add(pad);
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(T * 0.5, 0.06, 8, 32),
+        mat('--accent', { emissive: 1.1 })
+      );
+      ring.rotation.x = Math.PI / 2; ring.position.y = 0.34;
+      g.add(ring);
+      // Floating energy core — the thing you defend.
+      const core = new THREE.Mesh(
+        geo('octa', () => new THREE.OctahedronGeometry(0.5, 0)),
+        mat('--accent', { emissive: 1.6, flat: true })
+      );
+      core.scale.setScalar(T * 0.5);
+      core.position.y = T * 0.55;
+      core.castShadow = true;
+      core.userData.spin = 0.8; // engine may read .userData.spin to idle-rotate
+      g.add(core);
+      g.userData.core = core;
+      return g;
+    }
+
+    // default: buildable tile
+    const slab = new THREE.Mesh(
+      geo('tileSlab', () => new THREE.BoxGeometry(T * 0.94, 0.32, T * 0.94)),
+      mat('--panel-2', { roughness: 0.7, metalness: 0.1 })
+    );
+    slab.position.y = 0.16;
+    slab.receiveShadow = true; slab.castShadow = true;
+    g.add(slab);
+    // Inset top face so adjacent tiles read as a grid.
+    const top = new THREE.Mesh(
+      new THREE.BoxGeometry(T * 0.8, 0.04, T * 0.8),
+      mat('--panel', { roughness: 0.85 })
+    );
+    top.position.y = 0.34;
+    g.add(top);
+    return g;
+  };
+
+  // --- Enemies ----------------------------------------------------------------
+  // grunt: sturdy icosahedron (info/blue). runner: lean forward-cone (accent).
+  // tank: heavy faceted block (danger/red). Each carries a glowing core so it
+  // reads against the dark board and a forward "snout" to imply heading.
+  art.makeEnemyMesh = function (type) {
+    const g = new THREE.Group();
+    g.userData.type = type;
+    let bodyTok, coreTok, scale;
+
+    if (type === 'runner') {
+      bodyTok = '--accent'; coreTok = '--accent'; scale = 0.62;
+      const body = new THREE.Mesh(
+        new THREE.ConeGeometry(0.42, 1.1, 6),
+        mat(bodyTok, { roughness: 0.4, metalness: 0.2, flat: true })
+      );
+      body.rotation.x = Math.PI / 2;        // point along +Z (travel dir)
+      body.castShadow = true;
+      g.add(body);
+    } else if (type === 'tank') {
+      bodyTok = '--danger'; coreTok = '--danger'; scale = 1.05;
+      const body = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(0.6, 0),
+        mat(bodyTok, { roughness: 0.6, metalness: 0.25, flat: true })
+      );
+      body.castShadow = true;
+      g.add(body);
+      // armor plates
+      const plate = new THREE.Mesh(
+        new THREE.BoxGeometry(1.1, 0.5, 1.1),
+        mat('--panel-2', { roughness: 0.5, metalness: 0.4 })
+      );
+      plate.position.y = -0.15; plate.castShadow = true;
+      g.add(plate);
+    } else { // grunt (default)
+      bodyTok = '--info'; coreTok = '--info'; scale = 0.8;
+      const body = new THREE.Mesh(
+        geo('ico', () => new THREE.IcosahedronGeometry(0.5, 0)),
+        mat(bodyTok, { roughness: 0.5, metalness: 0.2, flat: true })
+      );
+      body.castShadow = true;
+      g.add(body);
+    }
+
+    // glowing inner core (additive read)
+    const core = new THREE.Mesh(
+      geo('sphere', () => new THREE.SphereGeometry(0.5, 16, 12)),
+      new THREE.MeshBasicMaterial({ color: art.color(coreTok), transparent: true, opacity: 0.85 })
+    );
+    core.scale.setScalar(0.42);
+    g.add(core);
+    g.userData.core = core;
+
+    g.scale.setScalar(scale);
+    g.position.y = 0.7;  // float above tile
+    g.userData.bobPhase = Math.random() * Math.PI * 2;
+    return g;
+  };
+
+  // --- Towers -----------------------------------------------------------------
+  // Group layout: { base, turret(Object3D pivot), muzzle(Object3D at barrel tip) }.
+  // Engine may rotate userData.turret to aim and read userData.muzzle world pos.
+  // Visible upgrade: barrel/crystal scale grows, emissive ramps, and one level
+  // ring is added per level above 1.
+  art.makeTowerMesh = function (type, level) {
+    level = Math.max(1, level | 0 || 1);
+    const T = tileSize();
+    const g = new THREE.Group();
+    g.userData.type = type;
+    g.userData.level = level;
+
+    // shared plinth
+    const plinth = new THREE.Mesh(
+      new THREE.CylinderGeometry(T * 0.34, T * 0.4, 0.4, 16),
+      mat('--panel', { roughness: 0.7, metalness: 0.3 })
+    );
+    plinth.position.y = 0.2; plinth.castShadow = true; plinth.receiveShadow = true;
+    g.add(plinth);
+
+    const turret = new THREE.Group();
+    turret.position.y = 0.45;
+    g.add(turret);
+    g.userData.turret = turret;
+
+    const muzzle = new THREE.Object3D();
+    turret.add(muzzle);
+    g.userData.muzzle = muzzle;
+
+    const lvlBoost = 1 + (level - 1) * 0.18;
+    const emBoost = 0.7 + (level - 1) * 0.45;
+
+    if (type === 'cannon') {
+      const tok = '--danger';
+      const housing = new THREE.Mesh(
+        new THREE.SphereGeometry(0.42 * lvlBoost, 16, 12),
+        mat(tok, { roughness: 0.45, metalness: 0.4, emissive: emBoost * 0.4 })
+      );
+      housing.position.y = 0.25; housing.castShadow = true;
+      turret.add(housing);
+      const barrel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.18 * lvlBoost, 0.22 * lvlBoost, 0.95 * lvlBoost, 14),
+        mat('--panel-2', { roughness: 0.4, metalness: 0.6 })
+      );
+      barrel.rotation.x = Math.PI / 2;
+      barrel.position.set(0, 0.3, 0.55 * lvlBoost);
+      barrel.castShadow = true;
+      turret.add(barrel);
+      muzzle.position.set(0, 0.3, 1.05 * lvlBoost);
+    } else if (type === 'frost') {
+      const tok = '--info';
+      const stem = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.16, 0.22, 0.7, 10),
+        mat('--panel-2', { roughness: 0.4, metalness: 0.5 })
+      );
+      stem.position.y = 0.35; stem.castShadow = true;
+      turret.add(stem);
+      const crystal = new THREE.Mesh(
+        new THREE.OctahedronGeometry(0.42 * lvlBoost, 0),
+        mat(tok, { roughness: 0.1, metalness: 0.2, emissive: emBoost * 1.1, flat: true,
+                   transparent: true, opacity: 0.92 })
+      );
+      crystal.position.y = 0.95; crystal.castShadow = true;
+      crystal.userData.spin = 1.4;
+      turret.add(crystal);
+      g.userData.spinner = crystal;
+      muzzle.position.set(0, 0.95, 0.45 * lvlBoost);
+    } else { // arrow (default)
+      const tok = '--accent';
+      const post = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.12, 0.16, 0.8, 10),
+        mat('--panel-2', { roughness: 0.5, metalness: 0.5 })
+      );
+      post.position.y = 0.4; post.castShadow = true;
+      turret.add(post);
+      const head = new THREE.Mesh(
+        new THREE.BoxGeometry(0.5 * lvlBoost, 0.28, 0.7 * lvlBoost),
+        mat(tok, { roughness: 0.4, metalness: 0.3, emissive: emBoost * 0.5 })
+      );
+      head.position.y = 0.85; head.castShadow = true;
+      turret.add(head);
+      const tip = new THREE.Mesh(
+        new THREE.ConeGeometry(0.12 * lvlBoost, 0.4, 8),
+        mat(tok, { emissive: emBoost })
+      );
+      tip.rotation.x = Math.PI / 2;
+      tip.position.set(0, 0.85, 0.55 * lvlBoost);
+      turret.add(tip);
+      muzzle.position.set(0, 0.85, 0.75 * lvlBoost);
+    }
+
+    // Level rings around the plinth — one glowing band per level above base.
+    for (let i = 1; i < level; i++) {
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(T * 0.34 + i * 0.05, 0.035, 6, 24),
+        mat(towerToken(type), { emissive: 1.2 })
+      );
+      ring.rotation.x = Math.PI / 2;
+      ring.position.y = 0.06 + i * 0.1;
+      g.add(ring);
+    }
+
+    g.position.y = 0;
+    return g;
+  };
+
+  function towerToken(type) {
+    return type === 'cannon' ? '--danger' : type === 'frost' ? '--info' : '--accent';
+  }
+
+  // --- Projectiles ------------------------------------------------------------
+  art.makeProjectileMesh = function (type) {
+    if (type === 'cannon') {
+      const m = new THREE.Mesh(
+        new THREE.SphereGeometry(0.16, 12, 8),
+        mat('--danger', { emissive: 1.4, roughness: 0.3 })
+      );
+      m.castShadow = true;
+      return m;
+    }
+    if (type === 'frost') {
+      const m = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(0.14, 0),
+        mat('--info', { emissive: 1.5, flat: true, transparent: true, opacity: 0.95 })
+      );
+      m.userData.spin = 6;
+      return m;
+    }
+    // arrow (default): slim glowing bolt pointing +Z (engine orients to velocity)
+    const g = new THREE.Group();
+    const shaft = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.04, 0.04, 0.5, 6),
+      mat('--accent', { emissive: 1.3 })
+    );
+    shaft.rotation.x = Math.PI / 2;
+    g.add(shaft);
+    const head = new THREE.Mesh(
+      new THREE.ConeGeometry(0.08, 0.18, 6),
+      mat('--accent', { emissive: 1.5 })
+    );
+    head.rotation.x = Math.PI / 2;
+    head.position.z = 0.32;
+    g.add(head);
+    return g;
+  };
+
+  // ============================================================================
+  // PARTICLE / HIT FX
+  // Each FX returns a handle: { object3d, update(dt)->boolean(alive), dispose() }.
+  // If a scene was attached via attachScene(), art also auto-adds the object3d
+  // and auto-removes it when finished (so a minimal engine just calls hitFX +
+  // art.update(dt)). Either way the handle works standalone for the engine.
+  // ============================================================================
+
+  function makeBurst(pos, opts) {
+    const n = opts.count;
+    const positions = new Float32Array(n * 3);
+    const vel = [];
+    for (let i = 0; i < n; i++) {
+      positions[i * 3] = pos.x;
+      positions[i * 3 + 1] = pos.y;
+      positions[i * 3 + 2] = pos.z;
+      const a = Math.random() * Math.PI * 2;
+      const up = opts.up != null ? opts.up : 0.6;
+      const sp = opts.speed * (0.5 + Math.random());
+      vel.push(new THREE.Vector3(
+        Math.cos(a) * sp,
+        (up + Math.random() * up) * sp,
+        Math.sin(a) * sp
+      ));
+    }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const pmat = new THREE.PointsMaterial({
+      color: art.color(opts.token),
+      size: opts.size || 0.28,
+      transparent: true,
+      opacity: 1,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true
+    });
+    const points = new THREE.Points(geom, pmat);
+    points.frustumCulled = false;
+
+    const life = opts.life || 0.5;
+    let age = 0;
+    const grav = opts.gravity != null ? opts.gravity : 2.2;
+
+    const handle = {
+      object3d: points,
+      update(dt) {
+        age += dt;
+        const k = age / life;
+        if (k >= 1) return false;
+        const p = geom.attributes.position.array;
+        for (let i = 0; i < n; i++) {
+          vel[i].y -= grav * dt;
+          p[i * 3] += vel[i].x * dt;
+          p[i * 3 + 1] += vel[i].y * dt;
+          p[i * 3 + 2] += vel[i].z * dt;
+        }
+        geom.attributes.position.needsUpdate = true;
+        pmat.opacity = 1 - k;
+        pmat.size = (opts.size || 0.28) * (1 + k * 0.6);
+        return true;
+      },
+      dispose() { geom.dispose(); pmat.dispose(); }
+    };
+    return handle;
+  }
+
+  // hitFX(pos, kind) — kind tints/sizes the burst:
+  //   'hit'(default) small spark, 'kill' bigger pop, 'frost' icy shards,
+  //   'splash' wide cannon burst, 'leak' red warning puff.
+  art.hitFX = function (pos, kind) {
+    let opts;
+    switch (kind) {
+      case 'kill':   opts = { count: 22, token: '--accent', speed: 4.2, size: 0.32, life: 0.6, gravity: 3.0 }; break;
+      case 'frost':  opts = { count: 18, token: '--info',   speed: 3.0, size: 0.26, life: 0.55, gravity: 1.2 }; break;
+      case 'splash': opts = { count: 26, token: '--danger', speed: 5.0, size: 0.34, life: 0.5, gravity: 3.5, up: 0.3 }; break;
+      case 'leak':   opts = { count: 16, token: '--danger', speed: 2.6, size: 0.3, life: 0.7, gravity: 0.8 }; break;
+      default:       opts = { count: 12, token: '--accent', speed: 3.2, size: 0.22, life: 0.4, gravity: 2.6 };
+    }
+    const h = makeBurst(pos, opts);
+    return _registerFX(h);
+  };
+
+  // muzzleFX(pos) — quick expanding flash ring at a tower barrel.
+  art.muzzleFX = function (pos) {
+    const ringGeo = new THREE.RingGeometry(0.05, 0.16, 16);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: art.color('--accent'), transparent: true, opacity: 0.95,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.position.copy(pos);
+    ring.lookAt(pos.x, pos.y + 1, pos.z); // face roughly up/out
+    const life = 0.16; let age = 0;
+    const h = {
+      object3d: ring,
+      update(dt) {
+        age += dt;
+        const k = age / life;
+        if (k >= 1) return false;
+        const s = 1 + k * 5;
+        ring.scale.set(s, s, s);
+        ringMat.opacity = 0.95 * (1 - k);
+        return true;
+      },
+      dispose() { ringGeo.dispose(); ringMat.dispose(); }
+    };
+    return _registerFX(h);
+  };
+
+  function _registerFX(h) {
+    if (art._scene) {
+      art._scene.add(h.object3d);
+      art._fx.push(h);
+    }
+    return h;
+  }
+
+  // Optional: let art own FX lifecycle. Engine calls attachScene(scene) once,
+  // then art.update(dt) every frame; FX auto-add on creation and auto-remove
+  // (and dispose) when finished.
+  art.attachScene = function (scene) { art._scene = scene; return art; };
+
+  art.update = function (dt) {
+    if (!art._fx.length) return;
+    for (let i = art._fx.length - 1; i >= 0; i--) {
+      const h = art._fx[i];
+      if (!h.update(dt)) {
+        if (art._scene) art._scene.remove(h.object3d);
+        h.dispose();
+        art._fx.splice(i, 1);
+      }
+    }
+  };
+
+  // ============================================================================
+  // LIGHTING MOOD + RENDERER (optional helpers; engine may call or do its own)
+  // ============================================================================
+  art.makeLighting = function () {
+    const g = new THREE.Group();
+    g.name = 'art-lighting';
+
+    const hemi = new THREE.HemisphereLight(
+      art.color('--info').getHex(),      // sky
+      art.color('--bg-deep').getHex(),   // ground
+      0.55
+    );
+    g.add(hemi);
+
+    const amb = new THREE.AmbientLight(art.color('--panel-2').getHex(), 0.35);
+    g.add(amb);
+
+    const key = new THREE.DirectionalLight(0xffffff, 1.5);
+    key.position.set(12, 20, 8);
+    key.castShadow = true;
+    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.camera.near = 1;
+    key.shadow.camera.far = 80;
+    const d = 26;
+    key.shadow.camera.left = -d; key.shadow.camera.right = d;
+    key.shadow.camera.top = d; key.shadow.camera.bottom = -d;
+    key.shadow.bias = -0.0005;
+    g.add(key);
+    g.userData.key = key;
+
+    // cool rim/fill from the opposite side for mood + separation
+    const fill = new THREE.DirectionalLight(art.color('--info').getHex(), 0.45);
+    fill.position.set(-14, 8, -10);
+    g.add(fill);
+
+    return g;
+  };
+
+  art.makeSceneFog = function () {
+    return new THREE.Fog(art.color('--bg-deep').getHex(), 28, 70);
+  };
+
+  art.applyRenderer = function (renderer) {
+    if (!renderer) return;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    return renderer;
+  };
+
+  // ============================================================================
+  // PROCEDURAL WEBAUDIO SFX — no files. Oscillators + a cached noise buffer
+  // through a master gain. Respects GAME.state.muted. Lazily created and resumed
+  // on the first user gesture (browser autoplay policy).
+  // ============================================================================
+
+  function _ensureAudio() {
+    if (art._audio) return art._audio;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    const ctx = new AC();
+    const master = ctx.createGain();
+    master.gain.value = 0.5;
+    master.connect(ctx.destination);
+    art._audio = ctx;
+    art._master = master;
+    // white-noise buffer (1s)
+    const len = ctx.sampleRate;
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+    art._noiseBuf = buf;
+    return ctx;
+  }
+
+  art.armAudioGesture = function () {
+    if (art._armed) return;
+    art._armed = true;
+    const resume = () => {
+      const ctx = _ensureAudio();
+      if (ctx && ctx.state === 'suspended') ctx.resume();
+    };
+    ['pointerdown', 'keydown', 'touchstart'].forEach(ev =>
+      window.addEventListener(ev, resume, { once: false, passive: true }));
+  };
+
+  function _muted() {
+    return !!(GAME.state && GAME.state.muted);
+  }
+
+  // --- low-level synth voices -------------------------------------------------
+  function tone(ctx, t0, opts) {
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = opts.type || 'sine';
+    o.frequency.setValueAtTime(opts.f0, t0);
+    if (opts.f1 != null) o.frequency.exponentialRampToValueAtTime(Math.max(1, opts.f1), t0 + opts.dur);
+    const peak = opts.gain != null ? opts.gain : 0.3;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(peak, t0 + (opts.attack || 0.005));
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + opts.dur);
+    o.connect(g); g.connect(art._master);
+    o.start(t0); o.stop(t0 + opts.dur + 0.02);
+  }
+
+  function noise(ctx, t0, opts) {
+    const src = ctx.createBufferSource();
+    src.buffer = art._noiseBuf;
+    const f = ctx.createBiquadFilter();
+    f.type = opts.filter || 'bandpass';
+    f.frequency.setValueAtTime(opts.freq || 1200, t0);
+    if (opts.freq1 != null) f.frequency.exponentialRampToValueAtTime(opts.freq1, t0 + opts.dur);
+    f.Q.value = opts.q || 1;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(opts.gain || 0.3, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + opts.dur);
+    src.connect(f); f.connect(g); g.connect(art._master);
+    src.start(t0); src.stop(t0 + opts.dur + 0.02);
+  }
+
+  // --- cue table --------------------------------------------------------------
+  const CUES = {
+    shoot(ctx, t) {
+      tone(ctx, t, { type: 'square', f0: 880, f1: 220, dur: 0.12, gain: 0.18, attack: 0.002 });
+      noise(ctx, t, { filter: 'highpass', freq: 2000, dur: 0.06, gain: 0.06 });
+    },
+    hit(ctx, t) {
+      tone(ctx, t, { type: 'triangle', f0: 320, f1: 120, dur: 0.1, gain: 0.18 });
+      noise(ctx, t, { filter: 'bandpass', freq: 800, q: 0.8, dur: 0.08, gain: 0.12 });
+    },
+    place(ctx, t) {
+      tone(ctx, t, { type: 'sine', f0: 440, dur: 0.09, gain: 0.22 });
+      tone(ctx, t + 0.08, { type: 'sine', f0: 660, dur: 0.12, gain: 0.22 });
+    },
+    upgrade(ctx, t) {
+      [523, 659, 784, 1046].forEach((f, i) =>
+        tone(ctx, t + i * 0.06, { type: 'triangle', f0: f, dur: 0.14, gain: 0.18 }));
+    },
+    sell(ctx, t) {
+      tone(ctx, t, { type: 'sine', f0: 600, dur: 0.1, gain: 0.2 });
+      tone(ctx, t + 0.09, { type: 'sine', f0: 380, dur: 0.14, gain: 0.2 });
+    },
+    leak(ctx, t) {
+      tone(ctx, t, { type: 'sawtooth', f0: 220, f1: 90, dur: 0.4, gain: 0.22 });
+      noise(ctx, t, { filter: 'lowpass', freq: 600, dur: 0.3, gain: 0.1 });
+    },
+    waveStart(ctx, t) {
+      // brassy two-osc fanfare
+      [330, 440].forEach(f => {
+        tone(ctx, t, { type: 'sawtooth', f0: f, dur: 0.5, gain: 0.12, attack: 0.02 });
+        tone(ctx, t + 0.18, { type: 'sawtooth', f0: f * 1.5, dur: 0.5, gain: 0.12, attack: 0.02 });
+      });
+    },
+    gameover(ctx, t) {
+      [440, 392, 330, 262].forEach((f, i) =>
+        tone(ctx, t + i * 0.18, { type: 'sawtooth', f0: f, dur: 0.5, gain: 0.18, attack: 0.01 }));
+    },
+    win(ctx, t) {
+      [523, 659, 784, 1046, 1318].forEach((f, i) =>
+        tone(ctx, t + i * 0.12, { type: 'triangle', f0: f, dur: 0.3, gain: 0.2 }));
+    }
+  };
+
+  art.sfx = function (name) {
+    if (_muted()) return;
+    const ctx = _ensureAudio();
+    if (!ctx) return;
+    if (ctx.state === 'suspended') { ctx.resume(); }
+    const cue = CUES[name];
+    if (!cue) return;
+    try { cue(ctx, ctx.currentTime + 0.001); } catch (_) { /* ignore audio glitches */ }
+  };
+
+  // --- mute helpers (the HUD mute button calls these via ui) ------------------
+  art.setMuted = function (m) {
+    if (GAME.state) GAME.state.muted = !!m;
+    if (art._master) art._master.gain.value = m ? 0 : 0.5;
+    return !!m;
+  };
+  art.toggleMute = function () { return art.setMuted(!_muted()); };
+  art.isMuted = function () { return _muted(); };
+
+  GAME.art = art;
+})();
+
+/* ===== GAME.engine (workstream: engine) ===== */
+/* =============================================================================
+ * GAME.engine — Core Three.js engine (workstream: engine)
+ * Conforms to .contract.md §3.0 / §3.1 / §5.
+ *
+ * Implements the contract surface:
+ *   GAME.engine.init(canvasSelector)
+ *   GAME.engine.start() / GAME.engine.stop()
+ *   GAME.engine.update(dt)
+ *   GAME.engine.syncMeshes()
+ *   GAME.engine.worldToCell(x,z) -> {c,r}|null
+ *   GAME.engine.cellToWorld(c,r) -> {x,y,z}
+ *   GAME.engine.screenToCell(clientX,clientY) -> {c,r}|null
+ *   GAME.engine.setHoverCell(cell|null)
+ *   GAME.engine.addMesh(obj3d) / GAME.engine.removeMesh(obj3d)
+ *   GAME.engine.shake(intensity)
+ *
+ * Design notes:
+ *  - Robust init: feature-detects WebGL; if unavailable (e.g. headless test,
+ *    blocked GPU) it shows a visible token-styled message instead of a white
+ *    screen, and no-ops the RAF loop so nothing throws.
+ *  - GAME.art / GAME.gameplay / GAME.ui are looked up lazily through guarded
+ *    helpers, so the engine initializes and runs even if a sibling module is
+ *    absent (the "initializes and runs without throwing" gate).
+ *  - syncMeshes() reconciles state collections into the scene graph and DISPOSES
+ *    meshes for entities that die, so the scene graph + GPU buffers stay bounded
+ *    (shared art materials/geometries marked userData.shared are left intact).
+ * ============================================================================= */
+/* THREE imported once at top of module */
+window.GAME = window.GAME || {};
+
+/* Canonical config fallback (matches .contract.md §2.1). Only set if no other
+ * arm has already provided it — never replace an existing reference. */
+GAME.config = GAME.config || {
+  GRID_COLS: 16, GRID_ROWS: 10, TILE: 2,
+  START_LIVES: 20, START_GOLD: 120,
+  PATH: [ {c:0,r:5},{c:4,r:5},{c:4,r:2},{c:9,r:2},{c:9,r:7},{c:13,r:7},{c:13,r:5},{c:15,r:5} ],
+  TOWERS: {
+    arrow:  { key:'arrow',  name:'Arrow',  cost:50,  range:5.5, dps:14, fireRate:2.0, color:'--accent',  upgradeCost:40 },
+    cannon: { key:'cannon', name:'Cannon', cost:100, range:4.5, dps:34, fireRate:0.8, splash:1.6, color:'--danger', upgradeCost:80 },
+    frost:  { key:'frost',  name:'Frost',  cost:75,  range:5.0, dps:6,  fireRate:1.5, slow:0.45, color:'--info',   upgradeCost:60 }
+  },
+  WAVE_BASE_COUNT: 8, WAVE_GROWTH: 1.25, ENEMY_HP_GROWTH: 1.18, MAX_WAVES: 20,
+  SELL_REFUND: 0.6
+};
+
+GAME.engine = (function () {
+  'use strict';
+
+  // ---- module-private state -------------------------------------------------
+  let renderer = null, scene = null, camera = null, clock = null;
+  let canvas = null;
+  let dirLight = null;
+  let tilesGroup = null, contentGroup = null, fxGroup = null;
+  let ghost = null, rangeRing = null;
+  let rafId = 0, running = false, ready = false, webglOK = false;
+
+  const _raycaster = new THREE.Raycaster();
+  const _ndc = new THREE.Vector2();
+  const _groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // y = 0
+  const _hit = new THREE.Vector3();
+  const _tmp = new THREE.Vector3();
+
+  // shake bookkeeping
+  let shakeAmt = 0;
+  const camBase = new THREE.Vector3();
+
+  // entity -> mesh tracking (so we can add/move/remove + dispose on death)
+  const known = { enemies: new Set(), towers: new Set(), projectiles: new Set() };
+
+  // ---- guarded sibling-module access ---------------------------------------
+  const S = () => (GAME.state = GAME.state || {});
+  const C = () => GAME.config;
+  const art = () => GAME.art || null;
+
+  function cfg(key, fallback) {
+    const c = C();
+    return (c && c[key] != null) ? c[key] : fallback;
+  }
+
+  /** Resolve a design token to a THREE.Color via art.color(); fall back to a
+   *  hard-coded contract value so the board still has the right palette if art
+   *  is absent. */
+  function tokenColor(token, fallbackHex) {
+    const a = art();
+    try {
+      if (a && typeof a.color === 'function') {
+        const col = a.color(token);
+        if (col && col.isColor) return col;
+      }
+    } catch (_) { /* ignore and use fallback */ }
+    return new THREE.Color(fallbackHex);
+  }
+
+  /** Try an art factory; if missing/failed, build a minimal procedural fallback
+   *  so the engine never depends on art being present. */
+  function artMesh(fnName, fallbackFactory, ...args) {
+    const a = art();
+    try {
+      if (a && typeof a[fnName] === 'function') {
+        const m = a[fnName](...args);
+        if (m && m.isObject3D) return m;
+      }
+    } catch (_) { /* fall through */ }
+    return fallbackFactory();
+  }
+
+  // ---- WebGL feature detection ---------------------------------------------
+  function detectWebGL() {
+    try {
+      const c = document.createElement('canvas');
+      return !!(window.WebGLRenderingContext &&
+        (c.getContext('webgl2') || c.getContext('webgl') || c.getContext('experimental-webgl')));
+    } catch (_) { return false; }
+  }
+
+  /** Replace the white screen with a readable, token-styled failure message. */
+  function showFatal(message) {
+    try {
+      const root = document.getElementById('game-root') || document.body;
+      let box = document.getElementById('engine-fatal');
+      if (!box) {
+        box = document.createElement('div');
+        box.id = 'engine-fatal';
+        box.setAttribute('role', 'alert');
+        box.style.cssText = [
+          'position:fixed', 'inset:0', 'z-index:9999',
+          'display:flex', 'flex-direction:column',
+          'align-items:center', 'justify-content:center', 'gap:0.75rem',
+          'padding:2rem', 'text-align:center',
+          'font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif',
+          // tokens (with safe literal fallbacks): --text on --bg-deep = 17.86:1
+          'background:var(--bg-deep,#0c0f16)', 'color:var(--text,#f5f7fa)'
+        ].join(';');
+        const h = document.createElement('h1');
+        h.textContent = 'Unable to start 3D renderer';
+        h.style.cssText = 'margin:0;font-size:1.5rem;color:var(--text,#f5f7fa)';
+        const p = document.createElement('p');
+        p.id = 'engine-fatal-msg';
+        // --muted on --bg-deep = 12.36:1
+        p.style.cssText = 'margin:0;max-width:42ch;line-height:1.5;color:var(--muted,#c5d0e6)';
+        box.appendChild(h);
+        box.appendChild(p);
+        root.appendChild(box);
+      }
+      const msg = document.getElementById('engine-fatal-msg');
+      if (msg) msg.textContent = message;
+    } catch (_) { /* nothing more we can do */ }
+  }
+
+  // ---- coordinate helpers ---------------------------------------------------
+  function cellToWorld(c, r) {
+    const COLS = cfg('GRID_COLS', 16), ROWS = cfg('GRID_ROWS', 10), T = cfg('TILE', 2);
+    return {
+      x: (c - (COLS - 1) / 2) * T,
+      y: 0,
+      z: (r - (ROWS - 1) / 2) * T
+    };
+  }
+
+  function worldToCell(x, z) {
+    const COLS = cfg('GRID_COLS', 16), ROWS = cfg('GRID_ROWS', 10), T = cfg('TILE', 2);
+    const c = Math.round(x / T + (COLS - 1) / 2);
+    const r = Math.round(z / T + (ROWS - 1) / 2);
+    if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return null;
+    return { c, r };
+  }
+
+  function screenToCell(clientX, clientY) {
+    if (!ready || !camera || !canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    _ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    _ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    _raycaster.setFromCamera(_ndc, camera);
+    const p = _raycaster.ray.intersectPlane(_groundPlane, _hit);
+    if (!p) return null;
+    return worldToCell(p.x, p.z);
+  }
+
+  // ---- path helpers ---------------------------------------------------------
+  function pathCellKeys() {
+    const set = new Set();
+    const path = cfg('PATH', []);
+    for (let i = 0; i < path.length; i++) {
+      // walk the straight segment between consecutive waypoints, marking cells
+      const a = path[i], b = path[i + 1];
+      set.add(a.c + ',' + a.r);
+      if (!b) continue;
+      const dc = Math.sign(b.c - a.c), dr = Math.sign(b.r - a.r);
+      let cc = a.c, rr = a.r;
+      while (cc !== b.c || rr !== b.r) {
+        cc += dc; rr += dr;
+        set.add(cc + ',' + rr);
+      }
+    }
+    return set;
+  }
+
+  // ---- scene construction ---------------------------------------------------
+  function buildLights() {
+    const hemi = new THREE.HemisphereLight(
+      tokenColor('--info', '#6db8ff').getHex(),
+      tokenColor('--bg-deep', '#0c0f16').getHex(),
+      0.55
+    );
+    scene.add(hemi);
+
+    dirLight = new THREE.DirectionalLight(0xffffff, 1.15);
+    dirLight.position.set(14, 26, 10);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.set(1024, 1024);
+    const d = 26;
+    const sc = dirLight.shadow.camera;
+    sc.left = -d; sc.right = d; sc.top = d; sc.bottom = -d;
+    sc.near = 1; sc.far = 80;
+    dirLight.shadow.bias = -0.0004;
+    scene.add(dirLight);
+    scene.add(dirLight.target);
+  }
+
+  function buildGround() {
+    const COLS = cfg('GRID_COLS', 16), ROWS = cfg('GRID_ROWS', 10), T = cfg('TILE', 2);
+    const w = COLS * T + T * 2, h = ROWS * T + T * 2;
+    const geo = new THREE.PlaneGeometry(w, h);
+    const mat = new THREE.MeshStandardMaterial({
+      color: tokenColor('--bg-deep', '#0c0f16'),
+      roughness: 0.95, metalness: 0.0
+    });
+    const ground = new THREE.Mesh(geo, mat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.02;
+    ground.receiveShadow = true;
+    ground.name = 'ground';
+    scene.add(ground);
+  }
+
+  function fallbackTile(kind) {
+    const T = cfg('TILE', 2);
+    const geo = new THREE.BoxGeometry(T * 0.92, 0.2, T * 0.92);
+    let hex;
+    if (kind === 'path') hex = tokenColor('--panel-2', '#202a40');
+    else if (kind === 'base') hex = tokenColor('--accent', '#ffd54a');
+    else hex = tokenColor('--panel', '#161c2b');
+    const mat = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.85, metalness: 0.05 });
+    const m = new THREE.Mesh(geo, mat);
+    m.receiveShadow = true;
+    if (kind !== 'base') m.castShadow = false; else m.castShadow = true;
+    return m;
+  }
+
+  function buildBoard() {
+    const COLS = cfg('GRID_COLS', 16), ROWS = cfg('GRID_ROWS', 10);
+    const path = cfg('PATH', []);
+    const pathKeys = pathCellKeys();
+    const baseKey = path.length ? (path[path.length - 1].c + ',' + path[path.length - 1].r) : null;
+
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const key = c + ',' + r;
+        let kind = 'build';
+        if (key === baseKey) kind = 'base';
+        else if (pathKeys.has(key)) kind = 'path';
+        const mesh = artMesh('makeTileMesh', () => fallbackTile(kind), kind);
+        const w = cellToWorld(c, r);
+        mesh.position.set(w.x, w.y, w.z);
+        mesh.userData.cell = { c, r };
+        mesh.userData.tileKind = kind;
+        tilesGroup.add(mesh);
+      }
+    }
+  }
+
+  /** A subtle ribbon following the path centers (purely decorative). */
+  function buildPathRibbon() {
+    const path = cfg('PATH', []);
+    if (path.length < 2) return;
+    const pts = path.map(p => {
+      const w = cellToWorld(p.c, p.r);
+      return new THREE.Vector3(w.x, 0.12, w.z);
+    });
+    const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.0);
+    const T = cfg('TILE', 2);
+    const geo = new THREE.TubeGeometry(curve, pts.length * 12, T * 0.28, 8, false);
+    const mat = new THREE.MeshStandardMaterial({
+      color: tokenColor('--line', '#2f3b57'),
+      roughness: 0.6, metalness: 0.1,
+      emissive: tokenColor('--info', '#6db8ff'), emissiveIntensity: 0.06
+    });
+    const ribbon = new THREE.Mesh(geo, mat);
+    ribbon.receiveShadow = true;
+    ribbon.name = 'path-ribbon';
+    tilesGroup.add(ribbon);
+  }
+
+  /** Build-preview ghost + range ring, hidden until setHoverCell shows them. */
+  function buildHoverHelpers() {
+    const T = cfg('TILE', 2);
+    const gGeo = new THREE.BoxGeometry(T * 0.9, T * 0.9, T * 0.9);
+    const gMat = new THREE.MeshStandardMaterial({
+      color: tokenColor('--success', '#5ad1a0'),
+      transparent: true, opacity: 0.35, roughness: 0.4
+    });
+    ghost = new THREE.Mesh(gGeo, gMat);
+    ghost.visible = false;
+    ghost.name = 'build-ghost';
+    contentGroup.add(ghost);
+
+    const rGeo = new THREE.RingGeometry(0.9, 1.0, 48);
+    const rMat = new THREE.MeshBasicMaterial({
+      color: tokenColor('--info', '#6db8ff'),
+      transparent: true, opacity: 0.5, side: THREE.DoubleSide
+    });
+    rangeRing = new THREE.Mesh(rGeo, rMat);
+    rangeRing.rotation.x = -Math.PI / 2;
+    rangeRing.position.y = 0.06;
+    rangeRing.visible = false;
+    rangeRing.name = 'range-ring';
+    contentGroup.add(rangeRing);
+  }
+
+  function setupCamera() {
+    const aspect = (canvas.clientWidth || window.innerWidth) /
+                   (canvas.clientHeight || window.innerHeight || 1);
+    camera = new THREE.PerspectiveCamera(55, aspect, 0.1, 200);
+    // ~50deg downward look at the board centre.
+    camera.position.set(0, 26, 22);
+    camera.lookAt(0, 0, -1.5);
+    camBase.copy(camera.position);
+  }
+
+  function onResize() {
+    if (!renderer || !camera || !canvas) return;
+    const w = window.innerWidth, h = window.innerHeight;
+    camera.aspect = w / Math.max(1, h);
+    camera.updateProjectionMatrix();
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(w, h, false);
+  }
+
+  // ---- public: init ---------------------------------------------------------
+  function init(canvasSelector) {
+    try {
+      canvas = (typeof canvasSelector === 'string')
+        ? document.querySelector(canvasSelector)
+        : (canvasSelector || null);
+
+      if (!canvas) {
+        showFatal('The game canvas (#game-canvas) was not found in the page.');
+        return false;
+      }
+
+      webglOK = detectWebGL();
+      if (!webglOK) {
+        showFatal('This browser or device does not support WebGL, which is required to render the 3D board. Try a different browser, enable hardware acceleration, or update your graphics drivers.');
+        ready = false;
+        return false;
+      }
+
+      renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight, false);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.0;
+      if ('outputColorSpace' in renderer) renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+      scene = new THREE.Scene();
+      scene.background = tokenColor('--bg-deep', '#0c0f16');
+      const COLS = cfg('GRID_COLS', 16), T = cfg('TILE', 2);
+      scene.fog = new THREE.Fog(scene.background.getHex(), COLS * T * 0.9, COLS * T * 2.0);
+
+      tilesGroup = new THREE.Group();   tilesGroup.name = 'tiles';
+      contentGroup = new THREE.Group(); contentGroup.name = 'entities';
+      fxGroup = new THREE.Group();      fxGroup.name = 'fx';
+      scene.add(tilesGroup, contentGroup, fxGroup);
+
+      setupCamera();
+      buildLights();
+      buildGround();
+      buildBoard();
+      buildPathRibbon();
+      buildHoverHelpers();
+
+      clock = new THREE.Clock();
+      window.addEventListener('resize', onResize, { passive: true });
+      handleContextLoss();
+
+      ready = true;
+      // First paint so we never show a blank canvas even before start().
+      renderer.render(scene, camera);
+      return true;
+    } catch (err) {
+      // Never leave a white screen: surface the error, keep the page alive.
+      console.error('[engine.init] failed:', err);
+      showFatal('The 3D renderer failed to initialize: ' + (err && err.message ? err.message : err));
+      ready = false;
+      return false;
+    }
+  }
+
+  function handleContextLoss() {
+    if (!canvas) return;
+    canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      running = false;
+      if (rafId) cancelAnimationFrame(rafId);
+      showFatal('The graphics context was lost. Please reload the page.');
+    }, false);
+  }
+
+  // ---- RAF loop -------------------------------------------------------------
+  function frame() {
+    if (!running) return;
+    rafId = requestAnimationFrame(frame);
+
+    const st = S();
+    let dt = clock ? clock.getDelta() : 0;
+    // delta clamp: avoid huge jumps after tab-switch / breakpoints
+    if (!(dt > 0)) dt = 0;
+    if (dt > 0.05) dt = 0.05;
+    st.dt = dt;
+    st.time = (st.time || 0) + dt;
+
+    // Contract per-frame order: gameplay.update -> engine internal -> sync -> ui -> render
+    try { if (GAME.gameplay && typeof GAME.gameplay.update === 'function') GAME.gameplay.update(dt); }
+    catch (e) { console.error('[gameplay.update]', e); }
+
+    update(dt);          // engine-internal tweens / particles
+    syncMeshes();        // reflect state into scene graph
+
+    try { if (GAME.ui && typeof GAME.ui.update === 'function') GAME.ui.update(); }
+    catch (e) { console.error('[ui.update]', e); }
+
+    try { renderer.render(scene, camera); }
+    catch (e) { console.error('[render]', e); }
+  }
+
+  function start() {
+    if (!ready || running) return;
+    running = true;
+    if (clock) clock.getDelta(); // reset so first dt isn't a huge spike
+    rafId = requestAnimationFrame(frame);
+  }
+
+  function stop() {
+    running = false;
+    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+  }
+
+  // ---- engine-internal update (camera shake + particle FX) ------------------
+  function update(dt) {
+    if (!ready) return;
+
+    // camera shake decay
+    if (shakeAmt > 0.0001) {
+      camera.position.set(
+        camBase.x + (Math.random() - 0.5) * shakeAmt,
+        camBase.y + (Math.random() - 0.5) * shakeAmt,
+        camBase.z + (Math.random() - 0.5) * shakeAmt
+      );
+      shakeAmt *= Math.max(0, 1 - dt * 6);
+      if (shakeAmt <= 0.01) { shakeAmt = 0; camera.position.copy(camBase); }
+    }
+
+    // tick any FX handles registered on tracked meshes (art.hitFX/muzzleFX)
+    if (fxGroup) {
+      for (let i = fxGroup.children.length - 1; i >= 0; i--) {
+        const o = fxGroup.children[i];
+        const tick = o.userData && o.userData.tick;
+        if (typeof tick === 'function') {
+          let keep = true;
+          try { keep = tick(dt) !== false; } catch (_) { keep = false; }
+          if (!keep) { fxGroup.remove(o); disposeObject(o); }
+        }
+      }
+    }
+  }
+
+  // ---- mesh reconciliation --------------------------------------------------
+  function attachMesh(entity, fnName, fallbackFactory, ...args) {
+    if (!entity.mesh) {
+      entity.mesh = artMesh(fnName, fallbackFactory, ...args);
+      contentGroup.add(entity.mesh);
+    }
+  }
+
+  function placeFromPos(mesh, pos, yOffset) {
+    if (!mesh || !pos) return;
+    mesh.position.set(pos.x, (pos.y || 0) + (yOffset || 0), pos.z);
+  }
+
+  function reconcile(listName, list, current, makeFn, fallbackFactory, argFn, yOffset) {
+    const seen = current;
+    seen.clear();
+    for (let i = 0; i < list.length; i++) {
+      const e = list[i];
+      if (!e) continue;
+      seen.add(e);
+      attachMesh(e, makeFn, () => fallbackFactory(e), ...(argFn ? argFn(e) : []));
+      placeFromPos(e.mesh, e.pos, yOffset);
+      // simple facing for movers
+      if (e.mesh && e._lastPos) {
+        _tmp.set(e.pos.x - e._lastPos.x, 0, e.pos.z - e._lastPos.z);
+        if (_tmp.lengthSq() > 1e-6) e.mesh.lookAt(e.mesh.position.clone().add(_tmp));
+      }
+      if (e.pos) e._lastPos = { x: e.pos.x, y: e.pos.y, z: e.pos.z };
+    }
+  }
+
+  function fallbackEnemy(e) {
+    const type = (e && e.type) || 'grunt';
+    const size = type === 'tank' ? 0.9 : type === 'runner' ? 0.5 : 0.7;
+    const geo = new THREE.SphereGeometry(size, 12, 10);
+    const hex = type === 'tank' ? '--danger' : type === 'runner' ? '--info' : '--accent';
+    const mat = new THREE.MeshStandardMaterial({ color: tokenColor(hex, '#ffd54a'), roughness: 0.5 });
+    const m = new THREE.Mesh(geo, mat);
+    m.castShadow = true;
+    return m;
+  }
+
+  function fallbackTower(e) {
+    const T = cfg('TILE', 2);
+    const lvl = (e && e.level) || 1;
+    const geo = new THREE.CylinderGeometry(T * 0.28, T * 0.36, 0.8 + lvl * 0.3, 8);
+    const towers = cfg('TOWERS', {});
+    const tk = (e && e.type && towers[e.type]) ? towers[e.type].color : '--accent';
+    const mat = new THREE.MeshStandardMaterial({ color: tokenColor(tk, '#ffd54a'), roughness: 0.4, metalness: 0.2 });
+    const m = new THREE.Mesh(geo, mat);
+    m.castShadow = true;
+    return m;
+  }
+
+  function fallbackProjectile() {
+    const geo = new THREE.SphereGeometry(0.16, 8, 6);
+    const mat = new THREE.MeshBasicMaterial({ color: tokenColor('--accent', '#ffd54a') });
+    return new THREE.Mesh(geo, mat);
+  }
+
+  function removeOrphans(list, current, key) {
+    // build a quick membership set of live entities
+    for (const e of current) { /* current already == live set after reconcile */ }
+    // anything previously known but not in current must be removed
+    const live = current;
+    const prev = known['_prev_' + key] || new Set();
+    for (const e of prev) {
+      if (!live.has(e) && e && e.mesh) {
+        contentGroup.remove(e.mesh);
+        disposeObject(e.mesh);
+        e.mesh = null;
+      }
+    }
+    known['_prev_' + key] = new Set(live);
+  }
+
+  function syncMeshes() {
+    if (!ready) return;
+    const st = S();
+    const enemies = st.enemies || [];
+    const towers = st.towers || [];
+    const projectiles = st.projectiles || [];
+
+    reconcile('enemies', enemies, known.enemies, 'makeEnemyMesh', fallbackEnemy,
+      (e) => [e.type], 0.5);
+    removeOrphans(enemies, known.enemies, 'enemies');
+
+    reconcile('towers', towers, known.towers, 'makeTowerMesh', fallbackTower,
+      (e) => [e.type, e.level || 1], 0.4);
+    removeOrphans(towers, known.towers, 'towers');
+
+    reconcile('projectiles', projectiles, known.projectiles, 'makeProjectileMesh', fallbackProjectile,
+      (e) => [e.type || 'arrow'], 0.5);
+    removeOrphans(projectiles, known.projectiles, 'projectiles');
+  }
+
+  // ---- hover ghost + range ring --------------------------------------------
+  function setHoverCell(cell) {
+    S().hoverTile = cell || null;
+    if (!ready || !ghost || !rangeRing) return;
+
+    if (!cell) {
+      ghost.visible = false;
+      rangeRing.visible = false;
+      return;
+    }
+
+    const type = S().selectedTowerType;
+    if (!type) {
+      // inspect mode: faint highlight only, no ghost/ring
+      ghost.visible = false;
+      rangeRing.visible = false;
+      return;
+    }
+
+    const w = cellToWorld(cell.c, cell.r);
+    const T = cfg('TILE', 2);
+    ghost.position.set(w.x, T * 0.45, w.z);
+    ghost.visible = true;
+
+    // green if placeable, red otherwise
+    let ok = true;
+    try {
+      if (GAME.gameplay && typeof GAME.gameplay.canPlace === 'function') ok = !!GAME.gameplay.canPlace(cell);
+    } catch (_) { ok = false; }
+    ghost.material.color.copy(ok
+      ? tokenColor('--success', '#5ad1a0')
+      : tokenColor('--danger', '#ff6b6b'));
+
+    const towers = cfg('TOWERS', {});
+    const range = towers[type] ? towers[type].range : 5;
+    rangeRing.position.set(w.x, 0.06, w.z);
+    rangeRing.scale.set(range, range, range);
+    rangeRing.material.color.copy(ok
+      ? tokenColor('--info', '#6db8ff')
+      : tokenColor('--danger', '#ff6b6b'));
+    rangeRing.visible = true;
+  }
+
+  // ---- generic add/remove + disposal ---------------------------------------
+  function addMesh(obj3d) {
+    if (!obj3d || !obj3d.isObject3D) return;
+    // FX (anything with a tick handle) goes to the fx group so update() ticks it
+    if (obj3d.userData && typeof obj3d.userData.tick === 'function') {
+      (fxGroup || scene).add(obj3d);
+    } else {
+      (contentGroup || scene).add(obj3d);
+    }
+  }
+
+  function removeMesh(obj3d) {
+    if (!obj3d) return;
+    if (obj3d.parent) obj3d.parent.remove(obj3d);
+    disposeObject(obj3d);
+  }
+
+  /** Dispose geometry + non-shared materials so dead objects don't leak GPU
+   *  memory. Art's shared cache materials/geometries opt out via
+   *  userData.shared === true (or material.userData.shared). */
+  function disposeObject(obj) {
+    if (!obj) return;
+    obj.traverse((node) => {
+      if (node.userData && node.userData.shared) return;
+      if (node.geometry && !(node.geometry.userData && node.geometry.userData.shared)) {
+        try { node.geometry.dispose(); } catch (_) {}
+      }
+      const mat = node.material;
+      if (mat) {
+        const mats = Array.isArray(mat) ? mat : [mat];
+        for (const m of mats) {
+          if (m && !(m.userData && m.userData.shared)) {
+            try { m.dispose(); } catch (_) {}
+          }
+        }
+      }
+    });
+  }
+
+  // ---- camera shake ---------------------------------------------------------
+  function shake(intensity) {
+    if (!ready) return;
+    shakeAmt = Math.max(shakeAmt, Math.min(2.0, intensity || 0.5));
+  }
+
+  // ---- exports --------------------------------------------------------------
+  return {
+    init, start, stop, update, syncMeshes,
+    worldToCell, cellToWorld, screenToCell,
+    setHoverCell, addMesh, removeMesh, shake,
+    // diagnostics (non-contract, handy for the integrator/tests)
+    get isReady() { return ready; },
+    get hasWebGL() { return webglOK; },
+    _internal: { get scene() { return scene; }, get camera() { return camera; }, get renderer() { return renderer; } }
+  };
+})();
+
+/* ===== GAME.gameplay (workstream: gameplay) ===== */
+/* =============================================================================
+ * GAME.gameplay — workstream: gameplay (Phase 2)
+ * Tower-defense rules, waves, economy. Conforms to .contract.md §2/§3.2/§3.5.
+ *
+ * Contract functions implemented (GAME.gameplay.*):
+ *   init()                       seed state from config, precompute world path
+ *   update(dt)                   advance enemies, towers fire, projectiles hit,
+ *                                damage/slow, bounty/score, leaks, wave clear, win/lose
+ *   startWave()                  build spawnQueue for next wave; phase 'wave'
+ *   canPlace(cell) -> bool       buildable + empty + off-path + affordable
+ *   placeTower(cell) -> Tower|null
+ *   selectTower(tower|null)
+ *   upgradeTower(tower) -> bool
+ *   sellTower(tower) -> bool
+ *   reset()                      full restart to a fresh game
+ *
+ * Emits (per §3.5): state:changed, tower:placed/:upgraded/:sold,
+ *   enemy:killed, enemy:leak, wave:start, wave:clear, phase:changed.
+ *
+ * Cross-module use (all optional-chained so this file runs standalone in tests):
+ *   GAME.config, GAME.state, GAME.events       (shared)
+ *   GAME.engine.cellToWorld(c,r)               (world mapping; local fallback)
+ *   GAME.art.makeEnemyMesh / makeTowerMesh / makeProjectileMesh / sfx (visuals/audio)
+ * Economy invariant: lives/gold/score mutate ONLY here; every change emits 'state:changed'.
+ * ============================================================================= */
+(function () {
+  'use strict';
+  window.GAME = window.GAME || {};
+  const GAME = window.GAME;
+
+  // ---- local helpers ---------------------------------------------------------
+  let _id = 1;
+  const nextId = () => _id++;
+  const emit = (e, p) => { if (GAME.events && GAME.events.emit) GAME.events.emit(e, p || {}); };
+  const art = () => GAME.art || null;
+  const sfx = (n) => { const a = art(); if (a && typeof a.sfx === 'function') { try { a.sfx(n); } catch (_) {} } };
+
+  // Enemy archetypes (gameplay owns balance; meshes/colors come from GAME.art).
+  // hp/speed/bounty are base values for wave 1; hp scales by ENEMY_HP_GROWTH^(wave-1).
+  const ENEMY_TYPES = {
+    grunt:  { hp: 60,  speed: 2.2, bounty: 8  },
+    runner: { hp: 34,  speed: 3.7, bounty: 11 },
+    tank:   { hp: 170, speed: 1.4, bounty: 22 }
+  };
+
+  // Projectile feel per tower type.
+  const PROJECTILE_SPEED = { arrow: 22, cannon: 16, frost: 18 };
+  const SLOW_DURATION = 1.4;     // seconds a frost slow lasts
+  const HIT_RADIUS    = 0.45;    // world units: projectile considered "arrived"
+  const WAVE_CLEAR_SCORE = 50;   // bonus score for clearing a wave
+  const UPGRADE_RANGE_MUL = 1.12;
+  const UPGRADE_DPS_MUL   = 1.6;
+  const UPGRADE_COST_GROWTH = 1.5; // each level's upgrade costs more
+
+  // Internal (non-contract) spawn pacing state.
+  let _spawnTimer = 0;
+  let _spawnInterval = 0.9;
+  let _worldPath = [];     // [{x,y,z}] one point per PATH cell
+  let _segLen = [];        // length of each path segment
+  let _pathCellSet = null; // Set of "c,r" strings covering the full route ribbon
+
+  // ---- world mapping ---------------------------------------------------------
+  // Prefer the engine's mapping so enemies align with the rendered board.
+  function cellToWorld(c, r) {
+    const eng = GAME.engine;
+    if (eng && typeof eng.cellToWorld === 'function') {
+      const w = eng.cellToWorld(c, r);
+      if (w) return { x: w.x, y: w.y || 0, z: w.z };
+    }
+    // Fallback: centered grid on the XZ plane, y on ground.
+    const cfg = GAME.config;
+    const T = cfg.TILE;
+    return {
+      x: (c - (cfg.GRID_COLS - 1) / 2) * T,
+      y: 0,
+      z: (r - (cfg.GRID_ROWS - 1) / 2) * T
+    };
+  }
+
+  // Build the set of every cell the path ribbon covers (axis-aligned segments).
+  function buildPathCellSet() {
+    const set = new Set();
+    const P = GAME.config.PATH;
+    for (let i = 0; i < P.length; i++) {
+      set.add(P[i].c + ',' + P[i].r);
+      if (i < P.length - 1) {
+        const a = P[i], b = P[i + 1];
+        const dc = Math.sign(b.c - a.c), dr = Math.sign(b.r - a.r);
+        let c = a.c, r = a.r;
+        while (c !== b.c || r !== b.r) {
+          c += dc; r += dr;
+          set.add(c + ',' + r);
+        }
+      }
+    }
+    return set;
+  }
+
+  function buildWorldPath() {
+    const P = GAME.config.PATH;
+    _worldPath = P.map(p => cellToWorld(p.c, p.r));
+    _segLen = [];
+    for (let i = 0; i < _worldPath.length - 1; i++) {
+      const a = _worldPath[i], b = _worldPath[i + 1];
+      _segLen.push(Math.hypot(b.x - a.x, b.z - a.z) || 0.0001);
+    }
+  }
+
+  function inBounds(c, r) {
+    const cfg = GAME.config;
+    return c >= 0 && r >= 0 && c < cfg.GRID_COLS && r < cfg.GRID_ROWS;
+  }
+  const isPathCell = (c, r) => _pathCellSet && _pathCellSet.has(c + ',' + r);
+  const towerAt = (c, r) => GAME.state.towers.find(t => t.cell.c === c && t.cell.r === r) || null;
+
+  // ---- enemy spawning --------------------------------------------------------
+  function spawnEnemy(spec) {
+    const st = GAME.state;
+    const start = _worldPath[0];
+    const a = art();
+    const enemy = {
+      id: nextId(),
+      type: spec.type,
+      hp: spec.hp,
+      maxHp: spec.hp,
+      speed: spec.speed,
+      bounty: spec.bounty,
+      slowUntil: 0,
+      slowFactor: 1,
+      pathIndex: 0,
+      t: 0,
+      pos: { x: start.x, y: start.y, z: start.z },
+      mesh: (a && a.makeEnemyMesh) ? a.makeEnemyMesh(spec.type) : null,
+      alive: true,
+      reachedBase: false
+    };
+    st.enemies.push(enemy);
+    st.enemiesAlive = st.enemies.filter(e => e.alive).length;
+    return enemy;
+  }
+
+  // Advance one enemy along the path. Returns 'leak' if it reached the base.
+  function advanceEnemy(e, dt) {
+    const st = GAME.state;
+    // Resolve slow expiry against the engine clock.
+    if (e.slowUntil && st.time >= e.slowUntil) { e.slowFactor = 1; e.slowUntil = 0; }
+    let remaining = e.speed * e.slowFactor * dt;
+
+    while (remaining > 0 && e.pathIndex < _worldPath.length - 1) {
+      const segLen = _segLen[e.pathIndex];
+      const distOnSeg = segLen * e.t;
+      const distLeft = segLen - distOnSeg;
+      if (remaining >= distLeft) {
+        remaining -= distLeft;
+        e.pathIndex++;
+        e.t = 0;
+      } else {
+        e.t += remaining / segLen;
+        remaining = 0;
+      }
+    }
+
+    // Interpolate world position.
+    const i = Math.min(e.pathIndex, _worldPath.length - 1);
+    if (i >= _worldPath.length - 1) {
+      const end = _worldPath[_worldPath.length - 1];
+      e.pos.x = end.x; e.pos.y = end.y; e.pos.z = end.z;
+      return 'leak';
+    }
+    const a = _worldPath[i], b = _worldPath[i + 1];
+    e.pos.x = a.x + (b.x - a.x) * e.t;
+    e.pos.y = a.y + (b.y - a.y) * e.t;
+    e.pos.z = a.z + (b.z - a.z) * e.t;
+    return null;
+  }
+
+  function progress(e) { return e.pathIndex + e.t; } // for "first along path" targeting
+
+  // ---- combat ----------------------------------------------------------------
+  function acquireTarget(tower) {
+    const st = GAME.state;
+    let best = null, bestProg = -1;
+    for (const e of st.enemies) {
+      if (!e.alive) continue;
+      const dx = e.pos.x - tower.pos.x, dz = e.pos.z - tower.pos.z;
+      if (dx * dx + dz * dz <= tower.range * tower.range) {
+        const p = progress(e);
+        if (p > bestProg) { bestProg = p; best = e; }
+      }
+    }
+    return best;
+  }
+
+  function fire(tower, target) {
+    const st = GAME.state;
+    const cfg = GAME.config;
+    const archetype = cfg.TOWERS[tower.type] || {};
+    const damage = tower.dps / tower.fireRate;           // per-shot damage
+    const a = art();
+    const proj = {
+      id: nextId(),
+      from: { x: tower.pos.x, y: tower.pos.y + 0.6, z: tower.pos.z },
+      to: target,                                        // enemy reference
+      speed: PROJECTILE_SPEED[tower.type] || 18,
+      damage: damage,
+      splash: archetype.splash || 0,
+      slow: archetype.slow || 0,
+      mesh: (a && a.makeProjectileMesh) ? a.makeProjectileMesh(tower.type) : null,
+      alive: true
+    };
+    proj.pos = { x: proj.from.x, y: proj.from.y, z: proj.from.z };
+    st.projectiles.push(proj);
+    tower.cooldown = 1 / tower.fireRate;
+    tower.target = target;
+    sfx('shoot');
+    if (a && a.muzzleFX) { try { a.muzzleFX(proj.from); } catch (_) {} }
+  }
+
+  function damageEnemy(e, amount, slowAmount) {
+    if (!e.alive) return;
+    e.hp -= amount;
+    if (slowAmount && slowAmount > 0) {
+      e.slowFactor = Math.min(e.slowFactor, 1 - slowAmount);
+      e.slowUntil = GAME.state.time + SLOW_DURATION;
+    }
+    if (e.hp <= 0) killEnemy(e);
+  }
+
+  function killEnemy(e) {
+    if (!e.alive) return;
+    const st = GAME.state;
+    e.alive = false;
+    e.hp = 0;
+    st.gold += e.bounty;
+    st.score += e.bounty;
+    emit('enemy:killed', { enemy: e });
+    emit('state:changed', {});
+  }
+
+  function applyImpact(proj) {
+    const st = GAME.state;
+    const target = proj.to;
+    if (proj.splash > 0 && target) {
+      // Area damage centred on the target's position.
+      const cx = target.pos.x, cz = target.pos.z, r2 = proj.splash * proj.splash;
+      for (const e of st.enemies) {
+        if (!e.alive) continue;
+        const dx = e.pos.x - cx, dz = e.pos.z - cz;
+        if (dx * dx + dz * dz <= r2) damageEnemy(e, proj.damage, proj.slow);
+      }
+    } else if (target && target.alive) {
+      damageEnemy(target, proj.damage, proj.slow);
+    }
+    if (target && target.alive === false) {
+      // already handled by killEnemy
+    } else {
+      sfx('hit');
+    }
+  }
+
+  function updateProjectiles(dt) {
+    const st = GAME.state;
+    for (const p of st.projectiles) {
+      if (!p.alive) continue;
+      const target = p.to;
+      // Lost target (died/leaked before arrival): drop the shot.
+      if (!target || !target.alive) {
+        // Splash shots still detonate at last known position; direct shots fizzle.
+        if (p.splash > 0 && target) { applyImpact(p); }
+        p.alive = false;
+        continue;
+      }
+      const dx = target.pos.x - p.pos.x;
+      const dy = (target.pos.y + 0.4) - p.pos.y;
+      const dz = target.pos.z - p.pos.z;
+      const dist = Math.hypot(dx, dy, dz);
+      if (dist <= HIT_RADIUS) {
+        applyImpact(p);
+        p.alive = false;
+        continue;
+      }
+      const step = p.speed * dt;
+      if (step >= dist) {
+        p.pos.x = target.pos.x; p.pos.y = target.pos.y + 0.4; p.pos.z = target.pos.z;
+      } else {
+        p.pos.x += (dx / dist) * step;
+        p.pos.y += (dy / dist) * step;
+        p.pos.z += (dz / dist) * step;
+      }
+    }
+  }
+
+  // ---- wave lifecycle --------------------------------------------------------
+  function buildSpawnQueue(wave) {
+    const cfg = GAME.config;
+    const count = Math.max(1, Math.round(cfg.WAVE_BASE_COUNT * Math.pow(cfg.WAVE_GROWTH, wave - 1)));
+    const hpMul = Math.pow(cfg.ENEMY_HP_GROWTH, wave - 1);
+    const queue = [];
+    for (let i = 0; i < count; i++) {
+      let type = 'grunt';
+      // Tanks every 5th from wave 3; runners interleaved from wave 2.
+      if (wave >= 3 && i % 5 === 4) type = 'tank';
+      else if (wave >= 2 && i % 3 === 1) type = 'runner';
+      const base = ENEMY_TYPES[type];
+      queue.push({
+        type,
+        hp: Math.round(base.hp * hpMul),
+        speed: base.speed,
+        bounty: base.bounty
+      });
+    }
+    return queue;
+  }
+
+  function checkWaveClear() {
+    const st = GAME.state;
+    if (!st.waveActive) return;
+    const anyAlive = st.enemies.some(e => e.alive);
+    if (st.spawnQueue.length === 0 && !anyAlive) {
+      st.waveActive = false;
+      st.enemiesAlive = 0;
+      st.score += WAVE_CLEAR_SCORE;
+      emit('wave:clear', { wave: st.wave });
+      emit('state:changed', {});
+      if (st.wave >= GAME.config.MAX_WAVES) {
+        setPhase('won');
+        sfx('win');
+      } else {
+        setPhase('building');
+      }
+    }
+  }
+
+  function setPhase(phase) {
+    const st = GAME.state;
+    if (st.phase === phase) return;
+    st.phase = phase;
+    emit('phase:changed', { phase });
+  }
+
+  // ---- public API ------------------------------------------------------------
+  const gameplay = {
+    init() {
+      const cfg = GAME.config;
+      const st = GAME.state;
+      // Seed HUD scalars from config defaults.
+      st.lives = cfg.START_LIVES;
+      st.gold = cfg.START_GOLD;
+      st.score = 0;
+      st.wave = 0;
+      st.phase = 'menu';
+      st.enemies = [];
+      st.towers = [];
+      st.projectiles = [];
+      st.selectedTowerType = null;
+      st.hoverTile = null;
+      st.selectedTower = null;
+      st.waveActive = false;
+      st.spawnQueue = [];
+      st.enemiesAlive = 0;
+      // Precompute world path + the path-cell mask for build validation.
+      _pathCellSet = buildPathCellSet();
+      buildWorldPath();
+      emit('state:changed', {});
+    },
+
+    update(dt) {
+      const st = GAME.state;
+      if (!dt || dt <= 0) return;
+      if (dt > 0.1) dt = 0.1; // clamp big frame gaps (tab refocus)
+      // Only simulate during active play.
+      if (st.phase !== 'wave' && st.phase !== 'building') return;
+
+      // 1) Release queued spawns over time.
+      if (st.waveActive && st.spawnQueue.length > 0) {
+        _spawnTimer -= dt;
+        while (_spawnTimer <= 0 && st.spawnQueue.length > 0) {
+          spawnEnemy(st.spawnQueue.shift());
+          _spawnTimer += _spawnInterval;
+        }
+      }
+
+      // 2) Advance enemies; detect leaks.
+      let leaked = false;
+      for (const e of st.enemies) {
+        if (!e.alive) continue;
+        if (advanceEnemy(e, dt) === 'leak') {
+          e.alive = false;
+          e.reachedBase = true;
+          st.lives = Math.max(0, st.lives - 1);
+          leaked = true;
+          emit('enemy:leak', { enemy: e });
+        }
+      }
+      if (leaked) { sfx('leak'); emit('state:changed', {}); }
+
+      // 3) Towers acquire + fire.
+      for (const tower of st.towers) {
+        if (tower.cooldown > 0) tower.cooldown -= dt;
+        const target = acquireTarget(tower);
+        tower.target = target;
+        if (target && tower.cooldown <= 0) fire(tower, target);
+      }
+
+      // 4) Projectiles travel + impact (may award gold/score via killEnemy).
+      updateProjectiles(dt);
+
+      // 5) Reap dead enemies/projectiles from the collections.
+      if (st.enemies.length) st.enemies = st.enemies.filter(e => e.alive);
+      if (st.projectiles.length) st.projectiles = st.projectiles.filter(p => p.alive);
+      st.enemiesAlive = st.enemies.length;
+
+      // 6) Win/lose + wave-clear bookkeeping.
+      if (st.lives <= 0 && st.phase !== 'gameover') {
+        setPhase('gameover');
+        sfx('gameover');
+        return;
+      }
+      checkWaveClear();
+    },
+
+    startWave() {
+      const st = GAME.state;
+      const cfg = GAME.config;
+      if (st.waveActive) return;                 // already running
+      if (st.phase === 'gameover' || st.phase === 'won') return;
+      if (st.wave >= cfg.MAX_WAVES) return;
+      st.wave += 1;
+      st.spawnQueue = buildSpawnQueue(st.wave);
+      st.waveActive = true;
+      // Spawn pacing eases slightly as waves grow so big waves don't take forever.
+      _spawnInterval = Math.max(0.45, 0.9 - st.wave * 0.02);
+      _spawnTimer = 0;
+      setPhase('wave');
+      emit('wave:start', { wave: st.wave });
+      sfx('waveStart');
+      emit('state:changed', {});
+    },
+
+    canPlace(cell) {
+      if (!cell) return false;
+      const st = GAME.state;
+      const cfg = GAME.config;
+      const type = st.selectedTowerType;
+      if (!type) return false;
+      const arch = cfg.TOWERS[type];
+      if (!arch) return false;
+      if (!inBounds(cell.c, cell.r)) return false;
+      if (isPathCell(cell.c, cell.r)) return false;
+      if (towerAt(cell.c, cell.r)) return false;
+      if (st.gold < arch.cost) return false;
+      return true;
+    },
+
+    placeTower(cell) {
+      const st = GAME.state;
+      const cfg = GAME.config;
+      if (!this.canPlace(cell)) return null;
+      const type = st.selectedTowerType;
+      const a = cfg.TOWERS[type];
+      const world = cellToWorld(cell.c, cell.r);
+      const a2 = art();
+      const tower = {
+        id: nextId(),
+        type,
+        level: 1,
+        cell: { c: cell.c, r: cell.r },
+        pos: { x: world.x, y: world.y, z: world.z },
+        range: a.range,
+        dps: a.dps,
+        fireRate: a.fireRate,
+        cooldown: 0,
+        target: null,
+        invested: a.cost,    // for sell refund accounting
+        mesh: (a2 && a2.makeTowerMesh) ? a2.makeTowerMesh(type, 1) : null
+      };
+      st.gold -= a.cost;
+      st.towers.push(tower);
+      emit('tower:placed', { tower });
+      emit('state:changed', {});
+      return tower;
+    },
+
+    selectTower(tower) {
+      GAME.state.selectedTower = tower || null;
+    },
+
+    upgradeTower(tower) {
+      const st = GAME.state;
+      const cfg = GAME.config;
+      if (!tower) return false;
+      const arche = cfg.TOWERS[tower.type];
+      if (!arche) return false;
+      const cost = Math.round((arche.upgradeCost || 40) * Math.pow(UPGRADE_COST_GROWTH, tower.level - 1));
+      if (st.gold < cost) return false;
+      st.gold -= cost;
+      tower.invested += cost;
+      tower.level += 1;
+      tower.range *= UPGRADE_RANGE_MUL;
+      tower.dps *= UPGRADE_DPS_MUL;
+      // Swap to the upgraded mesh (engine.syncMeshes reconciles add/remove).
+      const a = art();
+      if (a && a.makeTowerMesh) {
+        const nm = a.makeTowerMesh(tower.type, tower.level);
+        if (nm) tower.mesh = nm;
+      }
+      emit('tower:upgraded', { tower });
+      emit('state:changed', {});
+      return true;
+    },
+
+    sellTower(tower) {
+      const st = GAME.state;
+      const cfg = GAME.config;
+      if (!tower) return false;
+      const idx = st.towers.indexOf(tower);
+      if (idx === -1) return false;
+      const refund = Math.round((cfg.SELL_REFUND || 0.6) * (tower.invested || 0));
+      st.gold += refund;
+      st.towers.splice(idx, 1);
+      if (st.selectedTower === tower) st.selectedTower = null;
+      // Orphan any in-flight projectiles aimed by this tower's targeting (none stored), fine.
+      emit('tower:sold', { tower, refund });
+      emit('state:changed', {});
+      return true;
+    },
+
+    reset() {
+      // Full restart to a fresh, playable game.
+      _id = 1;
+      _spawnTimer = 0;
+      _spawnInterval = 0.9;
+      this.init();
+      setPhase('building');
+    }
+  };
+
+  GAME.gameplay = gameplay;
+})();
+
+/* ===== GAME.ui (workstream: ui/HUD) ===== */
+/* =============================================================================
+ * GAME.ui — workstream: ui/HUD + a11y (Phase 2)
+ * DOM HUD, tower shop, overlays, input intents. Conforms to .contract.md §3.3/§4/§5.
+ *
+ * Contract functions implemented (GAME.ui.*):
+ *   init()                  cache/ensure HUD DOM (§4), inject token+HUD CSS (§5),
+ *                           wire buttons -> gameplay.*, canvas pointer + keyboard
+ *                           input, subscribe to GAME.events (§3.5)
+ *   update()                cheap: write changed state scalars into HUD nodes,
+ *                           refresh shop affordability + button enable/labels
+ *   showToast(msg, kind)    transient 'info'|'good'|'bad' message (tokens only)
+ *   showOverlay(kind)       'menu'|'paused'|'gameover'|'won' fullscreen panel
+ *   selectShop(type)        set state.selectedTowerType, highlight the card
+ *   openTowerPanel(tower)   show/hide upgrade+sell panel for a selected tower
+ *
+ * Also exported for the integrator (drop-in fragments, both also injected by init):
+ *   GAME.ui.CSS             the :root tokens (§5) + full HUD stylesheet
+ *   GAME.ui.HTML            the §4 HUD markup (string), for static <body> assembly
+ *
+ * Cross-module use (all guarded so this file degrades gracefully standalone):
+ *   GAME.config / GAME.state / GAME.events            (shared)
+ *   GAME.gameplay.{startWave,canPlace,placeTower,selectTower,
+ *                  upgradeTower,sellTower,reset}       (intents — ui never mutates economy)
+ *   GAME.engine.{screenToCell,setHoverCell}           (picking / build ghost)
+ *   GAME.art.{toggleMute,isMuted}                     (sound toggle)
+ *
+ * a11y: <header>/<aside>/<footer> landmarks with accessible names + sr-only
+ *   headings; aria-pressed shop toggles with aria-keyshortcuts (1/2/3); a full
+ *   keyboard path (Tab+Enter on a card, or digits) to select/buy a tower;
+ *   role=status live toast; role=dialog aria-modal overlay with focus management.
+ * UI/UX: WCAG-AA token pairs only (§5, all re-verified incl. on --panel-2); real
+ *   :hover AND :focus-visible on every control; a --space-* spacing scale; a
+ *   responsive breakpoint (shop reflows to a bottom rail on narrow screens);
+ *   intentional "tactical command console" identity (cut-corner panels, corner
+ *   ticks, tabular HUD numerals) — not the generic centered-rounded-card default.
+ * ============================================================================= */
+(function () {
+  'use strict';
+
+  // ---- namespace + event-bus guard (shared §3.0; idempotent across arms) -----
+  window.GAME = window.GAME || {};
+  const GAME = window.GAME;
+  GAME.events = GAME.events || (() => {
+    const m = new Map();
+    return {
+      on:  (e, fn) => { (m.get(e) || m.set(e, []).get(e)).push(fn); },
+      off: (e, fn) => { const a = m.get(e); if (a) m.set(e, a.filter(f => f !== fn)); },
+      emit:(e, p)  => { (m.get(e) || []).slice().forEach(fn => fn(p)); }
+    };
+  })();
+
+  const $  = (id) => document.getElementById(id);
+  const on = (el, ev, fn, opts) => { if (el) el.addEventListener(ev, fn, opts); };
+  const st = () => GAME.state || {};
+  const cfg = () => GAME.config || {};
+  const emit = (e, p) => { try { GAME.events.emit(e, p || {}); } catch (_) {} };
+
+  // ===========================================================================
+  // 1. STYLES — design tokens (§5, WCAG-AA verified) + the HUD stylesheet.
+  //    Spacing scale, real :hover + :focus-visible on every control, one
+  //    responsive breakpoint, reduced-motion support, an intentional identity.
+  // ===========================================================================
+  const CSS = `
+:root{
+  /* surfaces (backgrounds — not text) */
+  --bg-deep:#0c0f16; --panel:#161c2b; --panel-2:#202a40; --line:#2f3b57;
+  /* text + semantic accents (every pair used below is AA-verified, §5) */
+  --text:#f5f7fa; --muted:#c5d0e6; --accent:#ffd54a; --danger:#ff6b6b;
+  --success:#5ad1a0; --info:#6db8ff;
+  /* on-fill inks */
+  --ink:#11151c; --ink-info:#0c0f16; --on-danger:#ffffff; --danger-deep:#b3402f;
+
+  /* spacing scale (consistent rhythm everywhere) */
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+  --space-5:24px; --space-6:32px; --space-7:48px;
+
+  /* radii + elevation + motion */
+  --r-sm:6px; --r-md:10px;
+  --bevel:10px;                         /* cut-corner size for the console look */
+  --ring:0 0 0 2px var(--info);         /* focus ring */
+  --shadow-1:0 2px 6px rgba(0,0,0,.45);
+  --shadow-2:0 10px 28px rgba(0,0,0,.55);
+  --ease:cubic-bezier(.2,.7,.2,1);
+  --hud-font:ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  --num-font:ui-monospace,"Cascadia Code",Menlo,Consolas,monospace;
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg-deep);color:var(--text);
+  font-family:var(--hud-font);-webkit-font-smoothing:antialiased;overflow:hidden}
+
+#game-root{position:fixed;inset:0;z-index:0}
+#game-canvas{position:fixed;inset:0;display:block;width:100%;height:100%;z-index:0}
+
+/* HUD layers: containers ignore pointer events so map clicks reach the canvas;
+   interactive controls opt back in. */
+.hud{position:fixed;z-index:10;pointer-events:none;color:var(--text)}
+.hud button,.hud .shop-card,.hud [data-interactive]{pointer-events:auto}
+
+/* shared "console panel" surface: cut top-left + bottom-right corners */
+.panelish{
+  background:linear-gradient(180deg,var(--panel) 0%,var(--bg-deep) 140%);
+  border:1px solid var(--line);
+  clip-path:polygon(var(--bevel) 0,100% 0,100% calc(100% - var(--bevel)),
+                    calc(100% - var(--bevel)) 100%,0 100%,0 var(--bevel));
+  box-shadow:var(--shadow-1);
+}
+
+/* ---------- top status bar (banner landmark) ---------- */
+#hud-top{top:0;left:0;right:0;display:flex;align-items:center;gap:var(--space-4);
+  padding:var(--space-3) var(--space-5);
+  background:linear-gradient(180deg,rgba(12,15,22,.94),rgba(12,15,22,.66));
+  border-bottom:1px solid var(--line);backdrop-filter:blur(6px)}
+#hud-top::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;
+  background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.7}
+.hud-stat{display:flex;align-items:center;gap:var(--space-2);
+  padding:var(--space-1) var(--space-3);border:1px solid var(--line);border-radius:var(--r-sm);
+  background:rgba(32,42,64,.35)}
+.hud-icon{font-size:15px;line-height:1}
+#stat-lives .hud-icon{color:var(--danger)}
+#stat-gold  .hud-icon{color:var(--accent)}
+.hud-label{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.hud-val{font-family:var(--num-font);font-variant-numeric:tabular-nums;
+  font-weight:700;font-size:17px;color:var(--text);min-width:2ch;text-align:right}
+#stat-lives .hud-val{color:var(--danger)}
+#stat-gold  .hud-val{color:var(--accent)}
+#stat-score .hud-val{color:var(--text)}
+#stat-wave  .hud-val{color:var(--info)}
+#btn-mute{margin-left:auto}
+
+/* low-life pulse on the lives chip (motion-safe) */
+.hud-stat.is-critical{border-color:var(--danger);
+  animation:pulseCrit 1.1s var(--ease) infinite}
+@keyframes pulseCrit{0%,100%{box-shadow:0 0 0 0 rgba(255,107,107,0)}
+  50%{box-shadow:0 0 0 3px rgba(255,107,107,.30)}}
+
+/* ---------- buttons (shared) ---------- */
+.hud-btn{font-family:var(--hud-font);font-weight:650;font-size:13px;letter-spacing:.03em;
+  color:var(--text);background:var(--panel-2);border:1px solid var(--line);
+  border-radius:var(--r-sm);padding:var(--space-2) var(--space-4);cursor:pointer;
+  display:inline-flex;align-items:center;gap:var(--space-2);
+  transition:transform .12s var(--ease),background .15s var(--ease),
+             border-color .15s var(--ease),box-shadow .15s var(--ease)}
+.hud-btn:hover{background:#283450;border-color:var(--info);transform:translateY(-1px)}
+.hud-btn:active{transform:translateY(0)}
+.hud-btn:focus-visible{outline:none;box-shadow:var(--ring);border-color:var(--info)}
+.hud-btn[disabled],.hud-btn[aria-disabled="true"]{opacity:.45;cursor:not-allowed;
+  transform:none;box-shadow:none}
+
+/* primary action (Start Wave): --accent fill + --ink text => 12.95:1 */
+.hud-btn.primary{background:var(--accent);color:var(--ink);border-color:var(--accent);
+  font-weight:750;text-shadow:none}
+.hud-btn.primary:hover{background:#ffe07a;border-color:#ffe07a;
+  box-shadow:0 4px 18px rgba(255,213,74,.30)}
+.hud-btn.primary:focus-visible{box-shadow:0 0 0 2px var(--ink),0 0 0 4px var(--accent)}
+
+/* destructive (Sell): --danger-deep fill + white text => 5.69:1 (never --danger) */
+.hud-btn.danger{background:var(--danger-deep);color:var(--on-danger);border-color:var(--danger-deep)}
+.hud-btn.danger:hover{background:#c8493a;border-color:#c8493a}
+
+#btn-mute{font-size:16px;padding:var(--space-2);min-width:38px;justify-content:center}
+
+/* ---------- tower shop (complementary landmark, left rail) ---------- */
+#hud-shop{left:var(--space-4);top:50%;transform:translateY(-50%);
+  display:flex;flex-direction:column;gap:var(--space-3);width:188px}
+.shop-card{position:relative;text-align:left;cursor:pointer;color:var(--text);
+  background:linear-gradient(180deg,var(--panel),var(--bg-deep) 160%);
+  border:1px solid var(--line);border-left:3px solid var(--line);
+  border-radius:var(--r-md);padding:var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  display:grid;grid-template-columns:1fr auto;grid-template-rows:auto auto;
+  column-gap:var(--space-2);row-gap:var(--space-1);
+  transition:transform .12s var(--ease),border-color .15s var(--ease),
+             background .15s var(--ease),box-shadow .15s var(--ease)}
+.shop-card:hover{background:var(--panel-2);transform:translateX(2px);box-shadow:var(--shadow-1)}
+.shop-card:focus-visible{outline:none;box-shadow:var(--ring);border-color:var(--info)}
+.shop-card[aria-pressed="true"]{border-color:var(--accent);
+  box-shadow:0 0 0 1px var(--accent),0 6px 20px rgba(0,0,0,.5);transform:translateX(2px)}
+.shop-card[aria-disabled="true"]{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}
+/* per-tower accent stripe matches the 3D tower color tokens */
+.shop-card[data-tower="arrow"]{border-left-color:var(--accent)}
+.shop-card[data-tower="cannon"]{border-left-color:var(--danger)}
+.shop-card[data-tower="frost"]{border-left-color:var(--info)}
+.shop-name{grid-column:1;grid-row:1;font-weight:700;font-size:14px;letter-spacing:.02em}
+.shop-key{grid-column:2;grid-row:1;font-family:var(--num-font);font-size:11px;font-weight:700;
+  color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 6px;
+  align-self:start;justify-self:end}
+.shop-cost{grid-column:1;grid-row:2;display:flex;align-items:center;gap:var(--space-1);
+  font-family:var(--num-font);font-variant-numeric:tabular-nums;font-size:13px;font-weight:700;
+  color:var(--success)}
+.shop-cost.is-broke{color:var(--danger)}
+.shop-cost .coin{color:var(--accent)}
+.shop-stats{grid-column:2;grid-row:2;align-self:end;justify-self:end;
+  font-family:var(--num-font);font-size:11px;color:var(--muted);letter-spacing:.02em}
+
+/* ---------- selected-tower panel ---------- */
+#hud-tower-panel{left:var(--space-4);bottom:var(--space-6);width:240px;
+  padding:var(--space-4);display:flex;flex-direction:column;gap:var(--space-3)}
+#tp-title{font-weight:750;font-size:15px;letter-spacing:.02em;color:var(--text)}
+#tp-title .tp-sub{display:block;font-weight:600;font-size:12px;color:var(--muted);
+  margin-top:2px;letter-spacing:.01em}
+#hud-tower-panel .tp-row{display:flex;gap:var(--space-2)}
+#hud-tower-panel #btn-upgrade,#hud-tower-panel #btn-sell{flex:1;justify-content:center}
+#btn-tp-close{position:absolute;top:var(--space-2);right:var(--space-2);
+  min-width:30px;padding:var(--space-1) var(--space-2);font-size:13px}
+
+/* ---------- bottom wave controls (contentinfo landmark) ---------- */
+#hud-bottom{left:50%;bottom:var(--space-5);transform:translateX(-50%);
+  display:flex;gap:var(--space-3);padding:var(--space-2);align-items:center}
+#btn-start-wave{font-size:14px;padding:var(--space-3) var(--space-6)}
+
+/* ---------- toast ---------- */
+#hud-toast{top:var(--space-7);left:50%;transform:translateX(-50%) translateY(-8px);
+  z-index:50;pointer-events:none;max-width:min(86vw,460px);
+  padding:var(--space-2) var(--space-4);border-radius:var(--r-sm);
+  background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow-2);
+  font-weight:650;font-size:13px;color:var(--text);text-align:center;
+  opacity:0;transition:opacity .2s var(--ease),transform .2s var(--ease)}
+#hud-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+#hud-toast.kind-info{border-color:var(--info);color:var(--info)}
+#hud-toast.kind-good{border-color:var(--success);color:var(--success)}
+#hud-toast.kind-bad{border-color:var(--danger);color:var(--danger)}
+
+/* ---------- overlay (modal dialog) ---------- */
+#overlay{position:fixed;inset:0;z-index:100;display:grid;place-items:center;
+  background:rgba(6,9,14,.72);backdrop-filter:blur(4px)}
+.overlay-card{position:relative;width:min(92vw,420px);text-align:center;
+  padding:var(--space-7) var(--space-6);
+  background:linear-gradient(180deg,var(--panel),var(--bg-deep));
+  border:1px solid var(--line);border-radius:var(--r-md);box-shadow:var(--shadow-2)}
+/* tactical corner ticks — a small intentional flourish, not a generic card */
+.overlay-card::before,.overlay-card::after{content:"";position:absolute;width:18px;height:18px;
+  border:2px solid var(--accent);opacity:.85}
+.overlay-card::before{top:10px;left:10px;border-right:none;border-bottom:none}
+.overlay-card::after{bottom:10px;right:10px;border-left:none;border-top:none}
+#overlay-title{margin:0 0 var(--space-3);font-size:30px;font-weight:800;letter-spacing:.02em;
+  color:var(--accent)}
+#overlay-msg{margin:0 auto var(--space-6);max-width:34ch;line-height:1.55;color:var(--muted);
+  font-size:14px}
+#overlay-action{font-size:15px;padding:var(--space-3) var(--space-7)}
+.overlay-hint{margin-top:var(--space-4);font-size:12px;color:var(--muted);
+  font-family:var(--num-font);letter-spacing:.02em}
+.overlay-hint kbd{background:var(--panel-2);border:1px solid var(--line);border-radius:4px;
+  padding:1px 6px;color:var(--text);font-size:11px}
+
+.hidden{display:none !important}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0,0,0,0);white-space:nowrap;border:0}
+
+/* ---------- responsive: narrow screens reflow the shop to a bottom rail ---- */
+@media (max-width:720px){
+  #hud-top{padding:var(--space-2) var(--space-3);gap:var(--space-2);flex-wrap:wrap}
+  .hud-val{font-size:15px}
+  .hud-label{font-size:10px}
+  #hud-shop{top:auto;bottom:calc(var(--space-7) + var(--space-5));left:var(--space-2);
+    right:var(--space-2);width:auto;transform:none;
+    flex-direction:row;overflow-x:auto;gap:var(--space-2);padding-bottom:var(--space-1)}
+  .shop-card{min-width:148px;flex:0 0 auto}
+  #hud-tower-panel{left:var(--space-2);right:var(--space-2);width:auto;bottom:var(--space-3)}
+  #hud-bottom{bottom:var(--space-2);gap:var(--space-2)}
+  #btn-start-wave{padding:var(--space-3) var(--space-4)}
+  #overlay-title{font-size:24px}
+}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.001ms !important;animation-iteration-count:1 !important;
+    transition-duration:.001ms !important}
+}
+`;
+
+  // ===========================================================================
+  // 2. HTML — the §4 HUD markup. Exported for static assembly; init() also
+  //    ensures every node exists so the module never crashes standalone.
+  // ===========================================================================
+  const HTML = `
+<canvas id="game-canvas"></canvas>
+
+<header id="hud-top" class="hud" role="banner" aria-label="Game status">
+  <h2 class="sr-only">Game status</h2>
+  <div class="hud-stat" id="stat-lives" aria-label="Lives 20"><span class="hud-icon" aria-hidden="true">&#9829;</span><span class="hud-val" id="val-lives">20</span></div>
+  <div class="hud-stat" id="stat-gold" aria-label="Gold 120"><span class="hud-icon" aria-hidden="true">&#9679;</span><span class="hud-val" id="val-gold">120</span></div>
+  <div class="hud-stat" id="stat-score" aria-label="Score 0"><span class="hud-label">Score</span><span class="hud-val" id="val-score">0</span></div>
+  <div class="hud-stat" id="stat-wave" aria-label="Wave 0 of 20"><span class="hud-label">Wave</span><span class="hud-val" id="val-wave">0/20</span></div>
+  <button id="btn-mute" class="hud-btn" aria-label="Toggle sound" aria-pressed="false">&#128266;</button>
+</header>
+
+<aside id="hud-shop" class="hud panelish" aria-label="Tower shop">
+  <h2 class="sr-only">Tower shop</h2>
+  <button class="shop-card" id="shop-arrow" data-tower="arrow" aria-pressed="false" aria-keyshortcuts="1"></button>
+  <button class="shop-card" id="shop-cannon" data-tower="cannon" aria-pressed="false" aria-keyshortcuts="2"></button>
+  <button class="shop-card" id="shop-frost" data-tower="frost" aria-pressed="false" aria-keyshortcuts="3"></button>
+</aside>
+
+<div id="hud-tower-panel" class="hud panelish hidden" role="region" aria-label="Selected tower">
+  <div id="tp-title"></div>
+  <div class="tp-row">
+    <button id="btn-upgrade" class="hud-btn primary">Upgrade</button>
+    <button id="btn-sell" class="hud-btn danger">Sell</button>
+  </div>
+  <button id="btn-tp-close" class="hud-btn" aria-label="Close tower panel">&#10005;</button>
+</div>
+
+<footer id="hud-bottom" class="hud" role="contentinfo" aria-label="Wave controls">
+  <button id="btn-start-wave" class="hud-btn primary">Start Wave</button>
+  <button id="btn-pause" class="hud-btn">Pause</button>
+</footer>
+
+<div id="hud-toast" class="hidden" role="status" aria-live="polite"></div>
+
+<div id="overlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="overlay-title" aria-describedby="overlay-msg">
+  <div class="overlay-card">
+    <h1 id="overlay-title">Tower Defense</h1>
+    <p id="overlay-msg"></p>
+    <button id="overlay-action" class="hud-btn primary">Play</button>
+    <p class="overlay-hint">Pick a tower <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> &middot; place on the map &middot; <kbd>P</kbd> pause &middot; <kbd>M</kbd> mute</p>
+  </div>
+</div>
+`;
+
+  // ---- defensive DOM ensure (no-op when the static §4 markup is present) -----
+  function ensureStyle() {
+    if (document.getElementById('ui-style')) return;
+    const s = document.createElement('style');
+    s.id = 'ui-style';
+    s.textContent = CSS;
+    (document.head || document.documentElement).appendChild(s);
+  }
+  function ensureMarkup() {
+    let root = $('game-root');
+    if (!root) {
+      root = document.createElement('div');
+      root.id = 'game-root';
+      document.body.appendChild(root);
+    }
+    // Only build if the HUD is missing (engine may have already mounted the canvas).
+    if (!$('hud-top') || !$('hud-shop') || !$('overlay')) {
+      const frag = document.createElement('div');
+      frag.innerHTML = HTML;
+      // Don't duplicate a canvas the engine already created.
+      if ($('game-canvas')) {
+        const c = frag.querySelector('#game-canvas');
+        if (c) c.remove();
+      }
+      while (frag.firstChild) root.appendChild(frag.firstChild);
+    }
+  }
+
+  // ===========================================================================
+  // 3. UI MODULE
+  // ===========================================================================
+  const dom = {};         // cached nodes
+  const last = {};        // last-rendered scalar cache (cheap dirty checks)
+  let _toastTimer = 0;
+  let _prevPhase = null;  // for pause/resume restore
+  let _lastFocus = null;  // restore focus after a modal overlay closes
+
+  function cache() {
+    ['val-lives','val-gold','val-score','val-wave',
+     'stat-lives','stat-gold','stat-score','stat-wave',
+     'btn-mute','hud-shop','shop-arrow','shop-cannon','shop-frost',
+     'hud-tower-panel','tp-title','btn-upgrade','btn-sell','btn-tp-close',
+     'btn-start-wave','btn-pause','hud-toast',
+     'overlay','overlay-title','overlay-msg','overlay-action'
+    ].forEach(id => { dom[id] = $(id); });
+    dom.shopCards = ['arrow','cannon','frost']
+      .map(t => $('shop-' + t)).filter(Boolean);
+  }
+
+  // ----- shop card content (built from config so it's always in sync) --------
+  const KEY_OF = { arrow: '1', cannon: '2', frost: '3' };
+  function buildShopCards() {
+    const towers = cfg().TOWERS || {};
+    dom.shopCards.forEach(card => {
+      const type = card.getAttribute('data-tower');
+      const t = towers[type];
+      if (!t) return;
+      const key = KEY_OF[type] || '';
+      card.dataset.cost = String(t.cost);
+      card.innerHTML =
+        '<span class="shop-name">' + esc(t.name) + '</span>' +
+        '<span class="shop-key" aria-hidden="true">' + esc(key) + '</span>' +
+        '<span class="shop-cost"><span class="coin" aria-hidden="true">&#9679;</span>' + t.cost + '</span>' +
+        '<span class="shop-stats" aria-hidden="true">DPS ' + t.dps + ' &middot; R' + t.range + '</span>';
+      card.setAttribute('aria-label',
+        t.name + ' tower, costs ' + t.cost + ' gold, damage ' + t.dps +
+        ', range ' + t.range + '. Press ' + key + ' to select.');
+    });
+  }
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, c =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
+  // ----- wiring -------------------------------------------------------------
+  function wire() {
+    // shop cards -> select/toggle tower type
+    dom.shopCards.forEach(card => {
+      on(card, 'click', () => {
+        if (card.getAttribute('aria-disabled') === 'true') return;
+        const type = card.getAttribute('data-tower');
+        // toggle: re-clicking the active card returns to inspect mode
+        ui.selectShop(st().selectedTowerType === type ? null : type);
+      });
+    });
+
+    // bottom controls
+    on(dom['btn-start-wave'], 'click', () => {
+      if (GAME.gameplay && GAME.gameplay.startWave) GAME.gameplay.startWave();
+    });
+    on(dom['btn-pause'], 'click', togglePause);
+
+    // mute
+    on(dom['btn-mute'], 'click', toggleMute);
+
+    // tower panel
+    on(dom['btn-upgrade'], 'click', () => {
+      const t = st().selectedTower;
+      if (t && GAME.gameplay && GAME.gameplay.upgradeTower) GAME.gameplay.upgradeTower(t);
+    });
+    on(dom['btn-sell'], 'click', () => {
+      const t = st().selectedTower;
+      if (t && GAME.gameplay && GAME.gameplay.sellTower) GAME.gameplay.sellTower(t);
+    });
+    on(dom['btn-tp-close'], 'click', () => {
+      if (GAME.gameplay && GAME.gameplay.selectTower) GAME.gameplay.selectTower(null);
+      ui.openTowerPanel(null);
+    });
+
+    // overlay primary action (Play / Resume / Play Again)
+    on(dom['overlay-action'], 'click', onOverlayAction);
+
+    // canvas pointer input (ui owns DOM input; routes to engine picking + gameplay)
+    const canvas = $('game-canvas');
+    on(canvas, 'pointermove', onCanvasMove);
+    on(canvas, 'pointerleave', () => { if (GAME.engine && GAME.engine.setHoverCell) GAME.engine.setHoverCell(null); });
+    on(canvas, 'click', onCanvasClick);
+
+    // global keyboard affordances
+    on(window, 'keydown', onKeyDown);
+  }
+
+  function onCanvasMove(e) {
+    const eng = GAME.engine; if (!eng || !eng.screenToCell) return;
+    const cell = eng.screenToCell(e.clientX, e.clientY);
+    if (eng.setHoverCell) eng.setHoverCell(cell);
+  }
+
+  function onCanvasClick(e) {
+    const eng = GAME.engine, gp = GAME.gameplay;
+    if (!eng || !eng.screenToCell || !gp) return;
+    const cell = eng.screenToCell(e.clientX, e.clientY);
+    if (!cell) return;
+    // 1) a tower type is selected and the cell is buildable -> place it
+    if (st().selectedTowerType && gp.canPlace && gp.canPlace(cell)) {
+      const placed = gp.placeTower && gp.placeTower(cell);
+      if (!placed) ui.showToast('Cannot build there', 'bad');
+      return;
+    }
+    // 2) clicked an existing tower -> inspect (upgrade/sell)
+    const existing = (st().towers || []).find(t =>
+      t.cell && t.cell.c === cell.c && t.cell.r === cell.r);
+    if (existing) {
+      if (gp.selectTower) gp.selectTower(existing);
+      ui.openTowerPanel(existing);
+      return;
+    }
+    // 3) empty inspect click -> dismiss any open panel
+    if (gp.selectTower) gp.selectTower(null);
+    ui.openTowerPanel(null);
+  }
+
+  function onKeyDown(e) {
+    if (e.defaultPrevented) return;
+    const tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    switch (e.key) {
+      case '1': ui.selectShop(st().selectedTowerType === 'arrow'  ? null : 'arrow');  break;
+      case '2': ui.selectShop(st().selectedTowerType === 'cannon' ? null : 'cannon'); break;
+      case '3': ui.selectShop(st().selectedTowerType === 'frost'  ? null : 'frost');  break;
+      case 'Escape':
+        if (st().phase === 'paused') { togglePause(); break; }
+        if (st().selectedTowerType) { ui.selectShop(null); break; }
+        if (GAME.gameplay && GAME.gameplay.selectTower) GAME.gameplay.selectTower(null);
+        ui.openTowerPanel(null);
+        break;
+      case 'p': case 'P': togglePause(); break;
+      case 'm': case 'M': toggleMute(); break;
+      default: return;
+    }
+  }
+
+  function toggleMute() {
+    const a = GAME.art;
+    let muted;
+    if (a && a.toggleMute) muted = a.toggleMute();
+    else { st().muted = !st().muted; muted = st().muted; }   // fallback
+    reflectMute(!!muted);
+  }
+  function reflectMute(muted) {
+    const b = dom['btn-mute']; if (!b) return;
+    b.textContent = muted ? '🔇' : '🔊';  // 🔇 / 🔊
+    b.setAttribute('aria-pressed', String(muted));
+    b.setAttribute('aria-label', muted ? 'Sound off, turn on' : 'Sound on, turn off');
+  }
+
+  // Pause/resume. The contract defines a 'paused' phase but no gameplay.pause
+  // intent, so we prefer one if present and otherwise toggle the phase here
+  // (gameplay.update self-gates on phase, so the sim freezes either way).
+  function togglePause() {
+    const s = st();
+    const gp = GAME.gameplay;
+    if (gp && gp.togglePause) { gp.togglePause(); return; }
+    if (s.phase === 'paused') {
+      const back = (_prevPhase === 'wave' || _prevPhase === 'building') ? _prevPhase : 'building';
+      setPhaseSafe(back);
+    } else if (s.phase === 'wave' || s.phase === 'building') {
+      _prevPhase = s.phase;
+      setPhaseSafe('paused');
+    }
+  }
+  function setPhaseSafe(phase) {
+    const s = st();
+    if (s.phase === phase) return;
+    s.phase = phase;
+    emit('phase:changed', { phase });
+  }
+
+  function onOverlayAction() {
+    const phase = st().phase;
+    const gp = GAME.gameplay;
+    if (phase === 'paused') { togglePause(); return; }
+    // menu / gameover / won -> (re)start a fresh game
+    if (gp && gp.reset) gp.reset();
+    else setPhaseSafe('building');
+  }
+
+  // ----- event subscriptions -------------------------------------------------
+  function subscribe() {
+    const ev = GAME.events;
+    ev.on('state:changed', ui.update);
+    ev.on('phase:changed', (p) => ui.showOverlay((p && p.phase) || st().phase));
+    ev.on('wave:start', (p) => ui.showToast('Wave ' + (p && p.wave) + ' incoming', 'info'));
+    ev.on('wave:clear', (p) => ui.showToast('Wave ' + (p && p.wave) + ' cleared  +50', 'good'));
+    ev.on('enemy:leak', () => ui.showToast('A creep reached the base!', 'bad'));
+    ev.on('tower:placed', () => ui.showToast('Tower built', 'good'));
+    ev.on('tower:upgraded', (p) => { if (p && p.tower) ui.openTowerPanel(p.tower); ui.showToast('Tower upgraded', 'good'); });
+    ev.on('tower:sold', () => { ui.openTowerPanel(null); ui.showToast('Tower sold', 'info'); });
+  }
+
+  // ===========================================================================
+  // 4. PUBLIC API (§3.3)
+  // ===========================================================================
+  const ui = {
+    init() {
+      ensureStyle();
+      ensureMarkup();
+      cache();
+      buildShopCards();
+      wire();
+      subscribe();
+      // initial paints
+      reflectMute(!!(st().muted || (GAME.art && GAME.art.isMuted && GAME.art.isMuted())));
+      ui.openTowerPanel(null);
+      ui.showOverlay(st().phase || 'menu');
+      ui.update();
+    },
+
+    // Cheap per-frame sync: write scalars only when they change.
+    update() {
+      const s = st();
+      setText('val-lives', s.lives);
+      setText('val-gold', s.gold);
+      setText('val-score', s.score);
+      const waveStr = (s.wave || 0) + '/' + (cfg().MAX_WAVES || 20);
+      setText('val-wave', waveStr);
+
+      // stat accessible names + low-life cue
+      setAria('stat-lives', 'Lives ' + s.lives);
+      setAria('stat-gold', 'Gold ' + s.gold);
+      setAria('stat-score', 'Score ' + s.score);
+      setAria('stat-wave', 'Wave ' + (s.wave || 0) + ' of ' + (cfg().MAX_WAVES || 20));
+      if (dom['stat-lives']) {
+        const crit = (s.lives > 0 && s.lives <= 5);
+        if (last.crit !== crit) { dom['stat-lives'].classList.toggle('is-critical', crit); last.crit = crit; }
+      }
+
+      // shop affordability + selection
+      const gold = s.gold || 0;
+      dom.shopCards.forEach(card => {
+        const type = card.getAttribute('data-tower');
+        const cost = Number(card.dataset.cost || 0);
+        const broke = gold < cost;
+        card.setAttribute('aria-disabled', String(broke));
+        const costEl = card.querySelector('.shop-cost');
+        if (costEl) costEl.classList.toggle('is-broke', broke);
+        const sel = s.selectedTowerType === type;
+        if (card.getAttribute('aria-pressed') !== String(sel))
+          card.setAttribute('aria-pressed', String(sel));
+      });
+
+      // wave / pause button states
+      const playing = (s.phase === 'wave' || s.phase === 'building');
+      const sw = dom['btn-start-wave'];
+      if (sw) {
+        const canStart = !s.waveActive && s.phase !== 'gameover' && s.phase !== 'won'
+          && (s.wave || 0) < (cfg().MAX_WAVES || 20) && s.phase !== 'paused';
+        setDisabled(sw, !canStart);
+        const lbl = s.waveActive ? 'Wave ' + s.wave + ' active' : 'Start Wave ' + ((s.wave || 0) + 1);
+        if (sw.textContent !== lbl) sw.textContent = lbl;
+      }
+      const pb = dom['btn-pause'];
+      if (pb) {
+        const lbl = (s.phase === 'paused') ? 'Resume' : 'Pause';
+        if (pb.textContent !== lbl) pb.textContent = lbl;
+        pb.setAttribute('aria-pressed', String(s.phase === 'paused'));
+        setDisabled(pb, !(playing || s.phase === 'paused'));
+      }
+
+      // live tower panel figures (cost/refund move with gold/level)
+      if (s.selectedTower && dom['hud-tower-panel'] &&
+          !dom['hud-tower-panel'].classList.contains('hidden')) {
+        renderTowerPanel(s.selectedTower);
+      }
+    },
+
+    showToast(msg, kind) {
+      const el = dom['hud-toast']; if (!el) return;
+      el.textContent = msg;
+      el.className = 'kind-' + (kind || 'info') + ' show';
+      el.classList.remove('hidden');
+      if (_toastTimer) clearTimeout(_toastTimer);
+      _toastTimer = setTimeout(() => {
+        el.classList.remove('show');
+        _toastTimer = setTimeout(() => el.classList.add('hidden'), 220);
+      }, 1900);
+    },
+
+    showOverlay(kind) {
+      const ov = dom['overlay']; if (!ov) return;
+      const PLAY = { wave: 1, building: 1 };
+      if (PLAY[kind]) {                 // hide during active play
+        if (!ov.classList.contains('hidden')) {
+          ov.classList.add('hidden');
+          if (_lastFocus && _lastFocus.focus) { try { _lastFocus.focus(); } catch (_) {} _lastFocus = null; }
+        }
+        return;
+      }
+      const COPY = {
+        menu:     ['Tower Defense', 'Defend the base. Buy towers, survive 20 escalating waves.', 'Play'],
+        paused:   ['Paused', 'Take a breath. The swarm is holding.', 'Resume'],
+        gameover: ['Defenses Breached', 'The base fell. Regroup and try again.', 'Play Again'],
+        won:      ['Victory', 'All 20 waves repelled. The base stands.', 'Play Again']
+      };
+      const c = COPY[kind] || COPY.menu;
+      setText('overlay-title', c[0]);
+      setText('overlay-msg', c[1]);
+      if (dom['overlay-action']) dom['overlay-action'].textContent = c[2];
+      _lastFocus = document.activeElement;
+      ov.classList.remove('hidden');
+      // focus the primary action for keyboard users entering the modal
+      if (dom['overlay-action']) { try { dom['overlay-action'].focus(); } catch (_) {} }
+    },
+
+    selectShop(type) {
+      const s = st();
+      s.selectedTowerType = type || null;
+      // clearing a build selection also clears the build ghost
+      if (!type && GAME.engine && GAME.engine.setHoverCell) {
+        if (s.hoverTile) GAME.engine.setHoverCell(s.hoverTile);
+      }
+      dom.shopCards.forEach(card => {
+        const sel = card.getAttribute('data-tower') === type;
+        card.setAttribute('aria-pressed', String(sel));
+      });
+      // selecting a build type implies leaving inspect mode
+      if (type) ui.openTowerPanel(null);
+      emit('state:changed', {});
+    },
+
+    openTowerPanel(tower) {
+      const p = dom['hud-tower-panel']; if (!p) return;
+      if (!tower) { p.classList.add('hidden'); return; }
+      renderTowerPanel(tower);
+      p.classList.remove('hidden');
+      // move focus to the panel's first action for keyboard reachability
+      if (dom['btn-upgrade']) { try { dom['btn-upgrade'].focus(); } catch (_) {} }
+    },
+
+    // exported drop-in fragments
+    CSS, HTML
+  };
+
+  // ----- small DOM helpers (dirty-checked) -----------------------------------
+  function setText(id, v) {
+    const el = dom[id]; if (!el) return;
+    const str = String(v);
+    if (last[id] !== str) { el.textContent = str; last[id] = str; }
+  }
+  function setAria(id, v) {
+    const el = dom[id]; if (!el) return;
+    const k = 'aria:' + id;
+    if (last[k] !== v) { el.setAttribute('aria-label', v); last[k] = v; }
+  }
+  function setDisabled(el, disabled) {
+    if (!el) return;
+    if (disabled) { el.setAttribute('disabled', ''); el.setAttribute('aria-disabled', 'true'); }
+    else { el.removeAttribute('disabled'); el.removeAttribute('aria-disabled'); }
+  }
+
+  function upgradeCostOf(t) {
+    const arche = (cfg().TOWERS || {})[t.type] || {};
+    const base = arche.upgradeCost || 40;
+    return Math.round(base * Math.pow(1.5, (t.level || 1) - 1)); // matches gameplay growth
+  }
+  function renderTowerPanel(t) {
+    const cost = upgradeCostOf(t);
+    const refund = Math.round((cfg().SELL_REFUND || 0.6) * (t.invested || 0));
+    const name = ((cfg().TOWERS || {})[t.type] || {}).name || t.type;
+    if (dom['tp-title']) {
+      dom['tp-title'].innerHTML =
+        esc(name) + ' &middot; Lv ' + (t.level || 1) +
+        '<span class="tp-sub">DPS ' + Math.round(t.dps) + ' &middot; Range ' + (Math.round(t.range * 10) / 10) + '</span>';
+    }
+    const gold = st().gold || 0;
+    const up = dom['btn-upgrade'];
+    if (up) {
+      up.textContent = 'Upgrade (' + cost + ')';
+      up.setAttribute('aria-label', 'Upgrade ' + name + ' to level ' + ((t.level || 1) + 1) + ' for ' + cost + ' gold');
+      setDisabled(up, gold < cost);
+    }
+    const sell = dom['btn-sell'];
+    if (sell) {
+      sell.textContent = 'Sell (+' + refund + ')';
+      sell.setAttribute('aria-label', 'Sell ' + name + ' for ' + refund + ' gold');
+    }
+  }
+
+  GAME.ui = ui;
+})();
+
+/* ===== integrator: boot + FX bridge ===== */
+
+/* ---- integrator boot: wires modules, bridges FX, starts the loop ------------ */
+function _showBootError(err){
+  try{
+    const root = document.getElementById('game-root') || document.body;
+    let box = document.getElementById('engine-fatal');
+    if(!box){
+      box = document.createElement('div');
+      box.id = 'engine-fatal';
+      box.setAttribute('role','alert');
+      box.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;'+
+        'align-items:center;justify-content:center;gap:.75rem;padding:2rem;text-align:center;'+
+        'font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg-deep,#0c0f16);color:var(--text,#f5f7fa)';
+      const h=document.createElement('h1'); h.textContent='The game failed to start';
+      h.style.cssText='margin:0;font-size:1.5rem;color:var(--text,#f5f7fa)';
+      const p=document.createElement('p'); p.id='engine-fatal-msg';
+      p.style.cssText='margin:0;max-width:42ch;line-height:1.5;color:var(--muted,#c5d0e6)';
+      box.appendChild(h); box.appendChild(p); root.appendChild(box);
+    }
+    const m=document.getElementById('engine-fatal-msg');
+    if(m) m.textContent = (err && err.message) ? err.message : String(err);
+  }catch(_){ /* nothing more we can do */ }
+}
+
+function _wireFX(){
+  const ev = GAME.events, art = GAME.art, eng = GAME.engine;
+  if(!ev) return;
+  // enemy:killed -> particle pop ; enemy:leak -> red puff + camera shake.
+  ev.on('enemy:killed', p => { const e = p && p.enemy; if(e && e.pos && art && art.hitFX){ try{ art.hitFX(e.pos,'kill'); }catch(_){} } });
+  ev.on('enemy:leak',   p => { const e = p && p.enemy; if(e && e.pos && art && art.hitFX){ try{ art.hitFX(e.pos,'leak'); }catch(_){} } if(eng && eng.shake){ try{ eng.shake(0.7); }catch(_){} } });
+  // economy cues that gameplay does not play itself.
+  ev.on('tower:placed',   () => { if(art && art.sfx){ try{ art.sfx('place'); }catch(_){} } });
+  ev.on('tower:upgraded', () => { if(art && art.sfx){ try{ art.sfx('upgrade'); }catch(_){} } });
+  ev.on('tower:sold',     () => { if(art && art.sfx){ try{ art.sfx('sell'); }catch(_){} } });
+}
+
+GAME.boot = async function boot(){
+  try{
+    if(GAME.art && GAME.art.init) GAME.art.init();
+    const ok = GAME.engine.init('#game-canvas');
+    if(ok === false) return;            // engine already rendered a visible fatal message
+    GAME.gameplay.init();
+    GAME.ui.init();
+
+    // FX bridge: let art own its particle/muzzle FX lifecycle on the engine scene,
+    // and drive art.update(dt) once per frame via a persistent ticker in the fx group.
+    try{
+      const scene = GAME.engine._internal && GAME.engine._internal.scene;
+      if(scene && GAME.art && GAME.art.attachScene){
+        GAME.art.attachScene(scene);
+        const ticker = new THREE.Object3D();
+        ticker.name = 'art-fx-ticker';
+        ticker.userData.tick = (dt) => { try{ GAME.art.update(dt); }catch(_){} return true; };
+        if(GAME.engine.addMesh) GAME.engine.addMesh(ticker);
+      }
+    }catch(_){ /* FX bridge is optional; game still plays without it */ }
+
+    _wireFX();
+    GAME.engine.start();
+  }catch(err){
+    console.error('[GAME.boot] failed:', err);
+    _showBootError(err);
+  }
+};
+
+if(document.readyState === 'loading'){
+  window.addEventListener('DOMContentLoaded', () => GAME.boot());
+}else{
+  GAME.boot();
+}
+
+</script>
+</body>
+</html>
