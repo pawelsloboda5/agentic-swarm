@@ -7,6 +7,41 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-06-28
+
+The **measured showcase** — and an honest **null** headline. We re-built the Three.js tower-defense game
+**through the architect harness** and measured it against a **fair single-shot control given the same
+rubric**, with a **pre-registered held-out primary metric** (committed before any build). The result does
+**not** show a harness/decomposition uplift; it shows that **forward-coupling the rubric into the build
+helps, but the harness's extra machinery did not beat a single rubric-aware worker on this n=1 task**.
+Reported as measured, not inflated — see [`evals/loop-demo/game/RESULTS.md`](evals/loop-demo/game/RESULTS.md).
+
+### Added
+
+- **Measured showcase** under `evals/loop-demo/game/` — four self-contained Three.js games scored by **one
+  shared instrument**: the architect-harness build (`game/index.html`, 3071 ln, built by a real
+  research→contract→gated-workstreams→gated-integration Workflow), a **fair single-shot control**
+  (`baseline-fair/index.html`, given the identical rubric), and the two committed pre-harness baselines.
+  Includes `PREREGISTRATION.md` (the held-out primary + decision rule + numeric null, committed first),
+  `RESULTS.md`, the deterministic + Playwright scorers (`scoring/`), `scorecards.json`, and the
+  reproducible `harness-arm.workflow.js`.
+- **Provisioned (showcase-only)** Playwright + `@axe-core/playwright` under `evals/.../scoring/` — the
+  shipped plugin stays **zero-provision**.
+
+### Measured result (honest)
+
+- **PRIMARY (held-out runtime integrity): NULL.** All four games load with **0 uncaught errors** and a
+  non-blank render — the harness arm did **not** beat the fair control on the pre-registered primary.
+- **SECONDARY (in-brief, favors rubric-aware arms by construction):** both rubric-aware arms add
+  `:focus-visible` + a spacing scale + **0 a11y-gating violations** the rubric-**blind** committed
+  baselines lack — but **harness vs fair control are essentially tied** (the harness even scores lower on
+  the contrast heuristic, with 2.3× the code).
+- **Implication:** the evidence supports the narrow claim (gate-aware briefing > no rubric) but **not** a
+  decomposition/orchestration uplift. The **v1.0** gate ("ship only after the showcase measures the
+  uplift") is therefore **not met by this n=1 showcase** — v1.0 should narrow its claim to what the data
+  supports or run a stronger/larger showcase. Full caveats (instrument blind spots, n=1, retry asymmetry,
+  build-method confound) are in `RESULTS.md`.
+
 ## [0.7.1] — 2026-06-27
 
 The standalone-`a11y` release: completes the v0.7 gate library with the full **`a11y`** gate the v0.7.0
@@ -283,7 +318,8 @@ Initial release.
 - **Docs & trust** — full `README.md`, plain-language `docs/PRIVACY.md`, `CONTRIBUTING.md`,
   this changelog, and the MIT `LICENSE`.
 
-[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.5.0...v0.6.0

@@ -1,17 +1,19 @@
 # v0.8.0 Showcase — Results (the measured quality proof)
 
-> **Scaffold committed before the build** (see [`PREREGISTRATION.md`](./PREREGISTRATION.md)); result cells
-> are filled only after scoring. **Honesty up front: n=1 showcase, not a controlled benchmark.** A null or
-> a harness loss is reported as such — the showcase does not require a win.
+> Scored against the metric [`PREREGISTRATION.md`](./PREREGISTRATION.md) committed **before** any build.
+> **Honesty up front: n=1 showcase, not a controlled benchmark — and the headline result is a NULL.**
+> The architect harness did **not** measurably beat a single-shot worker given the same rubric on the
+> pre-registered held-out primary. Reported as such, not inflated.
 
 ## Honesty up front
 
-- The single **controlled** comparison is **harness arm vs `baseline-fair`** (both rubric-aware, built
-  here under identical conditions; the only difference is decompose+gated-integration+repair vs single-
-  shot). The two **committed pre-harness baselines** are reference context across ≥4 confounded variables.
-- All NEW arms here are **subagent-built in one orchestration**, not separate human-driven `/loop`
-  sessions like the committed baselines — see Caveats.
-- **Retry asymmetry:** the harness arm gets ≤2 gate-driven repairs; every other arm gets one shot.
+- The one **controlled** comparison is **harness vs `fair_control`** — both rubric-aware, both built here
+  under identical conditions; the only difference is the harness's decompose + gated-integration + repair
+  machinery vs a single shot. The two **committed pre-harness baselines** are reference context across ≥4
+  confounded variables (plugin on/off, /loop vs harness, rubric-in-brief, browser).
+- All NEW arms here are **subagent-built in one orchestration**, not separate human-driven `/loop` sessions
+  like the committed baselines.
+- **Retry asymmetry:** the harness arm got ≤2 gate-driven repairs; every other arm got one shot.
 
 ## The four artifacts
 
@@ -19,60 +21,105 @@
 |---|---|---|---|---|
 | pre-harness baseline (plugin OFF) | `../baseline/index.html` | no | no | 1207 |
 | pre-harness baseline (plugin ON, no harness) | `../agentic-swarm/index.html` | no | no | 1476 |
-| fair control (single-shot, rubric in-prompt) | `baseline-fair/index.html` | yes | no | _PENDING_ |
-| **harness arm** (architect harness) | `game/index.html` | yes | **yes (≤2)** | _PENDING_ |
+| fair control (single-shot, rubric in-prompt) | `baseline-fair/index.html` | yes | no | 1349 |
+| **harness arm** (architect harness) | `game/index.html` | yes | **yes (≤2)** | 3071 |
 
 ## PRIMARY — runtime integrity (held-out; in NO brief)
 
-> Which primary ran: **_PENDING_** (browser if Playwright provisioned, else the static fallback —
-> disclosed here with the reason).
+Which primary ran: **browser** (Playwright provisioned). Each game served over http, loaded headless,
+played ~15 s; recorded uncaught/console errors + a non-blank canvas render. PASS = 0 uncaught errors AND
+non-blank render.
 
-| Arm | Browser: uncaught errors / non-blank | Static robustness 0–4 (a,b,c,d) | Primary verdict |
-|---|---|---|---|
-| pre-harness baseline (OFF) | _PENDING_ | _PENDING_ | _PENDING_ |
-| pre-harness baseline (ON) | _PENDING_ | _PENDING_ | _PENDING_ |
-| fair control | _PENDING_ | _PENDING_ | _PENDING_ |
-| **harness arm** | _PENDING_ | _PENDING_ | _PENDING_ |
+| Arm | uncaught errors | console errors | non-blank render | axe (a11y rules) | **PRIMARY** |
+|---|---|---|---|---|---|
+| baseline OFF | 0 | 0 | yes (pixvar 800) | 1 | **PASS** |
+| baseline ON | 0 | 0 | yes (pixvar 681) | 1 | **PASS** |
+| fair control | 0 | 0 | yes (pixvar 573) | 0 | **PASS** |
+| **harness** | 0 | 0 | yes (pixvar 400) | 0 | **PASS** |
 
-**Pre-committed decision (verbatim from PREREGISTRATION):** browser primary → harness wins iff it PASSES
-and `baseline-fair` does NOT; fallback → harness wins iff `harness − fair ≥ 1`. Otherwise **NULL**.
+**Pre-committed decision:** browser primary → harness wins iff it PASSES and `fair_control` does NOT.
+**Both PASS ⇒ NULL.**
 
-**Primary outcome: _PENDING_** (win / null / harness-loss — stated plainly).
+> **PRIMARY OUTCOME: NULL — no measured difference.** All four games actually run (0 uncaught errors,
+> non-blank render). The harness arm did **not** beat the fair single-shot control on the held-out primary.
 
 ## SECONDARY — gate scorecards (exploratory; favor rubric-aware arms by construction)
 
-| Metric (instrument) | baseline OFF | baseline ON | fair control | harness | Deterministic? |
+Deterministic (re-run `python scoring/aggregate.py` → bit-identical static numbers). `uiux_states` =
+**H**over / **F**ocus-visible / **B**reakpoint / **S**pacing-scale present.
+
+| Metric (instrument) | baseline OFF | baseline ON | fair control | harness | Det.? |
 |---|---|---|---|---|---|
-| ui-ux contrast pass-count (`wcag_contrast.py`) | _PENDING_ | _PENDING_ | _PENDING_ | _PENDING_ | yes |
-| ui-ux states/scale/breakpoints (static) | _PENDING_ | _PENDING_ | _PENDING_ | _PENDING_ | yes |
-| a11y axe gating_violations (`a11y_report.py`) | _PENDING_ | _PENDING_ | _PENDING_ | _PENDING_ | browser-gated |
-| assets realness (sweep+favicon) | _PENDING_ | _PENDING_ | _PENDING_ | _PENDING_ | yes (drop if degenerate) |
-| feature-completeness /8 | _PENDING_ | _PENDING_ | _PENDING_ | _PENDING_ | yes+critic |
-| playability (binary critic, AUX) | _PENDING_ | _PENDING_ | _PENDING_ | _PENDING_ | no (critic) |
+| ui-ux contrast pairs passing | 1/2 | 6/6 | **9/9** | 6/6 | yes |
+| ui-ux states (H/F/B/S) | H·B· | H·B· | **HFBS** | **HFBS** | yes |
+| a11y axe gating / advisory | 1g / 0a | 1g / 0a | **0g** / 0a | **0g** / 0a | yes |
+| assets (procedural, no placeholders) | ok | ok | ok | ok | yes |
+| feature-completeness | 7/7 | 7/7 | 7/7 | 7/7 | yes+critic |
+| static runtime-robustness /4 | 2/4 | 4/4 | 4/4 | 4/4 | yes |
+| playability (binary critic, AUX) | yes | yes | yes | yes | no (critic) |
 
-## Caveats (the rigor markers)
+**What the secondaries actually show (read carefully):**
+- The two **rubric-aware** arms (`fair_control`, `harness`) both add **`:focus-visible`**, a **spacing
+  scale**, and **0 a11y-gating violations** — exactly the gate criteria — which **both rubric-blind
+  committed baselines lack** (`H·B·`, 1 a11y violation each). So *knowing the rubric* clearly moves the
+  gated metrics.
+- But **harness vs `fair_control` are essentially tied**: identical `HFBS`, identical 0 a11y-gating,
+  identical 4/4 robustness and 7/7 features; the harness even scores **lower** on the (under-counting)
+  contrast heuristic (6/6 vs 9/9). The harness produced **2.3× more code** (3071 vs 1349 lines) with **no
+  measured quality advantage** over the single-shot control.
 
-- **n=1, uncontrolled, one build per arm.** No statistical inference, no generalization. Determinism of
-  the scorers is NOT evidence of an effect.
-- **Build method** differs from the committed baselines (subagent orchestration vs human `/loop`).
-- **Secondary metrics favor rubric-aware arms by construction** — they measure "conformance to the spec we
-  asked for," not independent quality. Only the held-out primary is the methodology claim.
-- **Confounds** vs committed baselines: plugin on/off, /loop vs harness, rubric-in-brief, browser. Named,
-  not hidden.
-- Whatever the browser-dependent scoring could/could not run is stated explicitly (degrade loudly).
+## AUXILIARY — playability critic (separate-context, non-deterministic)
+
+A skeptical fresh-context reviewer read all four games' core loops (cited). **All four are playable**
+(spawn → path-follow → tower targeting → projectiles/damage → wave escalation → win/lose, all present and
+cited in each file). On the methodology question — **harness vs `fair_control`** — the reviewer found them
+**essentially comparable as games**: nearly identical mechanics by design (3 towers arrow/cannon/frost, 3
+enemy roles, first-along-path targeting, splash/slow, upgrade+sell, win+lose). The harness's extra ~1700
+lines go **almost entirely to architecture + defensive scaffolding** (a model/view mesh-reconciler, an
+event-bus store, per-component fallback meshes, WebGL context-loss handling, a boot-error overlay) plus
+screen-shake — i.e. **engineering robustness, not player-facing depth**. The `fair_control` was judged
+*marginally more curated* on the player-facing side (a hand-authored final boss-rush wave vs the harness's
+purely algorithmic waves). The reviewer also flagged a **duplicated config block** in the harness
+(`GAME.config` declared twice) — "more surface area without more game." This is auxiliary and
+non-deterministic; it **corroborates** the deterministic null (it is not a tiebreaker).
 
 ## Bottom line
 
-**_PENDING_** — filled from the primary outcome, stated plainly (including "no measured difference" or
-"harness did not beat the fair control" if that is what the data shows).
+On this n=1 showcase, with this instrument, **the measured advantage belongs to "rubric in the prompt,"
+not to "the harness machinery."** Forward-coupling the gate criteria into the build (the headline novelty's
+*core idea*) clearly helps — both rubric-aware arms beat the rubric-blind committed baselines on every
+gated dimension. But the harness's *additional* machinery — decomposition, parallel fan-out, gated
+integration, repair — did **not** measurably beat a single rubric-aware worker on this game. The held-out
+primary (does it actually run?) is a clean **NULL** (all four work).
+
+**Honest implication for the track:** the evidence supports the *narrow* claim (gate-aware briefing > no
+rubric) but **not** a decomposition/orchestration uplift. v1.0 — which gates on "the showcase measures the
+uplift" — should make only the claim the data supports, or run a stronger showcase (see Limitations).
+
+## Caveats / limitations (the rigor markers)
+
+- **n=1, uncontrolled, one build per arm.** No statistical inference. Determinism of the scorers is not
+  evidence of an effect; it only means the ruler does not wobble.
+- **Build method** differs from the committed baselines (subagent orchestration vs human `/loop`).
+- **Secondary metrics measure "conformance to the spec we asked for," not independent quality** — they
+  favor rubric-aware arms by construction. Only the held-out primary is the methodology claim, and it is null.
+- **Instrument blind spots that could hide a real harness advantage:** the contrast metric only scores
+  explicit `color`+`background` co-declarations (under-counts); features/robustness are keyword heuristics;
+  the primary ("renders + no errors") is coarse — it cannot see game-feel, balance, or depth. A harness
+  advantage on *those* dimensions would not show up here; the auxiliary playability critic is the only
+  (non-deterministic) probe of it, and is reported as auxiliary.
+- **The retry asymmetry favors the harness** and it still did not win — which makes the null result, if
+  anything, conservative against the harness.
+- This is a single genre (tower-defense) at one effort level. A different/larger task could differ.
 
 ## Artifacts
 
 | File | Role |
 |---|---|
-| `PREREGISTRATION.md` | the pre-committed metric/threshold/null + fairness design |
-| `game/index.html` | the harness-arm build |
-| `baseline-fair/index.html` | the fair single-shot control |
+| `PREREGISTRATION.md` | the pre-committed metric/threshold/null + fairness design (committed before any build) |
+| `game/index.html` | the harness-arm build (3071 ln) |
+| `baseline-fair/index.html` | the fair single-shot control (1349 ln) |
 | `../baseline/index.html`, `../agentic-swarm/index.html` | the committed pre-harness baselines |
-| `scorecards.json` | the raw per-artifact scores (deterministic scorers) |
-| `transcript-*.md` | build transcripts / workstream artifacts |
+| `scoring/score_static.py`, `scoring/score_runtime.mjs`, `scoring/aggregate.py` | the one shared instrument |
+| `scoring/scorecards.json` | the raw per-arm scores |
+| `harness-arm.workflow.js` | the architect-harness build script (reproducible) |
