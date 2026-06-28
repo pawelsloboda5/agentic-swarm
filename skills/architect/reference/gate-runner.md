@@ -52,7 +52,8 @@ pass MUST cap at ≤ 0.6 — graceful degradation is never allowed to self-repor
      `enabledPlugins` — **never depend on parsing them** (`--json` not guaranteed).
 3. **RUN BY TIER:**
    - **`objective`** — run the gate's bundled machine command(s); status off exit code / threshold.
-     (e.g. `ui-ux` contrast → `python gates/lib/wcag_contrast.py <fg> <bg> <size>`; `tests` → the
+     (For the MVP gates this is the **objective floor of their `mixed` tier**, not a separate objective-tier
+     gate: e.g. `ui-ux` contrast → `python gates/lib/wcag_contrast.py <fg> <bg> <size>`; `tests` → the
      project's own test command; `assets` → a content sweep via the built-in rg-backed Grep tool — or a
      stdlib `re` walk if `rg` is absent — + stdlib stat.)
    - **`critic`** — spawn a **separate-context** judge (a fresh subagent that never saw the producing
@@ -62,10 +63,11 @@ pass MUST cap at ≤ 0.6 — graceful degradation is never allowed to self-repor
    - **`mixed`** = run the objective floor (which **gates**) **then** its non-gating rung — a
      separate-context **critic rung** (e.g. `ui-ux`'s screenshot critic, `tests`'s exercise-check
      verifier) **and/or an advisory layer** (e.g. `assets`'s AI-filler check). The floor decides
-     pass/flag; the rung informs + adjusts confidence. A critic rung runs at high confidence if a
-     browser/runner is available, else its holistic checks **downgrade to advisory** with reported
-     confidence. When a `mixed` gate declares a `verifier`, the runner **must** execute it as that
-     critic rung (a `verifier` is never dead).
+     pass/flag; the rung informs + adjusts confidence. A **render-dependent** critic rung (e.g. `ui-ux`'s
+     screenshot critic) runs at high confidence if a browser is available, else it **downgrades to
+     advisory** with reported confidence; **browserless subagent rungs** (e.g. `tests`'s exercise-check,
+     `assets`'s placeholder-genuineness verifier) run normally. When a `mixed` gate declares a `verifier`,
+     the runner **must** execute it as that critic rung (a `verifier` is never dead).
    - A present `backing_skill` is invoked (by its `plugin:skill` name) as an **enhancer over** — never
      instead of — the bundled path; set `skill_used: true`.
 4. **EMIT** exactly one verdict per applicable gate (verdict count == number of `applies_when`-true gates).
