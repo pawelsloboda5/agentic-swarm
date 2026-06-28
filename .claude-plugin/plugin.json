@@ -1,6 +1,6 @@
 {
   "name": "agentic-swarm",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Run large swarms of parallel Claude Code subagents safely — bounded waves, stall watchdog, resume — plus a local first-run profiler/scaffolder.",
   "author": {
     "name": "Pawel Sloboda",

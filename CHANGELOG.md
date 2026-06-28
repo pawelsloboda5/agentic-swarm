@@ -7,6 +7,37 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-06-27
+
+The gate-runner release: the architect's Phase 3 can now **run** the quality gates it forward-couples
+into briefs — a tiered, objective-anchored gate library that reports confidence and refuses to rubber-stamp.
+
+### Added
+
+- **Gate runner** (`skills/architect/reference/gate-runner.md`) — the contract that turns a gate
+  definition into a `verdict`: gate + verdict schemas, LOAD+validate, a zero-dep skill-detection probe,
+  run-by-tier (objective machine check / separate-context critic / advisory), one verdict per applicable
+  gate, the **anti-theater invariant** (no `pass` without ≥1 evidence + tier + confidence), bounded-N=2
+  re-brief on fail, and **graceful-not-silent** degradation (missing backing skill/runner ⇒
+  `degraded: true` + lowered confidence + a visible note, never a silent pass).
+- **Starter gate library** `{tests, assets, ui-ux}` (`skills/architect/gates/*.md`) — each a
+  self-contained 7-key definition (`id, applies_when, tier, criteria, verifier, confidence,
+  backing_skill`): **tests** (objective — green AND >0 collected, typecheck/build, diff-coverage),
+  **assets** (mixed — placeholder sweep + stdlib stat + SVG well-formed + favicon; AI-filler advisory),
+  **ui-ux** (mixed — WCAG contrast + spacing/states/breakpoints + folded cheap a11y; screenshot critic
+  if a browser is available, else advisory). External skills are optional enhancers only (portability).
+- **Zero-dep WCAG contrast util** (`skills/architect/gates/lib/wcag_contrast.py`) — the objective-floor
+  primitive for `ui-ux`: importable `ratio`/`passes`/`luminance`/`parse_hex` + a CLI machine check
+  (exit 0/1). Fixed W3C formula; unit-tested with exact vectors (black-on-white = 21:1) via TDD.
+- **Tests** — `tests/test_wcag_contrast.py` (the util) and `tests/test_gate_library.py` (each gate
+  declares all 7 keys with a valid tier and id==filename; the runner encodes the invariant + verdict
+  schema + N=2 bound + graceful degradation; the map can't advertise an "active" gate the library
+  doesn't ship). Phase 3 of the architect skill is wired to the runner + library.
+
+> Full standalone **`a11y`** (axe/pa11y/Lighthouse runner + keyboard/semantics critic) is deferred to
+> **v0.7.x**; the **measured Three.js showcase** that proves the quality uplift is **v0.8.0**; **v1.0**
+> freezes the gate-file schema. See `docs/plans/`.
+
 ## [0.6.0] — 2026-06-27
 
 The QUALITY-layer release: a new `/agentic-swarm:architect` skill that turns a one-line goal into a
@@ -208,7 +239,8 @@ Initial release.
 - **Docs & trust** — full `README.md`, plain-language `docs/PRIVACY.md`, `CONTRIBUTING.md`,
   this changelog, and the MIT `LICENSE`.
 
-[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.3.0...v0.4.0
