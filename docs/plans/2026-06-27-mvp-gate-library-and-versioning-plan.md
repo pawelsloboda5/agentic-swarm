@@ -1,5 +1,11 @@
 # MVP Gate Library + Versioning — Readiness Build-Spec
 
+> ⚠️ **Superseded by measurement (2026-06-28).** This dated doc gates v1.0 on a showcase "measuring the
+> quality uplift." The showcases ran (v0.8 game · v0.9 engine · v0.10 library) and measured **NO**
+> artifact-quality/completeness uplift over a fair single shot — only ~5× cost. v1.0 narrows the claim to
+> the harness's **process guarantees**; see [`evals/loop-demo/MEASURED.md`](../../evals/loop-demo/MEASURED.md)
+> and `CHANGELOG.md [1.0.0]`. The dated body below is preserved as planning provenance.
+
 > **For Claude:** this is a **design-readiness build-spec**, not a task-by-task TDD plan. The project
 > is deliberately **architecture-first / build-deferred** — do NOT author the `architect` skill
 > or gate files from this doc. A future build session expands §5 into `superpowers:writing-plans`

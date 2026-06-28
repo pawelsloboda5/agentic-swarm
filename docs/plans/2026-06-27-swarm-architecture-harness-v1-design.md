@@ -1,5 +1,13 @@
 # Design — Agentic-Swarm Architecture Harness (umbrella, toward v1.0)
 
+> ⚠️ **Superseded by measurement (2026-06-28).** The showcases this design anticipated ran (v0.8 game ·
+> v0.9 engine · v0.10 library) and measured **NO** artifact-quality or completeness uplift from the QUALITY
+> layer over a fair single shot — only ~5× cost. v1.0 narrows the claim to the harness's **process
+> guarantees** (gated forward-coupling, bounded repair, completeness-faithful integration, auditability).
+> See [`evals/loop-demo/MEASURED.md`](../../evals/loop-demo/MEASURED.md) and `CHANGELOG.md [1.0.0]`. The
+> dated body below is preserved as design provenance; the present-tense "better work" framing in §1 has been
+> corrected to match the measured posture.
+
 **Status:** architecture **CONVERGED** (2026-06-27) — lifecycle diagram in §2; **build deferred**.
 **Supersedes scope of:** the standalone v0.5.0 robustness eval (now folded in as the *safety-proof*
 component). **Research backing:**
@@ -9,19 +17,21 @@ Agents SDK · Anthropic multi-agent · plan-execute-verify · context-engineerin
 
 ## 1. Vision
 
-Turn a **one-line goal** into **excellent, complete, end-to-end output** by composing three layers:
+Turn a **one-line goal** into **complete, gated, auditable, end-to-end output** by composing three layers:
 
 | Layer | What it guarantees | Status |
 | --- | --- | --- |
 | **SAFETY** | a large fan-out *survives* — bounded waves, retry, watchdog, resume, partial-synthesis; never silently stalls or loses coverage | **shipped** (`/agentic-swarm`, v0.1–0.4) |
-| **QUALITY** *(new)* | the fan-out *produces better work than one agent could* — research-driven decomposition, skill+gate-aware subagent briefs, gated integration | **this design** |
+| **QUALITY-PROCESS** *(new)* | the fan-out is *decomposed, gate-checked, and auditable* — research-driven decomposition, skill+gate-aware subagent briefs, gated integration (**measured: no artifact-quality uplift over a fair single shot**) | **this design** |
 | **PERSISTENCE** | work spans turns/sessions — loop-until-dry / loop-until-budget / recurring | **shipped** (`/loop` support, v0.4) |
 
-Positioning shifts from *"safe by construction"* to **"safe *and excellent* by construction."**
+Positioning shifts from *"safe by construction"* to **"safe *and gated/auditable* by construction."**
 
 **Why now:** the loop game demo proved a bare swarm is *not* automatically better than one agent —
-the subagents were generic workers. The missing ingredient is exactly this QUALITY layer: research +
-skill-equipped, gate-checked briefs. That is what makes "parallel workers" into "a better result."
+the subagents were generic workers. This QUALITY-PROCESS layer adds research + skill-equipped, gate-checked
+briefs + gated integration: it makes "parallel workers" *decomposed, checked, and auditable*. (Three
+measured showcases later found this adds **no artifact-quality uplift** over a fair single shot — see the
+banner above; it is shipped for its process guarantees, not as a quality multiplier.)
 
 ## 2. The harness lifecycle
 

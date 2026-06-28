@@ -1,3 +1,7 @@
+// ⚠️ Superseded by measurement (2026-06-28): the "excellent, complete output" framing below was a
+// pre-build research hypothesis. Three measured showcases (v0.8/v0.9/v0.10) found NO artifact-quality
+// uplift over a fair single shot; v1.0 narrows the claim to process guarantees. See
+// ../../../evals/loop-demo/MEASURED.md and CHANGELOG [1.0.0]. This dated script is preserved as provenance.
 export const meta = {
   name: 'gate-library-and-versioning-research',
   description: 'Research the MVP gate library (tiers, self-contained criteria, verifiers, enhancers) + plugin versioning strategy, to get ready for the still-open harness decisions',

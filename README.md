@@ -3,7 +3,7 @@
 > A Claude Code **plugin** that makes fanning out many parallel subagents *safe by construction* — and bootstraps your whole agentic workflow from your own local history.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-&nbsp;**Version 0.4.0**
+&nbsp;**Version 1.0.0**
 
 ---
 
@@ -51,6 +51,7 @@ marketplace are both named `agentic-swarm`.)
 | Component | What it does |
 |---|---|
 | **`/agentic-swarm` skill** | The safe-swarm playbook: a pre-flight checklist, the 8 patterns, a copy-paste `Workflow()` template, the `ScheduleWakeup` watchdog, and the resume + journal-extraction toolkit. Auto-activates whenever you're about to fan out many agents — you rarely have to invoke it by hand. |
+| **`/agentic-swarm:architect` skill** | The QUALITY-**PROCESS** layer over the safe-swarm: turns a one-line goal into a researched, decomposed, gate-checked, integrated fan-out (with a plan-then-confirm checkpoint). Measured across three showcases to add **no artifact-quality uplift** over a fair single shot — ship it for its **process guarantees** (gated forward-coupling, bounded repair, completeness-faithful integration, auditability). See [The architect layer](#the-architect-layer-measured). |
 | **`/agentic-swarm:as-new-project` skill** | A **100% local** first-run profiler + scaffolder. Reads your Claude Code transcripts and the current repo (GitHub is opt-in), builds a private `PROFILE.md` of how you work, and scaffolds the agentic-swarm tooling tailored to you. Nothing is ever uploaded. |
 | **SessionStart hook** | On first run, nudges you toward `/agentic-swarm:as-new-project`. On later runs, shows a non-blocking, ~24h-throttled "update available" hint by reading the latest GitHub release. Degrades silently offline — it's the plugin's only network call, and it *sends* nothing. |
 
@@ -67,8 +68,9 @@ fanning subagents out through the `Workflow` tool. Two settings put you there:
 - **`/effort ultracode`** — the top effort tier turns on **dynamic workflow orchestration**
   (Claude composes and runs `Workflow()` fan-outs), which is exactly the thing this skill makes
   safe. Lower tiers rarely fan out, so the skill has less to do.
-- **`/model`** — pick a strong model (e.g. Opus). The eval shows the skill's benefit **grows with
-  model capability**, so the more capable the model, the more it gains from the rails.
+- **`/model`** — pick a strong model (e.g. Opus). The eval shows a **large safety uplift on every model
+  tested** (frontier to floor, +56 to +71 pts), with the strongest models reaching the highest final
+  safe-orchestration scores (up to 94%).
 
 So: `/model opus` + `/effort ultracode`, then just describe the fan-out ("research these 40 topics
 and synthesize") — the skill arms the rails (waves, watchdog, resume) before the swarm launches.
@@ -138,6 +140,29 @@ one-command way to **reproduce it with your own key**: [`evals/README.md`](evals
 > **Honest scope:** this measures whether the skill makes models *write* safer orchestration (and
 > that it generalizes across model families, frontier to floor) — it does not exercise the live
 > Claude-Code runtime.
+
+## The architect layer (measured)
+
+Beyond the safe-swarm playbook, the plugin ships **`/agentic-swarm:architect`** — a QUALITY-**PROCESS**
+layer that turns a one-line goal into a researched, decomposed, gate-checked, integrated fan-out, with a
+**plan-then-confirm** checkpoint before the expensive run. Its headline move is **forward-coupling each
+workstream's quality gate into that worker's brief**, so every worker builds *toward* a named, checkable
+bar and each output is verified against *its* gates (evidence + tier + confidence, never a silent pass).
+
+**What we measured — and what we honestly do *not* claim.** We ran **three** pre-registered, held-out,
+measured showcases comparing the architect harness against a **fair single-shot control** given the
+*identical* spec/rubric, across three task families (a Three.js game, a deterministic sim engine, a
+40-requirement library). All three were **NULL**: on self-contained, objectively-scorable build tasks a
+strong single shot already produces a correct, complete artifact in one pass, and the harness **matches**
+it — adding **no measurable artifact-quality or completeness uplift**, at roughly **5× the token cost**.
+The decomposition + gated integration is **completeness-faithful** (it matches the ceiling without dropping
+requirements) — so the honest case is *"no uplift at ~5× cost," not "it degrades the work."*
+
+So v1.0 ships the architect harness for its **process guarantees** — safe parallel throughput, bounded
+repair, gated forward-coupling of disclosed criteria, auditability, and completeness-faithful integration —
+**not** as a way to get better work than one capable agent. The full evidence (three RESULTS, the
+pre-registrations, the validated instruments) is consolidated in
+**[`evals/loop-demo/MEASURED.md`](evals/loop-demo/MEASURED.md)**.
 
 ## Contributing
 

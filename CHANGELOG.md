@@ -7,6 +7,56 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-06-28
+
+**The narrowed claim — 1.0 ships honest.** Across **three** pre-registered, held-out, measured showcases
+(v0.8 game · v0.9 engine · v0.10 library), the architect harness was compared against a **fair single-shot
+control** given the *identical* spec/rubric. The converged finding: on self-contained, objectively-scorable
+build tasks, **strong single shots produce correct, complete artifacts in one pass, and the architect
+harness adds NO measurable artifact-quality or completeness uplift** over a fair single shot — only ~5× the
+token cost. The decomposition + gated integration is **completeness-faithful** (it matches the single-shot
+ceiling without dropping requirements), so the honest case is *"no uplift at ~5× cost," not "it degrades the
+work."* v1.0 therefore **narrows the harness's claim to its PROCESS guarantees** — safe parallel throughput,
+bounded repair, gated forward-coupling of disclosed criteria, auditability, completeness-faithful
+integration — and **stops claiming artifact-quality / completeness uplift** or "better work than one agent."
+Consolidated evidence: [`evals/loop-demo/MEASURED.md`](evals/loop-demo/MEASURED.md).
+
+> **Supersedes** the "the quality uplift is unproven until the showcase measures it" framing in the v0.6.0
+> and v0.7.0 entries below (and in the dated design/plan docs under `docs/plans/`): the showcases ran, and
+> measured no uplift. Those dated entries are preserved as historical record; the **live** skill surfaces
+> and README now state the measured posture.
+
+### Added
+
+- **`evals/loop-demo/MEASURED.md`** — one canonical page consolidating the three measured nulls into the
+  converged finding, the narrowed "process guarantees" claim, the method/integrity summary, and the one
+  explicitly-untested regime (non-enumerable / 100+ requirements / repo-scale work) — **offered as a future
+  user decision, not run** (running variants until one discriminates would be p-hacking). Cited by the
+  README, the architect skill, and this entry.
+- **`docs/plans/2026-06-28-v1.0.0-narrowed-claim.md`** — the v1.0.0 plan and the full claims-surface audit
+  (`file:line → old claim → honest reword`).
+
+### Changed
+
+- **Narrowed every live claim to the measured posture.** `skills/architect/SKILL.md` (frontmatter
+  description, title, 3-layer framing, the headline-novelty caveat, the Phase-3 note) and
+  `skills/architect/reference/brief-template.md` no longer claim the harness "produces better work than one
+  agent" or that the uplift is "unproven pending a showcase"; they state it adds **no artifact-quality
+  uplift** and is shipped for its **process guarantees**, citing `MEASURED.md`.
+- **README** — corrected the stale `0.4.0` version badge → `1.0.0`; added a "The architect layer (measured)"
+  section (process guarantees; the measured three-null finding; links `MEASURED.md`) and a `What's inside`
+  row for `/agentic-swarm:architect`; fixed an inaccurate "benefit grows with model capability" line (the
+  eval table shows mid-tier models gain the most). The separate safe-orchestration eval (+56–71 pts) is a
+  **process/safety** result and is unchanged.
+- **Dated design/plan docs** under `docs/plans/` now carry a "superseded by measurement" banner pointing to
+  `MEASURED.md`; the architecture-design doc (linked from the live skill) also had its present-tense "better
+  work" Vision lines corrected. The dated bodies are otherwise preserved as provenance.
+- `.claude-plugin/plugin.json` version **0.10.0 → 1.0.0**. (`marketplace.json` stays version-less by design.)
+
+> **Scope note:** v1.0.0 is a **claims-correction + release** milestone, **not a new eval** — it cites the
+> frozen evidence and runs no new showcase. The originally-planned **gate-schema freeze** (build-task-plan
+> §v1.0-T2) is **deferred** past 1.0.0 as a later additive decision.
+
 ## [0.10.0] — 2026-06-28
 
 The **completeness-under-scale showcase** — and an honest **third NULL**. We tested the architect harness's
@@ -416,7 +466,9 @@ Initial release.
 - **Docs & trust** — full `README.md`, plain-language `docs/PRIVACY.md`, `CONTRIBUTING.md`,
   this changelog, and the MIT `LICENSE`.
 
-[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.10.0...v1.0.0
+[0.10.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.7.0...v0.7.1
