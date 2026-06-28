@@ -34,6 +34,12 @@ verdict := {
 }
 ```
 
+> **Frozen public contract (as of v1.1.0).** The gate (7-key) schema and the verdict schema above —
+> including the `tier` and `status` enums — are the plugin's **frozen public surface**. Removing or
+> renaming a key, or removing an enum value, is a **breaking change (SemVer MAJOR)**; additive
+> gates / skills / optional keys are **MINOR**. Locked by `tests/test_schema_contract.py`; the full
+> policy is in [`CONTRIBUTING.md`](../../../CONTRIBUTING.md#public-contract--stability-semver).
+
 **Confidence scale** (so "reported" isn't vacuous): **0.9–1.0** = a clean objective machine pass;
 **0.6–0.9** = a critic pass with strong agreement + citations; **≤ 0.6** = any **degraded** pass (missing
 backing skill, browserless critic downgraded to advisory, or a retry-exhausted near-miss). A degraded

@@ -7,6 +7,35 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-06-28
+
+**Froze the public contract.** The schema freeze originally planned for v1.0 (deferred out of `1.0.0`)
+lands here: the **gate-file schema** (7 keys + the `tier` enum) and the **verdict schema** (fields + the
+`status` enum) defined in `skills/architect/reference/gate-runner.md` are now the plugin's declared,
+**frozen public surface**, with a documented post-1.0 **SemVer policy** and a CI guard that pins the exact
+surface so it cannot drift silently — changing it requires a deliberate, matching version bump.
+
+### Added
+
+- **Public contract & stability policy** in [`CONTRIBUTING.md`](CONTRIBUTING.md) — enumerates the frozen
+  surface (the three skill commands + the gate-file & verdict schemas + their `tier`/`status` enums) and the
+  post-1.0 SemVer rules: remove/rename a schema key or enum value, or a skill/command = **MAJOR**; add a
+  gate / skill / optional key = **MINOR**; fixes, docs, criteria wording = **PATCH**.
+- **Freeze guard** [`tests/test_schema_contract.py`](tests/test_schema_contract.py) — pins the 7 gate keys,
+  the 4 `tier` values, the verdict fields, the 3 `status` values, the `confidence` range, and the N=2 repair
+  bound as frozen literals and verifies the canonical `gate-runner.md` definition still matches; also asserts
+  the freeze marker + the SemVer policy exist and that `plugin.json` is ≥ the freeze version. **Schema drift
+  now fails CI.** Complements `tests/test_gate_library.py` (per-gate structural correctness).
+- **`docs/plans/2026-06-28-v1.1.0-schema-freeze.md`** — the plan for this milestone.
+
+### Changed
+
+- **`gate-runner.md`** — its § Schemas section now carries a "Frozen public contract (as of v1.1.0)" marker
+  pointing to the SemVer policy.
+- **`.claude-plugin/plugin.json`** version **1.0.0 → 1.1.0** — additive (a new stability guarantee + guard);
+  no schema or behavior change. (`marketplace.json` stays version-less by design.)
+- Marked the schema freeze **done in v1.1.0** in the superseded build-task-plan banner under `docs/plans/`.
+
 ## [1.0.0] — 2026-06-28
 
 **The narrowed claim — 1.0 ships honest.** Across **three** pre-registered, held-out, measured showcases
@@ -466,7 +495,8 @@ Initial release.
 - **Docs & trust** — full `README.md`, plain-language `docs/PRIVACY.md`, `CONTRIBUTING.md`,
   this changelog, and the MIT `LICENSE`.
 
-[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.10.0...v1.0.0
 [0.10.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.8.0...v0.9.0
