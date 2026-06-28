@@ -128,6 +128,36 @@ graceful fallbacks. No `jq` dependency (parse JSON with Python). No hard `bash`-
 assumptions. Keep Python `print()` output ASCII-only or write UTF-8 files — Windows consoles
 default to cp1252 and will raise `UnicodeEncodeError` on `→`/`—`/emoji.
 
+## Public contract & stability (SemVer)
+
+As of **v1.1.0** the plugin follows [Semantic Versioning](https://semver.org) against a **frozen public
+contract**. That contract is:
+
+1. **The skill commands** — `/agentic-swarm`, `/agentic-swarm:architect`, `/agentic-swarm:as-new-project`.
+2. **The gate-file schema** — the **7 keys** every `skills/architect/gates/<id>.md` declares
+   (`id`, `applies_when`, `tier`, `criteria`, `verifier`, `confidence`, `backing_skill`) and the valid
+   `tier` values (`objective`, `critic`, `advisory`, `mixed`).
+3. **The verdict schema** — the fields a gate run emits (`gate_id`, `tier`, `status`, `confidence`,
+   `backing_skill`, `skill_used`, `degraded`, `evidence[]`, `unmet_criteria[]`) and the valid `status`
+   values (`pass`, `flag`, `fail`).
+
+The canonical definition lives in
+[`skills/architect/reference/gate-runner.md`](skills/architect/reference/gate-runner.md) (§ Schemas) and is
+**locked** by [`tests/test_schema_contract.py`](tests/test_schema_contract.py) — schema drift fails CI.
+
+**What bumps what (post-1.0):**
+
+| Change | Bump |
+|---|---|
+| Remove/rename a gate-schema or verdict key; remove a `tier`/`status` value; remove/rename a skill or its command — anything that breaks an existing gate file or verdict consumer | **MAJOR** (`x.0.0`) |
+| Add a new gate to the library; add a new skill; add a new **optional** schema key with a safe default; add an enhancer — backward-compatible additions | **MINOR** (`1.x.0`) |
+| Bug fix, doc clarification, criteria wording, test/CI change — no contract change | **PATCH** (`1.x.y`) |
+
+Changing the frozen surface therefore means deliberately updating **both** the `FROZEN_*` literals in
+`tests/test_schema_contract.py` **and** `.claude-plugin/plugin.json` with the matching bump — the guard
+test exists so it can't happen by accident. `plugin.json`'s `version` and the git tag move in **lockstep**
+(the tag/release is the maintainer's step). `marketplace.json` stays version-less by design.
+
 ## Commits & pull requests
 
 - **Atomic commits** with clear, present-tense messages ("Add watchdog re-arm on resume", not
