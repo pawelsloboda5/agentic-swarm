@@ -181,6 +181,11 @@ const BATTERY_FN = function (args) {
       if (o.op === 'step') guard(() => E.step(w), 'rstep');
       else guard(() => E.applyCommand(w, o.cmd), 'rcmd');
     }
+    // Normalize the transient pending-event buffer before comparing hashState. The ground-truth
+    // trace drains after every op, so a build whose hashState INCLUDES the undrained log (a valid
+    // design choice the reference does not make) would otherwise mismatch on the log, not on the
+    // simulation state. Draining both sides focuses F_FID on FUTURE SIM-STATE fidelity (the intent).
+    guard(() => E.drainEventLog(w), 'rdrain');
   }
   const g = runTrace(20260628, { snap: true });
   if (g && g.snaps.length) {

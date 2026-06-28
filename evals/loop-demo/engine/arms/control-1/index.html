@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Carousel — deterministic tick-simulation engine</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin: 0; padding: 16px; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  .sub { opacity: .7; margin: 0 0 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  button { font: inherit; padding: 6px 10px; cursor: pointer; }
+  pre { background: rgba(127,127,127,.12); padding: 10px; border-radius: 6px; overflow: auto; max-height: 40vh; }
+  .ok { color: #19a974; } .bad { color: #e7040e; }
+</style>
+</head>
+<body>
+  <h1>Carousel</h1>
+  <p class="sub">A single-file, fully offline, integer-only deterministic tick-simulation engine.
+     The deliverable is <code>window.ENGINE</code>; this page is just a tiny viewer.</p>
+  <div class="row">
+    <button id="bStep">step ×1</button>
+    <button id="bStep100">step ×100</button>
+    <button id="bReset">reset</button>
+    <button id="bSelfTest">run self-test</button>
+  </div>
+  <pre id="out">loading…</pre>
+  <pre id="log"></pre>
+
+<script>
+"use strict";
+/* =====================================================================================
+ * Carousel — a deterministic, integer-only tick-simulation engine.
+ *
+ * Internal module boundaries (all in this one file, zero dependencies, fully offline):
+ *   1. PRNG          — the documented 31-bit LCG, computed with EXACT integer math.
+ *   2. helpers       — integer coercion/clamping; never produce floats or NaN-in-state.
+ *   3. data model    — world / station / unit shapes (integer-only).
+ *   4. events        — the single source of truth for seq + minted/burned ledgers.
+ *   5. resource ops  — produceInto / depositCargo / pickup (keep conservation exact).
+ *   6. step pipeline — six systems in a fixed, documented order.
+ *   7. commands      — lexing + dispatch (setProd / inject / kill), idempotent by id.
+ *   8. serialization — canonical form -> snapshot / restore / hashState.
+ *   9. public API    — window.ENGINE.
+ * ===================================================================================== */
+
+(function () {
+
+  /* ----------------------------------------------------------------------------------
+   * 1. PRNG  — rngState_next = (rngState * 1103515245 + 12345) & 0x7fffffff  (31-bit LCG)
+   *
+   * The multiplicand makes the exact product exceed 2^53, so naive `a*b` would silently
+   * lose low bits. We only need the low 31 bits, so we compute (s * A) mod 2^31 EXACTLY
+   * by 16-bit splitting (every intermediate stays < 2^53 and is therefore exact).
+   * -------------------------------------------------------------------------------- */
+  var A = 1103515245;
+  var INC = 12345;
+  var M31 = 0x80000000;            // 2^31
+  var A_LO = A & 0xffff;           // low  16 bits of A
+  var A_HI = (A - A_LO) / 0x10000; // high bits of A (exact integer divide)
+
+  function lcgStep(s) {
+    // s is an integer in [0, 2^31)
+    var sLo = s & 0xffff;
+    var sHi = (s - sLo) / 0x10000;                 // exact
+    var low = sLo * A_LO;                           // < 2^32, exact
+    var mid = sHi * A_LO + sLo * A_HI;              // < 2^32, exact
+    // (s*A) mod 2^31 = (low + mid*2^16) mod 2^31; the 2^32 (sHi*A_HI) term vanishes mod 2^31.
+    var prod = (low % M31 + (mid % 0x8000) * 0x10000) % M31;
+    return (prod + INC) % M31;                      // == (s*A + INC) & 0x7fffffff
+  }
+
+  function rngNext(w) { w.rng = lcgStep(w.rng); return w.rng; }
+
+  /* ----------------------------------------------------------------------------------
+   * 2. helpers — integer-only coercion. Odd inputs must clamp/ignore, never throw/hang.
+   * -------------------------------------------------------------------------------- */
+  function toInt(v, def) {
+    var n = Math.floor(Number(v));
+    if (!isFinite(n)) return def;
+    return n;
+  }
+  function clampInt(v, def, lo, hi) {
+    var n = (v === undefined || v === null) ? def : Math.floor(Number(v));
+    if (!isFinite(n)) n = def;
+    if (n < lo) n = lo;
+    if (n > hi) n = hi;
+    return n;
+  }
+
+  /* ----------------------------------------------------------------------------------
+   * 3. data model
+   * world = { tick, rng, eventSeq, minted, burned, nextUnitId, config,
+   *           stations:[{stockpile,prod,cd}], units:[{id,hp,cargo,pos}],
+   *           appliedCommands:Set<string>, eventLog:[{seq,type,amount}] }
+   * Units are always kept ordered by ascending id.
+   * -------------------------------------------------------------------------------- */
+  function buildConfig(u) {
+    u = (u && typeof u === "object") ? u : {};
+    return {
+      S:             clampInt(u.S,             6,    4, 4096),     // # stations on the ring (>=4)
+      CAP:           clampInt(u.CAP,           1000, 1, 1000000000), // per-station stockpile cap
+      MAX_UNITS:     clampInt(u.MAX_UNITS,     8,    0, 100000),
+      SPAWN_CADENCE: clampInt(u.SPAWN_CADENCE, 3,    1, 1000000),
+      PROD_BASE:     clampInt(u.PROD_BASE,     5,    0, 1000000),  // initial per-station production
+      PROD_VAR:      clampInt(u.PROD_VAR,      3,    0, 1000000),  // seeded cooldown spread
+      PICK_RATE:     clampInt(u.PICK_RATE,     7,    0, 1000000),  // max pickup per tick
+      CARGO_CAP:     clampInt(u.CARGO_CAP,     20,   0, 1000000),  // max unit cargo
+      UNIT_HP:       clampInt(u.UNIT_HP,       10,   1, 1000000)   // spawn hp
+    };
+  }
+
+  function createWorld(seed, config) {
+    var cfg = buildConfig(config);
+    var rng = toInt(seed, 1);
+    rng = ((rng % M31) + M31) % M31;     // normalize any integer into [0, 2^31)
+    var stations = [];
+    for (var i = 0; i < cfg.S; i++) stations.push({ stockpile: 0, prod: cfg.PROD_BASE, cd: 0 });
+    return {
+      tick: 0,
+      rng: rng,
+      eventSeq: 0,          // last seq handed out; first real event gets seq 1
+      minted: 0,
+      burned: 0,
+      nextUnitId: 1,
+      config: cfg,
+      stations: stations,
+      units: [],
+      appliedCommands: new Set(),
+      eventLog: []
+    };
+  }
+
+  /* ----------------------------------------------------------------------------------
+   * 4. events — the ONLY place seq/minted/burned change, so the ledger can never drift.
+   * -------------------------------------------------------------------------------- */
+  function emit(w, type, amount) {
+    w.eventSeq += 1;                       // strictly increasing, unique across the run
+    var amt = Math.floor(amount) || 0;
+    var ev = { seq: w.eventSeq, type: type, amount: amt };
+    w.eventLog.push(ev);
+    if (type === "mint") w.minted += amt;
+    else if (type === "burn") w.burned += amt;
+    return ev;
+  }
+
+  /* ----------------------------------------------------------------------------------
+   * 5. resource ops — every board change routes through one of these so that the on-board
+   *    total always equals (minted - burned).
+   * -------------------------------------------------------------------------------- */
+
+  // Create `gross` fresh resources into a station; cap at CAP and burn the overflow.
+  function produceInto(w, st, gross) {
+    if (gross <= 0) return;
+    emit(w, "mint", gross);                 // resources created
+    var space = w.config.CAP - st.stockpile;
+    if (space < 0) space = 0;
+    var added = gross < space ? gross : space;
+    var overflow = gross - added;
+    st.stockpile += added;
+    if (overflow > 0) emit(w, "burn", overflow); // capped overflow destroyed
+  }
+
+  // Move a unit's whole cargo into the station; cap at CAP and burn the overflow.
+  function depositCargo(w, u, st) {
+    var drop = u.cargo;
+    if (drop <= 0) return;
+    var space = w.config.CAP - st.stockpile;
+    if (space < 0) space = 0;
+    var deposited = drop < space ? drop : space;
+    var overflow = drop - deposited;
+    st.stockpile += deposited;
+    u.cargo = 0;
+    if (overflow > 0) emit(w, "burn", overflow); // no mint: cargo was already on the board
+  }
+
+  // Pull resources from a station into a unit's cargo (pure transfer; conserved, no event).
+  function pickup(w, u, st) {
+    var room = w.config.CARGO_CAP - u.cargo;
+    if (room <= 0) return;
+    var take = st.stockpile;
+    if (take > room) take = room;
+    if (take > w.config.PICK_RATE) take = w.config.PICK_RATE;
+    if (take <= 0) return;
+    st.stockpile -= take;
+    u.cargo += take;
+  }
+
+  // Destroy a unit, burning whatever cargo it carried (conservation), then announce "dead".
+  function destroyUnit(w, u) {
+    if (u.cargo > 0) { emit(w, "burn", u.cargo); u.cargo = 0; }
+    emit(w, "dead", 0);
+  }
+
+  /* ----------------------------------------------------------------------------------
+   * 6. step pipeline — six systems, fixed documented order:
+   *    spawn -> produce -> move -> transfer -> interact -> cleanup
+   * -------------------------------------------------------------------------------- */
+
+  function sysSpawn(w) {
+    var c = w.config;
+    if (c.MAX_UNITS > 0 && (w.tick % c.SPAWN_CADENCE) === 0 && w.units.length < c.MAX_UNITS) {
+      var u = { id: w.nextUnitId, hp: c.UNIT_HP, cargo: 0, pos: 0 };
+      w.nextUnitId += 1;
+      w.units.push(u);             // ids only ever increase -> array stays id-sorted
+      emit(w, "spawn", 0);
+    }
+  }
+
+  function sysProduce(w) {
+    var c = w.config, sts = w.stations;
+    for (var i = 0; i < sts.length; i++) {
+      var r = rngNext(w);          // one PRNG draw per station per tick (seeded variability)
+      var st = sts[i];
+      if (st.cd > 0) {
+        st.cd -= 1;                // on cooldown this tick
+      } else {
+        produceInto(w, st, st.prod);
+        st.cd = r % (c.PROD_VAR + 1); // seeded cooldown 0..PROD_VAR
+      }
+    }
+  }
+
+  function sysMove(w) {
+    var S = w.config.S, us = w.units;
+    for (var i = 0; i < us.length; i++) us[i].pos = (us[i].pos + 1) % S;
+  }
+
+  function sysTransfer(w) {
+    var us = w.units;
+    for (var i = 0; i < us.length; i++) {
+      var u = us[i], st = w.stations[u.pos];
+      if (u.pos === 0) depositCargo(w, u, st);  // drop everything at home
+      else pickup(w, u, st);                    // otherwise gather
+    }
+  }
+
+  function sysInteract(w) {
+    var us = w.units, S = w.config.S;
+    var counts = new Array(S);
+    for (var k = 0; k < S; k++) counts[k] = 0;
+    for (var i = 0; i < us.length; i++) counts[us[i].pos] += 1;
+    for (var j = 0; j < us.length; j++) {       // id order (array is id-sorted)
+      var dmg = counts[us[j].pos] - 1;          // damage = number of co-located rivals
+      if (dmg > 0) { us[j].hp -= dmg; emit(w, "hit", 0); }
+    }
+  }
+
+  function sysCleanup(w) {
+    var us = w.units, survivors = [];
+    for (var i = 0; i < us.length; i++) {       // id order preserved
+      var u = us[i];
+      if (u.hp > 0) survivors.push(u);
+      else destroyUnit(w, u);
+    }
+    w.units = survivors;
+  }
+
+  function step(w) {
+    if (!w) return;
+    w.tick += 1;
+    sysSpawn(w);
+    sysProduce(w);
+    sysMove(w);
+    sysTransfer(w);
+    sysInteract(w);
+    sysCleanup(w);
+  }
+
+  /* ----------------------------------------------------------------------------------
+   * 7. commands — lexed into a normalized shape, dispatched, idempotent by unique `id`.
+   * -------------------------------------------------------------------------------- */
+  function applyCommand(w, cmd) {
+    if (!w || !cmd || typeof cmd !== "object") return;   // ignore junk, never throw
+    var id = cmd.id;
+    var key = (id === undefined || id === null) ? null : String(id);
+    if (key !== null) {
+      if (w.appliedCommands.has(key)) return;            // duplicate id -> exact no-op
+      w.appliedCommands.add(key);
+    }
+    try {
+      switch (cmd.type) {
+        case "setProd": {
+          var sIdx = toInt(cmd.station, -1);
+          var val = toInt(cmd.value, 0);
+          if (val < 0) val = 0;
+          if (val > 1000000) val = 1000000;
+          if (sIdx >= 0 && sIdx < w.stations.length) w.stations[sIdx].prod = val;
+          break;
+        }
+        case "inject": {
+          var iIdx = toInt(cmd.station, -1);
+          var amt = toInt(cmd.amount, 0);
+          if (iIdx >= 0 && iIdx < w.stations.length && amt > 0) {
+            produceInto(w, w.stations[iIdx], amt);        // injected resources are minted
+          }
+          break;
+        }
+        case "kill": {
+          var uid = toInt(cmd.unitId, NaN);               // invalid -> matches nothing
+          var arr = w.units;
+          for (var i = 0; i < arr.length; i++) {
+            if (arr[i].id === uid) { destroyUnit(w, arr[i]); arr.splice(i, 1); break; }
+          }
+          break;
+        }
+        default:
+          break;                                          // unknown type -> ignored no-op
+      }
+    } catch (e) { /* robustness: never propagate */ }
+  }
+
+  /* ----------------------------------------------------------------------------------
+   * 8. serialization — one canonical form drives BOTH snapshot and hashState, so a
+   *    restored world necessarily hashes identically. Captures EVERYTHING needed to
+   *    behave identically going forward: rng, all counters/cooldowns, the event-id
+   *    counter, ledgers, pending events, and applied-command bookkeeping.
+   * -------------------------------------------------------------------------------- */
+  function canon(w) {
+    var c = w.config;
+    return {
+      v: 1,
+      tick: w.tick,
+      rng: w.rng,
+      seq: w.eventSeq,
+      minted: w.minted,
+      burned: w.burned,
+      nid: w.nextUnitId,
+      cfg: [c.S, c.CAP, c.MAX_UNITS, c.SPAWN_CADENCE, c.PROD_BASE, c.PROD_VAR, c.PICK_RATE, c.CARGO_CAP, c.UNIT_HP],
+      st: w.stations.map(function (s) { return [s.stockpile, s.prod, s.cd]; }),
+      un: w.units.map(function (u) { return [u.id, u.hp, u.cargo, u.pos]; }),
+      ac: Array.from(w.appliedCommands).map(String).sort(),   // order-independent
+      ev: w.eventLog.map(function (e) { return [e.seq, e.type, e.amount]; })
+    };
+  }
+
+  function snapshot(w) { return JSON.stringify(canon(w)); }
+
+  function restore(str) {
+    try {
+      var d = JSON.parse(str);
+      var cfg = {
+        S: d.cfg[0], CAP: d.cfg[1], MAX_UNITS: d.cfg[2], SPAWN_CADENCE: d.cfg[3],
+        PROD_BASE: d.cfg[4], PROD_VAR: d.cfg[5], PICK_RATE: d.cfg[6],
+        CARGO_CAP: d.cfg[7], UNIT_HP: d.cfg[8]
+      };
+      return {
+        tick: d.tick,
+        rng: d.rng,
+        eventSeq: d.seq,
+        minted: d.minted,
+        burned: d.burned,
+        nextUnitId: d.nid,
+        config: cfg,
+        stations: d.st.map(function (a) { return { stockpile: a[0], prod: a[1], cd: a[2] }; }),
+        units: d.un.map(function (a) { return { id: a[0], hp: a[1], cargo: a[2], pos: a[3] }; }),
+        appliedCommands: new Set(d.ac),                 // keys are strings, matching applyCommand
+        eventLog: d.ev.map(function (a) { return { seq: a[0], type: a[1], amount: a[2] }; })
+      };
+    } catch (e) {
+      return createWorld(1, {});                        // robustness: bad input -> fresh world
+    }
+  }
+
+  // FNV-1a 32-bit over the canonical JSON -> stable 8-hex fingerprint.
+  function fnv1a(str) {
+    var h = 0x811c9dc5;
+    for (var i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0; // *16777619 mod 2^32
+    }
+    return ("0000000" + h.toString(16)).slice(-8);
+  }
+  function hashState(w) { return fnv1a(JSON.stringify(canon(w))); }
+
+  /* ----------------------------------------------------------------------------------
+   * 9. telemetry + drain
+   * -------------------------------------------------------------------------------- */
+  function report(w) {
+    var total = 0, i;
+    for (i = 0; i < w.stations.length; i++) total += w.stations[i].stockpile;
+    for (i = 0; i < w.units.length; i++) total += w.units[i].cargo;
+    return {
+      tick: w.tick,
+      unitCount: w.units.length,
+      totalResources: total,        // == minted - burned (resource conservation, every tick)
+      minted: w.minted,
+      burned: w.burned
+    };
+  }
+
+  function drainEventLog(w) {
+    var out = w.eventLog;
+    w.eventLog = [];
+    return out;
+  }
+
+  /* ----------------------------------------------------------------------------------
+   * public API
+   * -------------------------------------------------------------------------------- */
+  var ENGINE = {
+    createWorld: createWorld,
+    step: step,
+    applyCommand: applyCommand,
+    snapshot: snapshot,
+    restore: restore,
+    hashState: hashState,
+    drainEventLog: drainEventLog,
+    report: report
+  };
+
+  if (typeof window !== "undefined") window.ENGINE = ENGINE;
+  if (typeof module !== "undefined" && module.exports) module.exports = ENGINE; // node test harness
+
+})();
+
+/* ===================================================================================
+ * Tiny viewer + an in-page self-test (does not affect the headless API above).
+ * =================================================================================== */
+(function () {
+  if (typeof document === "undefined" || !document.getElementById) return;
+  var out = document.getElementById("out");
+  var logEl = document.getElementById("log");
+  var world = window.ENGINE.createWorld(12345, {});
+
+  function render() {
+    var r = window.ENGINE.report(world);
+    var conserved = (r.totalResources === r.minted - r.burned);
+    out.textContent =
+      "report = " + JSON.stringify(r, null, 2) +
+      "\nhash   = " + window.ENGINE.hashState(world) +
+      "\nconservation (total === minted - burned): " + (conserved ? "OK" : "VIOLATED");
+  }
+  function appendLog(evs) {
+    if (!evs.length) return;
+    logEl.textContent = (evs.length + " events drained: " +
+      evs.slice(0, 24).map(function (e) { return "#" + e.seq + " " + e.type + (e.amount ? "(" + e.amount + ")" : ""); }).join("  ") +
+      (evs.length > 24 ? "  …" : "")) + "\n" + logEl.textContent;
+  }
+
+  document.getElementById("bStep").onclick = function () { window.ENGINE.step(world); appendLog(window.ENGINE.drainEventLog(world)); render(); };
+  document.getElementById("bStep100").onclick = function () { for (var i = 0; i < 100; i++) window.ENGINE.step(world); appendLog(window.ENGINE.drainEventLog(world)); render(); };
+  document.getElementById("bReset").onclick = function () { world = window.ENGINE.createWorld(12345, {}); logEl.textContent = ""; render(); };
+
+  document.getElementById("bSelfTest").onclick = function () {
+    var E = window.ENGINE, msgs = [], pass = true;
+    function ok(name, cond) { if (!cond) pass = false; msgs.push((cond ? "PASS " : "FAIL ") + name); }
+
+    // determinism
+    function runTo(n) { var w = E.createWorld(777, {}); for (var i = 0; i < n; i++) { if (i % 7 === 3) E.applyCommand(w, { id: "c" + i, type: "inject", station: i % 6, amount: 9 }); E.step(w); } return w; }
+    ok("determinism (same seed -> same hash)", E.hashState(runTo(300)) === E.hashState(runTo(300)));
+
+    // snapshot/restore equivalence + identical forward behavior
+    var w1 = runTo(123);
+    var snap = E.snapshot(w1);
+    var w2 = E.restore(snap);
+    ok("restore reproduces hash", E.hashState(w1) === E.hashState(w2));
+    for (var i = 0; i < 50; i++) { E.step(w1); E.step(w2); }
+    ok("restored world behaves identically forward", E.hashState(w1) === E.hashState(w2));
+
+    // idempotent commands
+    var w3 = E.createWorld(5, {}); for (var s = 0; s < 5; s++) E.step(w3);
+    var hb = E.hashState(w3);
+    E.applyCommand(w3, { id: "X", type: "inject", station: 2, amount: 50 });
+    var ha = E.hashState(w3);
+    E.applyCommand(w3, { id: "X", type: "inject", station: 2, amount: 50 }); // dup
+    ok("idempotent command (dup id is no-op)", E.hashState(w3) === ha && ha !== hb);
+
+    // conservation + monotonic seq across a long run with odd inputs
+    var w4 = E.createWorld(99, {}); var lastSeq = 0, consOk = true, seqOk = true, allEv = [];
+    E.applyCommand(w4, { id: "bad1", type: "inject", station: 999, amount: 10 });   // out of range
+    E.applyCommand(w4, { id: "bad2", type: "inject", station: 0, amount: -5 });     // negative
+    E.applyCommand(w4, { id: "bad3", type: "kill", unitId: 99999 });                // missing unit
+    E.applyCommand(w4, { id: "bad4", type: "nonsense" });                           // unknown
+    E.applyCommand(w4, "not-an-object");                                            // junk
+    for (var t = 0; t < 600; t++) {
+      E.step(w4);
+      var evs = E.drainEventLog(w4);
+      for (var k = 0; k < evs.length; k++) { if (evs[k].seq <= lastSeq) seqOk = false; lastSeq = evs[k].seq; allEv.push(evs[k]); }
+      var rr = E.report(w4);
+      if (rr.totalResources !== rr.minted - rr.burned) consOk = false;
+    }
+    ok("resource conservation every tick", consOk);
+    ok("strictly increasing unique seqs", seqOk);
+    var rf = E.report(w4);
+    ok("ledger matches report.minted/burned", rf.totalResources === rf.minted - rf.burned);
+
+    logEl.textContent = msgs.join("\n");
+    out.textContent = (pass ? "SELF-TEST: ALL PASS" : "SELF-TEST: FAILURES PRESENT");
+    out.className = pass ? "ok" : "bad";
+  };
+
+  render();
+})();
+</script>
+</body>
+</html>

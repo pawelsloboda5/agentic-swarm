@@ -62,3 +62,24 @@ python aggregate.py reference reference/index.html  # expect F_FID=1.00, floor O
 - Frozen instrument: `scoring/invariants.mjs` — **SHA-256 `15ddc7dc7cbd826fb449a3da004fef8da1e8ee895ac73c8751e21c7b9db699bb`** (280 lines) as committed at the pre-registration commit.
 - Fixed scorer parameters (in `invariants.mjs`): **K=5 seeds, N_OPS=360, CHECKPOINTS=9**.
 - Reference fixture: `scoring/reference/index.html` (203 lines), the calibration anchor (must score 1.0).
+
+## DEVIATION — post-freeze instrument correction (disclosed per PREREGISTRATION.md §8)
+
+After building the arms, the F_FID scorer was found to contain a **second instrument artifact**: the
+ground-truth trace drained the event log after every op, but the restore-then-replay did **not**, so any
+build whose `hashState` *includes* the undrained event log (a valid design the reference happens not to make)
+mismatched on the **transient log, not the simulation state** — a false F_FID failure. This was caught
+because a fair control's self-report ("identical forward behavior verified") contradicted its 0.33 score; a
+targeted diagnostic confirmed the builds' save/load is actually correct (`restore→continue` matches when both
+sides are drained). The fix (a 5-line change: `drainEventLog` both sides before comparing) makes F_FID measure
+future **sim-state** fidelity, applied identically to every arm.
+
+- Corrected instrument SHA-256: **`5ac5b3fbae13890693b7d23fa2e2e211a559e80794fc6cbe5b18f9e0faa53067`** (285 lines). The 5-line diff vs the frozen version is in git history.
+- **Neutral + verdict-preserving:** the fix helps all arms equally (single-shot and harness both included the
+  log in `hashState`); the harness-vs-control verdict is **NULL both before** (0.33 = 0.33) **and after**
+  (1.00 = 1.00) — the correction changes only what F_FID *means*, never the comparison outcome.
+- **Not vacuous (validated):** the corrected instrument scores a deliberately-broken engine
+  (`scoring/reference-broken/index.html`, snapshot drops the PRNG state) at **F_FID 0.33** while a correct
+  engine scores **1.00** — so it still catches a real, subtle (identity-passing / continue-failing) save/load
+  bug. The all-1.0 result for the real arms means their save/load is genuinely correct, not that the ruler
+  passes everything.

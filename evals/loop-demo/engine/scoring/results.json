@@ -1,0 +1,326 @@
+[
+  {
+    "loaded": true,
+    "has_engine": true,
+    "seeds": 5,
+    "per_family": {
+      "F_DET": {
+        "pass": 55,
+        "total": 55
+      },
+      "F_SNAP": {
+        "pass": 45,
+        "total": 45
+      },
+      "F_FID": {
+        "pass": 135,
+        "total": 135
+      },
+      "F_IDEM": {
+        "pass": 788,
+        "total": 788
+      },
+      "F_CONS": {
+        "pass": 90,
+        "total": 90
+      },
+      "F_MONO": {
+        "pass": 5,
+        "total": 5
+      }
+    },
+    "hard_floor": {
+      "no_hang": true,
+      "no_throw": true
+    },
+    "hangs": [],
+    "throw_seeds": [],
+    "notes": [],
+    "pass_rate": 1,
+    "graded_pass": 1118,
+    "graded_total": 1118,
+    "per_family_rate": {
+      "F_DET": 1,
+      "F_SNAP": 1,
+      "F_FID": 1,
+      "F_IDEM": 1,
+      "F_CONS": 1,
+      "F_MONO": 1
+    },
+    "label": "control-1",
+    "equal_weight": 1.0,
+    "primary": 1,
+    "floor_ok": true,
+    "hard_ok": true
+  },
+  {
+    "loaded": true,
+    "has_engine": true,
+    "seeds": 5,
+    "per_family": {
+      "F_DET": {
+        "pass": 55,
+        "total": 55
+      },
+      "F_SNAP": {
+        "pass": 45,
+        "total": 45
+      },
+      "F_FID": {
+        "pass": 135,
+        "total": 135
+      },
+      "F_IDEM": {
+        "pass": 788,
+        "total": 788
+      },
+      "F_CONS": {
+        "pass": 90,
+        "total": 90
+      },
+      "F_MONO": {
+        "pass": 5,
+        "total": 5
+      }
+    },
+    "hard_floor": {
+      "no_hang": true,
+      "no_throw": true
+    },
+    "hangs": [],
+    "throw_seeds": [],
+    "notes": [],
+    "pass_rate": 1,
+    "graded_pass": 1118,
+    "graded_total": 1118,
+    "per_family_rate": {
+      "F_DET": 1,
+      "F_SNAP": 1,
+      "F_FID": 1,
+      "F_IDEM": 1,
+      "F_CONS": 1,
+      "F_MONO": 1
+    },
+    "label": "control-2",
+    "equal_weight": 1.0,
+    "primary": 1,
+    "floor_ok": true,
+    "hard_ok": true
+  },
+  {
+    "loaded": true,
+    "has_engine": true,
+    "seeds": 5,
+    "per_family": {
+      "F_DET": {
+        "pass": 55,
+        "total": 55
+      },
+      "F_SNAP": {
+        "pass": 45,
+        "total": 45
+      },
+      "F_FID": {
+        "pass": 135,
+        "total": 135
+      },
+      "F_IDEM": {
+        "pass": 788,
+        "total": 788
+      },
+      "F_CONS": {
+        "pass": 90,
+        "total": 90
+      },
+      "F_MONO": {
+        "pass": 5,
+        "total": 5
+      }
+    },
+    "hard_floor": {
+      "no_hang": true,
+      "no_throw": true
+    },
+    "hangs": [],
+    "throw_seeds": [],
+    "notes": [],
+    "pass_rate": 1,
+    "graded_pass": 1118,
+    "graded_total": 1118,
+    "per_family_rate": {
+      "F_DET": 1,
+      "F_SNAP": 1,
+      "F_FID": 1,
+      "F_IDEM": 1,
+      "F_CONS": 1,
+      "F_MONO": 1
+    },
+    "label": "control-3",
+    "equal_weight": 1.0,
+    "primary": 1,
+    "floor_ok": true,
+    "hard_ok": true
+  },
+  {
+    "loaded": true,
+    "has_engine": true,
+    "seeds": 5,
+    "per_family": {
+      "F_DET": {
+        "pass": 55,
+        "total": 55
+      },
+      "F_SNAP": {
+        "pass": 45,
+        "total": 45
+      },
+      "F_FID": {
+        "pass": 135,
+        "total": 135
+      },
+      "F_IDEM": {
+        "pass": 788,
+        "total": 788
+      },
+      "F_CONS": {
+        "pass": 90,
+        "total": 90
+      },
+      "F_MONO": {
+        "pass": 5,
+        "total": 5
+      }
+    },
+    "hard_floor": {
+      "no_hang": true,
+      "no_throw": true
+    },
+    "hangs": [],
+    "throw_seeds": [],
+    "notes": [],
+    "pass_rate": 1,
+    "graded_pass": 1118,
+    "graded_total": 1118,
+    "per_family_rate": {
+      "F_DET": 1,
+      "F_SNAP": 1,
+      "F_FID": 1,
+      "F_IDEM": 1,
+      "F_CONS": 1,
+      "F_MONO": 1
+    },
+    "label": "harness-1",
+    "equal_weight": 1.0,
+    "primary": 1,
+    "floor_ok": true,
+    "hard_ok": true
+  },
+  {
+    "loaded": true,
+    "has_engine": true,
+    "seeds": 5,
+    "per_family": {
+      "F_DET": {
+        "pass": 55,
+        "total": 55
+      },
+      "F_SNAP": {
+        "pass": 45,
+        "total": 45
+      },
+      "F_FID": {
+        "pass": 135,
+        "total": 135
+      },
+      "F_IDEM": {
+        "pass": 788,
+        "total": 788
+      },
+      "F_CONS": {
+        "pass": 90,
+        "total": 90
+      },
+      "F_MONO": {
+        "pass": 5,
+        "total": 5
+      }
+    },
+    "hard_floor": {
+      "no_hang": true,
+      "no_throw": true
+    },
+    "hangs": [],
+    "throw_seeds": [],
+    "notes": [],
+    "pass_rate": 1,
+    "graded_pass": 1118,
+    "graded_total": 1118,
+    "per_family_rate": {
+      "F_DET": 1,
+      "F_SNAP": 1,
+      "F_FID": 1,
+      "F_IDEM": 1,
+      "F_CONS": 1,
+      "F_MONO": 1
+    },
+    "label": "harness-2",
+    "equal_weight": 1.0,
+    "primary": 1,
+    "floor_ok": true,
+    "hard_ok": true
+  },
+  {
+    "loaded": true,
+    "has_engine": true,
+    "seeds": 5,
+    "per_family": {
+      "F_DET": {
+        "pass": 55,
+        "total": 55
+      },
+      "F_SNAP": {
+        "pass": 45,
+        "total": 45
+      },
+      "F_FID": {
+        "pass": 135,
+        "total": 135
+      },
+      "F_IDEM": {
+        "pass": 788,
+        "total": 788
+      },
+      "F_CONS": {
+        "pass": 90,
+        "total": 90
+      },
+      "F_MONO": {
+        "pass": 5,
+        "total": 5
+      }
+    },
+    "hard_floor": {
+      "no_hang": true,
+      "no_throw": true
+    },
+    "hangs": [],
+    "throw_seeds": [],
+    "notes": [],
+    "pass_rate": 1,
+    "graded_pass": 1118,
+    "graded_total": 1118,
+    "per_family_rate": {
+      "F_DET": 1,
+      "F_SNAP": 1,
+      "F_FID": 1,
+      "F_IDEM": 1,
+      "F_CONS": 1,
+      "F_MONO": 1
+    },
+    "label": "harness-3",
+    "equal_weight": 1.0,
+    "primary": 1,
+    "floor_ok": true,
+    "hard_ok": true
+  }
+]

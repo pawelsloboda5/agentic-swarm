@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Carousel Engine (reference)</title>
+</head>
+<body>
+<main id="app"><h1>Carousel deterministic sim — reference engine</h1>
+<p>Headless engine. Drive it via <code>window.ENGINE</code>. See console for a smoke run.</p></main>
+<script>
+// ============================================================================
+// Carousel: a deterministic, INTEGER-ONLY tick-simulation engine (reference).
+// Implements the shared SPEC exactly. All state is integer; no Math.random,
+// no Date, no floats. Randomness comes ONLY from the documented LCG.
+// ============================================================================
+(function () {
+  'use strict';
+
+  // ---- documented LCG (the ONLY source of randomness) ----------------------
+  function rand(world, n) {
+    world.rngState = (world.rngState * 1103515245 + 12345) & 0x7fffffff;
+    return n > 0 ? world.rngState % n : 0;
+  }
+
+  function defaults() {
+    return { stations: 6, seed: 1, spawnEvery: 3, maxUnits: 8, cap: 5, prod: 2, cap2: 20, startHp: 10 };
+  }
+
+  function createWorld(seed, config) {
+    var c = Object.assign(defaults(), config || {});
+    if (typeof seed === 'number') c.seed = seed;
+    var s = (c.seed | 0); if (s <= 0) s = 1;
+    var S = Math.max(2, c.stations | 0);
+    var stations = [];
+    for (var i = 0; i < S; i++) stations.push({ stock: 0, prod: c.prod | 0, cooldown: 0 });
+    return {
+      cfg: { stations: S, spawnEvery: Math.max(1, c.spawnEvery | 0), maxUnits: Math.max(0, c.maxUnits | 0),
+             cap: Math.max(1, c.cap | 0), prod: c.prod | 0, cap2: Math.max(1, c.cap2 | 0), startHp: Math.max(1, c.startHp | 0) },
+      tick: 0, rngState: s, nextUnitId: 1, eventSeq: 1,
+      stations: stations, units: [], appliedCmdIds: [], minted: 0, burned: 0, eventLog: []
+    };
+  }
+
+  function emit(world, ev) { ev.seq = world.eventSeq++; world.eventLog.push(ev); }
+
+  function step(world) {
+    var cfg = world.cfg, S = cfg.stations, i, u;
+    world.tick++;
+
+    // 1. SPAWN
+    if (world.tick % cfg.spawnEvery === 0 && world.units.length < cfg.maxUnits) {
+      world.units.push({ id: world.nextUnitId++, pos: 0, cargo: 0, hp: cfg.startHp });
+      emit(world, { type: 'spawn', id: world.units[world.units.length - 1].id });
+    }
+
+    // 2. PRODUCE (cooldown advanced by the LCG)
+    for (i = 0; i < S; i++) {
+      var st = world.stations[i];
+      if (st.cooldown === 0) {
+        var room = cfg.cap2 - st.stock;
+        var amt = st.prod < room ? st.prod : room;
+        if (amt > 0) { st.stock += amt; world.minted += amt; emit(world, { type: 'mint', at: i, amount:amt }); }
+        st.cooldown = rand(world, 3);
+      } else {
+        st.cooldown--;
+      }
+    }
+
+    // 3. MOVE (id order)
+    for (i = 0; i < world.units.length; i++) { u = world.units[i]; u.pos = (u.pos + 1) % S; }
+
+    // 4. LOAD / UNLOAD (id order)
+    for (i = 0; i < world.units.length; i++) {
+      u = world.units[i];
+      var here = world.stations[u.pos];
+      if (u.cargo === 0 && here.stock > 0) {
+        var take = here.stock < cfg.cap ? here.stock : cfg.cap;
+        here.stock -= take; u.cargo += take;
+      } else if (u.cargo > 0 && (u.pos % 2 === 0)) {
+        var total = here.stock + u.cargo;
+        if (total > cfg.cap2) { var overflow = total - cfg.cap2; world.burned += overflow; emit(world, { type: 'burn', at: u.pos, amount:overflow }); here.stock = cfg.cap2; }
+        else { here.stock = total; }
+        u.cargo = 0;
+      }
+    }
+
+    // 5. COMBAT: any station with >=2 units -> the lowest-id unit there loses 1 hp
+    var byPos = {};
+    for (i = 0; i < world.units.length; i++) { u = world.units[i]; (byPos[u.pos] || (byPos[u.pos] = [])).push(u); }
+    var positions = Object.keys(byPos).map(Number).sort(function (a, b) { return a - b; });
+    for (var p = 0; p < positions.length; p++) {
+      var grp = byPos[positions[p]];
+      if (grp.length >= 2) {
+        var lowest = grp[0];
+        for (var g = 1; g < grp.length; g++) if (grp[g].id < lowest.id) lowest = grp[g];
+        lowest.hp--; emit(world, { type: 'hit', id: lowest.id });
+      }
+    }
+
+    // 6. CLEANUP: remove dead units (cargo burned), keep id order
+    var survivors = [];
+    for (i = 0; i < world.units.length; i++) {
+      u = world.units[i];
+      if (u.hp <= 0) {
+        if (u.cargo > 0) { world.burned += u.cargo; emit(world, { type: 'burn', at: u.pos, amount:u.cargo }); }
+        emit(world, { type: 'dead', id: u.id });
+      } else { survivors.push(u); }
+    }
+    world.units = survivors; // already in id order
+  }
+
+  function applyCommand(world, cmd) {
+    if (!cmd || typeof cmd.id === 'undefined') return;
+    // idempotent: a seen command id is a no-op
+    if (world.appliedCmdIds.indexOf(cmd.id) !== -1) return;
+    world.appliedCmdIds.push(cmd.id);
+    var S = world.cfg.stations;
+    if (cmd.type === 'setProd') {
+      var stn = cmd.station | 0;
+      if (stn >= 0 && stn < S) { var v = cmd.value | 0; if (v < 0) v = 0; if (v > 10) v = 10; world.stations[stn].prod = v; }
+    } else if (cmd.type === 'inject') {
+      var s2 = cmd.station | 0;
+      if (s2 >= 0 && s2 < S) {
+        var a = cmd.amt | 0; if (a < 0) a = 0; if (a > world.cfg.cap2) a = world.cfg.cap2;
+        var room = world.cfg.cap2 - world.stations[s2].stock; var add = a < room ? a : room;
+        if (add > 0) { world.stations[s2].stock += add; world.minted += add; emit(world, { type: 'mint', at: s2, amount:add }); }
+      }
+    } else if (cmd.type === 'kill') {
+      var uid = cmd.unit | 0, keep = [];
+      for (var i = 0; i < world.units.length; i++) {
+        var u = world.units[i];
+        if (u.id === uid) { if (u.cargo > 0) { world.burned += u.cargo; emit(world, { type: 'burn', at: u.pos, amount:u.cargo }); } emit(world, { type: 'dead', id: u.id }); }
+        else keep.push(u);
+      }
+      world.units = keep;
+    }
+    // unknown types: id recorded, no state change (still idempotent)
+  }
+
+  // ---- canonical serialization (sorted, stable) ----------------------------
+  function canon(world) {
+    var stations = world.stations.map(function (s) { return [s.stock, s.prod, s.cooldown]; });
+    var units = world.units.slice().sort(function (a, b) { return a.id - b.id; })
+      .map(function (u) { return [u.id, u.pos, u.cargo, u.hp]; });
+    var ids = world.appliedCmdIds.slice().sort(function (a, b) { return ('' + a) < ('' + b) ? -1 : ('' + a) > ('' + b) ? 1 : 0; });
+    return JSON.stringify({
+      cfg: world.cfg, tick: world.tick, nextUnitId: world.nextUnitId,
+      eventSeq: world.eventSeq, minted: world.minted, burned: world.burned,
+      stations: stations, units: units, appliedCmdIds: ids
+    });
+  }
+
+  function snapshot(world) {
+    // FULL state incl. undrained eventLog so restore loses nothing
+    return JSON.stringify({ core: canon(world), eventLog: world.eventLog });
+  }
+
+  function restore(str) {
+    var obj = JSON.parse(str);
+    var c = JSON.parse(obj.core);
+    var w = {
+      cfg: c.cfg, tick: c.tick, rngState: (c.cfg && c.cfg.seed) || 1, nextUnitId: c.nextUnitId, eventSeq: c.eventSeq,
+      minted: c.minted, burned: c.burned,
+      stations: c.stations.map(function (s) { return { stock: s[0], prod: s[1], cooldown: s[2] }; }),
+      units: c.units.map(function (u) { return { id: u[0], pos: u[1], cargo: u[2], hp: u[3] }; }),
+      appliedCmdIds: c.appliedCmdIds.slice(), eventLog: obj.eventLog ? obj.eventLog.slice() : []
+    };
+    return w;
+  }
+
+  function hashState(world) {
+    // exact, collision-free fingerprint = the canonical state string (no eventLog)
+    var str = canon(world), h1 = 0x811c9dc5, h2 = 0xc2b2ae35;
+    for (var i = 0; i < str.length; i++) { var ch = str.charCodeAt(i); h1 = (h1 ^ ch) * 0x01000193 >>> 0; h2 = (h2 ^ ch) * 0x01000193 >>> 0; h2 = (h2 + i) >>> 0; }
+    return ('00000000' + h1.toString(16)).slice(-8) + ('00000000' + h2.toString(16)).slice(-8) + ':' + str.length;
+  }
+
+  function drainEventLog(world) { var e = world.eventLog; world.eventLog = []; return e; }
+
+  // status/telemetry report (HUD-style). totalResources = all stockpiles + all unit cargo.
+  function report(world) {
+    var total = 0, i;
+    for (i = 0; i < world.stations.length; i++) total += world.stations[i].stock;
+    for (i = 0; i < world.units.length; i++) total += world.units[i].cargo;
+    return { tick: world.tick, unitCount: world.units.length, totalResources: total, minted: world.minted, burned: world.burned };
+  }
+
+  window.ENGINE = { createWorld: createWorld, step: step, applyCommand: applyCommand,
+                    snapshot: snapshot, restore: restore, hashState: hashState,
+                    drainEventLog: drainEventLog, report: report };
+
+  // tiny smoke run for human eyes (not part of the contract)
+  try {
+    var w = createWorld(7, {}); for (var i = 0; i < 30; i++) step(w);
+    var el = document.getElementById('app');
+    var pre = document.createElement('pre'); pre.textContent = 'after 30 steps: hash=' + hashState(w) + '\nunits=' + w.units.length + ' minted=' + w.minted + ' burned=' + w.burned;
+    el.appendChild(pre);
+    console.log('[carousel] ready; hash@30=', hashState(w));
+  } catch (e) { console.error('smoke failed', e); }
+})();
+</script>
+</body>
+</html>

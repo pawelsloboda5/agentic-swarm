@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Carousel — deterministic integer tick-simulation engine</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+         margin: 0; padding: 24px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p  { margin: 4px 0; opacity: .8; }
+  #panel { margin-top: 16px; padding: 12px 14px; border: 1px solid currentColor;
+           border-radius: 8px; max-width: 720px; white-space: pre-wrap; opacity: .9; }
+  code { opacity: .75; }
+</style>
+</head>
+<body>
+  <h1>Carousel</h1>
+  <p>A deterministic, integer-only tick-simulation engine. The deliverable is the
+     headless API at <code>window.ENGINE</code>; this page is only a stub.</p>
+  <div id="panel">booting…</div>
+
+<script>
+"use strict";
+/* ==========================================================================
+   "Carousel" — a deterministic integer tick-simulation engine.
+
+   Single self-contained, fully offline file. Zero dependencies. No network,
+   no CDN, no Math.random, no Date, no floats in simulation state.
+
+   Four internal modules, each an IIFE exposing ONE namespace object, wired
+   into window.ENGINE by a small bootstrap. Assembly order (dependency order):
+       Model -> Systems -> Commands -> Persist -> bootstrap.
+
+   Modules reference each other only through their namespaces, only in the
+   dependency direction:
+       Model (no deps)
+         |- Systems  (deps: Model)
+         |- Commands (deps: Model)
+         |- Persist  (deps: Model)
+       bootstrap (deps: all four) -> window.ENGINE
+   ========================================================================== */
+
+/* ==========================================================================
+   MODULE: Model  -- data model, helpers, conservation core (contract §2)
+   The SOLE owner of: world construction, the PRNG, event emission (minted/
+   burned), resource creation/destruction, unit spawn/removal. Every mutation
+   to minted/burned flows through Model.emit; every resource created flows
+   through Model.addResources; every resource/unit destroyed flows through
+   Model.addResources overflow-burn or Model.removeUnit cargo-burn. This is
+   what makes conservation and seq-monotonicity true by construction.
+   ========================================================================== */
+var Model = (function () {
+  "use strict";
+
+  // Default config (§1). Immutable template; createWorld merges over this.
+  var DEFAULTS = {
+    S:            6,    // # stations, >= 4
+    CAP:          1000, // per-station stockpile cap
+    MAX_UNITS:    12,   // unit cap
+    SPAWN_PERIOD: 3,    // spawn every N ticks, >= 1
+    PROD_BASE:    5,    // initial prod[i] for all i
+    PROD_VAR:     4,    // cooldown variability range >= 0
+    PROD_MAX:     100,  // setProd clamp ceiling
+    UNIT_HP:      10,   // spawn hp
+    CARGO_CAP:    50,   // max unit cargo
+    TRANSFER:     10,   // pickup/drop per tick
+    DAMAGE:       3     // combat dmg per round
+  };
+
+  // Safe integer coercion: NaN/Infinity/garbage -> 0.
+  function toInt(x) {
+    var n = Math.trunc(Number(x));
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  // Integer clamp to [lo, hi].
+  function clampInt(x, lo, hi) {
+    var n = toInt(x);
+    if (n < lo) return lo;
+    if (n > hi) return hi;
+    return n;
+  }
+
+  // Build the clamped/coerced config from caller input (§1 rules).
+  function buildConfig(config) {
+    var c = (config && typeof config === "object") ? config : {};
+    function pick(key) {
+      return (c[key] === undefined || c[key] === null) ? DEFAULTS[key] : c[key];
+    }
+    // Insertion order matches §1 / §5 canonical key order — do not reorder.
+    return {
+      S:            Math.max(4, toInt(pick("S"))),
+      CAP:          Math.max(0, toInt(pick("CAP"))),
+      MAX_UNITS:    Math.max(0, toInt(pick("MAX_UNITS"))),
+      SPAWN_PERIOD: Math.max(1, toInt(pick("SPAWN_PERIOD"))),
+      PROD_BASE:    Math.max(0, toInt(pick("PROD_BASE"))),
+      PROD_VAR:     Math.max(0, toInt(pick("PROD_VAR"))),
+      PROD_MAX:     Math.max(0, toInt(pick("PROD_MAX"))),
+      UNIT_HP:      Math.max(0, toInt(pick("UNIT_HP"))),
+      CARGO_CAP:    Math.max(0, toInt(pick("CARGO_CAP"))),
+      TRANSFER:     Math.max(0, toInt(pick("TRANSFER"))),
+      DAMAGE:       Math.max(0, toInt(pick("DAMAGE")))
+    };
+  }
+
+  // Sole constructor of the world object (§1 init values).
+  function createWorld(seed, config) {
+    var cfg = buildConfig(config);
+    var S = cfg.S;
+    var stations = new Array(S);
+    var prod = new Array(S);
+    var cooldown = new Array(S);
+    for (var i = 0; i < S; i++) {
+      stations[i] = 0;          // empty -> totalResources 0 at t0, no initial mint
+      prod[i] = cfg.PROD_BASE;  // initial production rate
+      cooldown[i] = 0;          // no cooldown initially
+    }
+    return {
+      seed:        toInt(seed),
+      config:      cfg,
+      tick:        0,
+      rngState:    toInt(seed) & 0x7fffffff,
+      stations:    stations,
+      prod:        prod,
+      cooldown:    cooldown,
+      units:       [],
+      nextUnitId:  0,
+      seqCounter:  0,
+      minted:      0,
+      burned:      0,
+      eventLog:    [],
+      appliedCmds: new Set()
+    };
+  }
+
+  // 31-bit LCG step via Math.imul (avoids 2^53 overflow corruption from `*`).
+  function rngNext(world) {
+    world.rngState = (Math.imul(world.rngState, 1103515245) + 12345) & 0x7fffffff;
+    return world.rngState;
+  }
+
+  // THE ONLY place minted/burned change. Emits an event, returns it.
+  // Non-mint/burn events always carry amount 0.
+  function emit(world, type, amount) {
+    var a = Math.max(0, toInt(amount));
+    if (type !== "mint" && type !== "burn") a = 0;
+    var ev = { seq: world.seqCounter++, type: type, amount: a };
+    world.eventLog.push(ev);
+    if (type === "mint") world.minted += a;
+    else if (type === "burn") world.burned += a;
+    return ev;
+  }
+
+  // THE ONLY resource-creation path. Returns amount actually added to the board.
+  // Mints the full requested amount; burns any overflow past CAP.
+  function addResources(world, station, amount) {
+    var s = toInt(station);
+    var amt = toInt(amount);
+    if (s < 0 || s >= world.config.S || amt <= 0) return 0; // applied, no effect
+    emit(world, "mint", amt);                               // full amount created
+    var room = world.config.CAP - world.stations[s];
+    if (room < 0) room = 0;
+    var add = Math.min(amt, room);
+    world.stations[s] += add;
+    var over = amt - add;
+    if (over > 0) emit(world, "burn", over);                // overflow past CAP destroyed
+    return add;
+  }
+
+  // Spawn a unit at station 0 if under cap. Ascending id preserved by append.
+  function spawnUnit(world) {
+    if (world.units.length >= world.config.MAX_UNITS) return null;
+    var unit = { id: world.nextUnitId++, pos: 0, hp: world.config.UNIT_HP, cargo: 0 };
+    world.units.push(unit);
+    emit(world, "spawn", 0);
+    return unit;
+  }
+
+  // THE ONLY unit-destruction path. Burns cargo (BEFORE dead, for fixed seq
+  // order), then splices the unit out.
+  function removeUnit(world, unit) {
+    if (!unit) return;
+    if (unit.cargo > 0) emit(world, "burn", unit.cargo);
+    emit(world, "dead", 0);
+    var idx = world.units.indexOf(unit);
+    if (idx >= 0) world.units.splice(idx, 1);
+  }
+
+  // Linear scan by id.
+  function findUnit(world, id) {
+    var target = toInt(id);
+    var u = world.units;
+    for (var i = 0; i < u.length; i++) {
+      if (u[i].id === target) return u[i];
+    }
+    return null;
+  }
+
+  // Sum of every station stockpile + every unit's cargo.
+  function totalResources(world) {
+    var total = 0;
+    var st = world.stations;
+    for (var i = 0; i < st.length; i++) total += st[i];
+    var un = world.units;
+    for (var j = 0; j < un.length; j++) total += un[j].cargo;
+    return total;
+  }
+
+  // Status/telemetry report.
+  function report(world) {
+    return {
+      tick:           world.tick,
+      unitCount:      world.units.length,
+      totalResources: totalResources(world),
+      minted:         world.minted,
+      burned:         world.burned
+    };
+  }
+
+  // Return pending events, then clear the log.
+  function drainEventLog(world) {
+    var log = world.eventLog;
+    world.eventLog = [];
+    return log;
+  }
+
+  return {
+    DEFAULTS:       DEFAULTS,
+    toInt:          toInt,
+    clampInt:       clampInt,
+    createWorld:    createWorld,
+    rngNext:        rngNext,
+    emit:           emit,
+    addResources:   addResources,
+    spawnUnit:      spawnUnit,
+    removeUnit:     removeUnit,
+    findUnit:       findUnit,
+    totalResources: totalResources,
+    report:         report,
+    drainEventLog:  drainEventLog
+  };
+})();
+
+/* ==========================================================================
+   MODULE: Systems  -- the per-tick step pipeline (contract §3). Deps: Model.
+   step() runs the six systems in a FIXED documented order, then increments
+   tick LAST. The ONLY PRNG consumer is sysProduce, iterating stations
+   0..S-1 ascending, advancing the rng exactly once per *producing* station.
+   move/transfer/interact/cleanup are PRNG-free and deterministic, and never
+   mint or burn (they only relocate integers; destruction goes via Model).
+   ========================================================================== */
+var Systems = (function (Model) {
+  "use strict";
+
+  // 1. sysSpawn — spawn on the cadence; Model.spawnUnit self-caps at MAX_UNITS.
+  function sysSpawn(world) {
+    if (world.tick % world.config.SPAWN_PERIOD === 0) {
+      Model.spawnUnit(world);
+    }
+  }
+
+  // 2. sysProduce — for i = 0..S-1 ascending. THE ONLY PRNG consumer.
+  //    A station on cooldown ticks down (no produce, no rng advance); a
+  //    producing station mints prod[i] then rolls its next cooldown (one rng).
+  function sysProduce(world) {
+    var S = world.config.S;
+    var PROD_VAR = world.config.PROD_VAR;
+    var prod = world.prod;
+    var cooldown = world.cooldown;
+    for (var i = 0; i < S; i++) {
+      if (cooldown[i] > 0) {
+        cooldown[i] -= 1;
+      } else {
+        Model.addResources(world, i, prod[i]);
+        cooldown[i] = PROD_VAR > 0 ? (Model.rngNext(world) % PROD_VAR) : 0;
+      }
+    }
+  }
+
+  // 3. sysMove — every unit advances one station along the ring, in id order.
+  function sysMove(world) {
+    var S = world.config.S;
+    var units = world.units;
+    for (var k = 0; k < units.length; k++) {
+      units[k].pos = (units[k].pos + 1) % S;
+    }
+  }
+
+  // 4. sysTransfer — conservative (NO mint/burn). Each unit in id order at
+  //    s=pos: pick up if station has >= TRANSFER and unit has room; else drop
+  //    if carrying. All moves clamp so nothing is created or destroyed.
+  function sysTransfer(world) {
+    var CAP = world.config.CAP;
+    var CARGO_CAP = world.config.CARGO_CAP;
+    var TRANSFER = world.config.TRANSFER;
+    var stations = world.stations;
+    var units = world.units;
+    for (var k = 0; k < units.length; k++) {
+      var u = units[k];
+      var s = u.pos;
+      if (stations[s] >= TRANSFER && u.cargo < CARGO_CAP) {
+        var pick = Math.min(TRANSFER, stations[s], CARGO_CAP - u.cargo);
+        stations[s] -= pick;
+        u.cargo += pick;
+      } else if (u.cargo > 0) {
+        var drop = Math.min(TRANSFER, u.cargo, CAP - stations[s]);
+        if (drop < 0) drop = 0;
+        stations[s] += drop;
+        u.cargo -= drop;
+      }
+    }
+  }
+
+  // 5. sysInteract — group units by pos; any station with >= 2 units, each unit
+  //    (id order) takes DAMAGE and emits a 'hit'. No resource/cargo change.
+  function sysInteract(world) {
+    var DAMAGE = world.config.DAMAGE;
+    var units = world.units;
+    var counts = Object.create(null);
+    for (var k = 0; k < units.length; k++) {
+      var p = units[k].pos;
+      counts[p] = (counts[p] || 0) + 1;
+    }
+    for (var j = 0; j < units.length; j++) {
+      var u = units[j];
+      if (counts[u.pos] >= 2) {
+        u.hp -= DAMAGE;
+        Model.emit(world, "hit", 0);
+      }
+    }
+  }
+
+  // 6. sysCleanup — remove units with hp<=0 in id order via Model.removeUnit
+  //    (burns cargo + emits 'dead'). Collect first, then remove, so splicing
+  //    inside removeUnit does not disturb iteration. Survivors stay ascending.
+  function sysCleanup(world) {
+    var units = world.units;
+    var dead = [];
+    for (var k = 0; k < units.length; k++) {
+      if (units[k].hp <= 0) dead.push(units[k]);
+    }
+    for (var d = 0; d < dead.length; d++) {
+      Model.removeUnit(world, dead[d]);
+    }
+  }
+
+  // step — fixed documented order, then increment tick LAST.
+  function step(world) {
+    if (!world || typeof world !== "object") return; // tolerate garbage; never throw
+    sysSpawn(world);
+    sysProduce(world);
+    sysMove(world);
+    sysTransfer(world);
+    sysInteract(world);
+    sysCleanup(world);
+    world.tick += 1;
+  }
+
+  return { step: step };
+})(Model);
+
+/* ==========================================================================
+   MODULE: Commands  -- lexing + idempotent apply (contract §4). Deps: Model.
+   Idempotent by command id (checked BEFORE any mutation, then marked applied
+   even for unknown types). All resource/unit effects flow through Model
+   chokepoints, preserving conservation & seq monotonicity. Never throws.
+   ========================================================================== */
+var Commands = (function (Model) {
+  "use strict";
+
+  function applyCommand(world, cmd) {
+    // Hard guards: tolerate garbage world/cmd without throwing.
+    if (!world || typeof world !== "object") return;
+    if (!world.appliedCmds || typeof world.appliedCmds.has !== "function") return;
+
+    // No usable command / no usable id -> ignore (no mark, no mutation).
+    if (!cmd || cmd.id === undefined || cmd.id === null) return;
+
+    var key = String(cmd.id);
+
+    // IDEMPOTENT no-op: a previously-applied id changes nothing.
+    if (world.appliedCmds.has(key)) return;
+
+    // Mark applied up front — even unknown types consume their id exactly once.
+    world.appliedCmds.add(key);
+
+    var cfg = world.config || {};
+
+    switch (cmd.type) {
+      case "setProd": {
+        // {station, value} -> set per-station production, clamped 0..PROD_MAX.
+        var stp = Model.toInt(cmd.station);
+        if (stp >= 0 && stp < cfg.S && Array.isArray(world.prod)) {
+          world.prod[stp] = Model.clampInt(cmd.value, 0, cfg.PROD_MAX);
+        }
+        break;
+      }
+      case "inject": {
+        // {station, amount} -> CREATE resources at a station.
+        // addResources mints the full amount, burns overflow past CAP, and is
+        // itself a no-op for out-of-range station / amount <= 0.
+        Model.addResources(world, Model.toInt(cmd.station), Model.toInt(cmd.amount));
+        break;
+      }
+      case "kill": {
+        // {unitId} -> remove a unit by id (burns its cargo + emits dead).
+        var u = Model.findUnit(world, Model.toInt(cmd.unitId));
+        if (u) Model.removeUnit(world, u);
+        break;
+      }
+      default:
+        // Unknown / missing type: no state change (id already marked applied).
+        break;
+    }
+  }
+
+  return { applyCommand: applyCommand };
+})(Model);
+
+/* ==========================================================================
+   MODULE: Persist  -- snapshot / restore / hashState (contract §5). Deps: Model.
+   Canonical snapshot string is JSON.stringify of an object built in the EXACT
+   key order of §5 (covers all 24 checklist fields, incl. rngState, cooldowns,
+   seqCounter, appliedCmds). restore rebuilds via Model.createWorld then
+   overwrites every dynamic field, so it re-snapshots byte-identically and
+   behaves identically going forward. hashState = fnv1a over the snapshot string.
+   ========================================================================== */
+var Persist = (function (Model) {
+  "use strict";
+
+  var toInt = Model.toInt;
+
+  // Config keys in the EXACT order mandated by §1/§5 — do not reorder; the
+  // snapshot string and its hash depend on this insertion order.
+  var CONFIG_KEYS = [
+    "S", "CAP", "MAX_UNITS", "SPAWN_PERIOD", "PROD_BASE", "PROD_VAR",
+    "PROD_MAX", "UNIT_HP", "CARGO_CAP", "TRANSFER", "DAMAGE"
+  ];
+
+  // Coerce an arbitrary value to an array of ints (stations/prod/cooldown).
+  function intArray(a) {
+    var out = [];
+    if (Array.isArray(a)) {
+      for (var i = 0; i < a.length; i++) out.push(toInt(a[i]));
+    }
+    return out;
+  }
+
+  // snapshot(world) -> canonical JSON string (§5). Keys inserted in the
+  // mandated order; JSON.stringify preserves string-key insertion order.
+  function snapshot(world) {
+    if (!world || typeof world !== "object") world = Model.createWorld(0, {});
+    var cfg = world.config || {};
+
+    var outCfg = {};
+    for (var k = 0; k < CONFIG_KEYS.length; k++) {
+      outCfg[CONFIG_KEYS[k]] = toInt(cfg[CONFIG_KEYS[k]]);
+    }
+
+    var units = [];
+    var wu = Array.isArray(world.units) ? world.units : [];
+    for (var u = 0; u < wu.length; u++) {
+      var un = wu[u] || {};
+      units.push([toInt(un.id), toInt(un.pos), toInt(un.hp), toInt(un.cargo)]);
+    }
+
+    var events = [];
+    var we = Array.isArray(world.eventLog) ? world.eventLog : [];
+    for (var e = 0; e < we.length; e++) {
+      var ev = we[e] || {};
+      events.push([toInt(ev.seq), String(ev.type), toInt(ev.amount)]);
+    }
+
+    var applied = [];
+    if (world.appliedCmds && typeof world.appliedCmds.forEach === "function") {
+      world.appliedCmds.forEach(function (id) { applied.push(String(id)); });
+    } else if (Array.isArray(world.appliedCmds)) {
+      for (var ai = 0; ai < world.appliedCmds.length; ai++) {
+        applied.push(String(world.appliedCmds[ai]));
+      }
+    }
+    applied.sort();
+
+    var snap = {
+      v: 1,
+      seed: toInt(world.seed),
+      config: outCfg,
+      tick: toInt(world.tick),
+      rng: toInt(world.rngState),
+      stations: intArray(world.stations),
+      prod: intArray(world.prod),
+      cooldown: intArray(world.cooldown),
+      units: units,
+      nextUnitId: toInt(world.nextUnitId),
+      seq: toInt(world.seqCounter),
+      minted: toInt(world.minted),
+      burned: toInt(world.burned),
+      events: events,
+      applied: applied
+    };
+
+    return JSON.stringify(snap);
+  }
+
+  // restore(str) -> world (§5). Parse; if v!==1 or malformed, rebuild a safe
+  // empty world. Otherwise rebuild via Model.createWorld then OVERWRITE every
+  // dynamic field from the snapshot. Result re-snapshots byte-identically.
+  function restore(str) {
+    var o = null;
+    try { o = JSON.parse(str); } catch (err) { o = null; }
+
+    if (!o || typeof o !== "object" || o.v !== 1) {
+      return Model.createWorld(0, {});
+    }
+
+    var cfgIn = (o.config && typeof o.config === "object") ? o.config : {};
+    var cfg = {};
+    for (var k = 0; k < CONFIG_KEYS.length; k++) {
+      cfg[CONFIG_KEYS[k]] = toInt(cfgIn[CONFIG_KEYS[k]]);
+    }
+
+    var world = Model.createWorld(toInt(o.seed), cfg);
+
+    world.tick = toInt(o.tick);
+    world.rngState = toInt(o.rng);
+    world.stations = intArray(o.stations);
+    world.prod = intArray(o.prod);
+    world.cooldown = intArray(o.cooldown);
+
+    var units = [];
+    if (Array.isArray(o.units)) {
+      for (var u = 0; u < o.units.length; u++) {
+        var t = o.units[u];
+        if (Array.isArray(t)) {
+          units.push({ id: toInt(t[0]), pos: toInt(t[1]), hp: toInt(t[2]), cargo: toInt(t[3]) });
+        }
+      }
+    }
+    world.units = units;
+
+    world.nextUnitId = toInt(o.nextUnitId);
+    world.seqCounter = toInt(o.seq);
+    world.minted = toInt(o.minted);
+    world.burned = toInt(o.burned);
+
+    var events = [];
+    if (Array.isArray(o.events)) {
+      for (var e = 0; e < o.events.length; e++) {
+        var ev = o.events[e];
+        if (Array.isArray(ev)) {
+          events.push({ seq: toInt(ev[0]), type: String(ev[1]), amount: toInt(ev[2]) });
+        }
+      }
+    }
+    world.eventLog = events;
+
+    var appliedArr = [];
+    if (Array.isArray(o.applied)) {
+      for (var ai = 0; ai < o.applied.length; ai++) appliedArr.push(String(o.applied[ai]));
+    }
+    world.appliedCmds = new Set(appliedArr);
+
+    return world;
+  }
+
+  // hashState(world) -> 8-char lowercase hex FNV-1a of the snapshot string (§5).
+  // Uses Math.imul for the 32-bit FNV prime multiply (exact low 32 bits).
+  function fnv1a(s) {
+    var h = 0x811c9dc5 >>> 0;
+    for (var i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0).toString(16).padStart(8, "0");
+  }
+
+  function hashState(world) {
+    return fnv1a(snapshot(world));
+  }
+
+  return {
+    snapshot: snapshot,
+    restore: restore,
+    hashState: hashState
+  };
+})(Model);
+
+/* ==========================================================================
+   BOOTSTRAP  -- compose window.ENGINE verbatim (contract §0). Works in a
+   browser (window) and in any headless host (globalThis).
+   ========================================================================== */
+(function () {
+  "use strict";
+  var root = (typeof window !== "undefined") ? window
+           : (typeof globalThis !== "undefined") ? globalThis
+           : this;
+
+  root.ENGINE = {
+    createWorld:   Model.createWorld,
+    step:          Systems.step,
+    applyCommand:  Commands.applyCommand,
+    snapshot:      Persist.snapshot,
+    restore:       Persist.restore,
+    hashState:     Persist.hashState,
+    drainEventLog: Model.drainEventLog,
+    report:        Model.report
+  };
+
+  // Tiny, side-effect-free status stub (no impact on the engine).
+  if (typeof document !== "undefined") {
+    try {
+      var w = root.ENGINE.createWorld(12345, {});
+      for (var i = 0; i < 30; i++) root.ENGINE.step(w);
+      var r = root.ENGINE.report(w);
+      var panel = document.getElementById("panel");
+      if (panel) {
+        panel.textContent =
+          "window.ENGINE ready.\n\n" +
+          "Self-test (seed 12345, 30 ticks):\n" +
+          "  tick           = " + r.tick + "\n" +
+          "  unitCount      = " + r.unitCount + "\n" +
+          "  totalResources = " + r.totalResources + "\n" +
+          "  minted         = " + r.minted + "\n" +
+          "  burned         = " + r.burned + "\n" +
+          "  conserved      = " + (r.totalResources === r.minted - r.burned) + "\n" +
+          "  hashState      = " + root.ENGINE.hashState(w);
+      }
+    } catch (e) {
+      var p2 = document.getElementById("panel");
+      if (p2) p2.textContent = "engine error: " + (e && e.message);
+    }
+  }
+})();
+</script>
+</body>
+</html>
