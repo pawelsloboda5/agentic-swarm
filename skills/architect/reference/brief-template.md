@@ -23,7 +23,10 @@ until the v0.8 showcase measures it.) Keep the brief self-contained: inline the 
 6. **You MUST PASS these GATES** — for each selected gate, inline its `id`, `tier`, and the **concrete,
    self-contained pass-criteria** the output must satisfy. The worker should treat these as acceptance
    tests and self-verify before returning. Only list gates that have shipped criteria (Phase 0's
-   anti-theater rule); never promise a `future` gate here.
+   anti-theater rule); never promise a `future` gate here. For a **browser-dependent** gate (e.g.
+   `a11y`'s automated runner sweep) inline only the **browserless-capable subset** the worker can actually
+   self-verify when no browser is provisioned (semantics / landmarks / label-association + the
+   "PASS ≠ conformance" caveat) — never tell a worker to pass a check it cannot run.
 7. **Lean-output + integration rules** — size caps, where long evidence lives (URLs), and how to keep the
    output mergeable against the contract.
 
@@ -55,7 +58,7 @@ LEAN-OUTPUT + INTEGRATION RULES
   - <size caps; link don't paste; conform to the contract>
 ```
 
-## Filled example — a "hero section" UI workstream (gates: ui-ux, assets)
+## Filled example — a "hero section" UI workstream (gates: ui-ux, assets, a11y)
 
 ```text
 MISSION
@@ -91,12 +94,19 @@ YOU MUST PASS THESE GATES (self-verify before returning)
       * Every local asset referenced exists and is >0 bytes; SVGs are well-formed XML; a favicon is
         present for HTML; no placeholder hosts / lorem / empty src / TODO. Remote/CDN refs and
         "AI-filler" judgments are advisory only.
+  - GATE a11y [tier: mixed (scoped runner + semantics/keyboard critic)]:
+      * Semantic structure: one <main>, ordered headings, the CTA is a real <button>/<a> with a
+        programmatic label; valid ARIA roles/states (no redundant/invalid roles).
+      * Keyboard: every interactive control is reachable and operable by keyboard in a sensible order.
+      * (contrast / alt text / accessible-name presence / tap-target are covered by ui-ux above -> not
+        repeated here.) If a browser + axe/pa11y is provisioned, the scoped automated sweep must report
+        gating_violations == 0. PASS != conformance (automation covers ~30-50% of WCAG SC).
 
 LEAN-OUTPUT + INTEGRATION RULES
   - Return <=2 files + a 3-line summary; link assets by path, don't paste them.
   - Conform to the tokens/interface above so the section merges into the shared layout cleanly.
 ```
 
-> The inlined gate criteria above are the **same** criteria the Phase-3 gate runner (v0.7) will check in a
+> The inlined gate criteria above are the **same** criteria the Phase-3 gate runner (v0.7+) will check in a
 > separate context — forward-coupling means the worker and the verifier share one bar. Keep them in sync
 > with the gate library as it ships.

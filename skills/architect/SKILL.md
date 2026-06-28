@@ -84,8 +84,9 @@ Do this in the **orchestrator**, before any fan-out. Keep it a bounded, read-onl
    `ui-ux`, `art/assets`, `gameplay`, `audio`; a landing page → `hero`, `sections`, `assets`, `copy`.
 4. **Select the skill-set + GATE-set per workstream** using
    [`reference/usecase-gate-map.md`](reference/usecase-gate-map.md). **Anti-theater rule (load-bearing):**
-   only select a gate that has **shipped, checkable criteria** to forward-couple into the brief. The MVP
-   gates are `{ tests, assets, ui-ux }` (with cheap a11y folded into `ui-ux`); anything the map marks
+   only select a gate that has **shipped, checkable criteria** to forward-couple into the brief. The active
+   gates are `{ tests, assets, ui-ux, a11y }` (cheap a11y stays owned by `ui-ux`; the standalone `a11y`
+   gate adds only the scoped runner sweep + keyboard/semantics critic on top); anything the map marks
    `future / not-yet-built` may be **surfaced in the PLAN** but must **not** be promised in a brief —
    never tell a worker it "MUST PASS" a gate that has no criteria and no runner.
 5. **Detect optional enhancer skills** (zero-dep, portability). A skill is present if its on-disk
@@ -145,11 +146,13 @@ confidence. On fail, re-brief the workstream with the **exact unmet criteria** a
 then honestly `flag` the remainder; missing backing skill/runner degrades *loudly* (`degraded: true` +
 lowered confidence), never silently.
 
-> **Starter gate library (v0.7.0):** [`gates/tests.md`](gates/tests.md) (mixed),
+> **Starter gate library (v0.7.1):** [`gates/tests.md`](gates/tests.md) (mixed),
 > [`gates/assets.md`](gates/assets.md) (mixed), [`gates/ui-ux.md`](gates/ui-ux.md) (mixed; uses the
-> bundled [`gates/lib/wcag_contrast.py`](gates/lib/wcag_contrast.py) WCAG util) — each a self-contained
-> 7-key gate file. Cheap a11y is folded into `ui-ux`; the **full standalone `a11y`** gate (axe/pa11y/
-> Lighthouse) is deferred to **v0.7.x**, and the **measured showcase** that proves the uplift to **v0.8.0**.
+> bundled [`gates/lib/wcag_contrast.py`](gates/lib/wcag_contrast.py) WCAG util), and
+> [`gates/a11y.md`](gates/a11y.md) (mixed — a scoped axe/pa11y/Lighthouse runner via
+> [`gates/lib/a11y_report.py`](gates/lib/a11y_report.py) + a keyboard/semantics critic; cheap a11y stays
+> `ui-ux`-owned, "PASS ≠ conformance") — each a self-contained 7-key gate file. The **measured showcase**
+> that proves the uplift lands in **v0.8.0**.
 
 ---
 
