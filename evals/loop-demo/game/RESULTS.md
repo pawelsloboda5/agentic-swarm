@@ -24,11 +24,20 @@
 | fair control (single-shot, rubric in-prompt) | `baseline-fair/index.html` | yes | no | 1349 |
 | **harness arm** (architect harness) | `game/index.html` | yes | **yes (≤2)** | 3071 |
 
-## PRIMARY — runtime integrity (held-out; in NO brief)
+## PRIMARY — runtime integrity (held out from the gate briefs + the fair control's prompt)
 
 Which primary ran: **browser** (Playwright provisioned). Each game served over http, loaded headless,
 played ~15 s; recorded uncaught/console errors + a non-blank canvas render. PASS = 0 uncaught errors AND
 non-blank render.
+
+> **Precision on "held out":** this metric is absent from every gate brief and from the fair control's
+> prompt — but the harness's *own* internal briefs (`harness-arm.workflow.js`) explicitly asked the harness
+> to "feature-detect WebGL", "delta-clamp the loop", "dispose dead objects", and "run without obvious
+> error". So the harness was *coached on the primary and the fair control was not*, which makes the null
+> **more conservative against the harness**, never an overclaim.
+>
+> **Environment (for the one live metric):** Playwright `1.61.1`, `@axe-core/playwright` `4.12.1`, Node 24,
+> headless Chromium — pinned in `scoring/package.json` + lockfile.
 
 | Arm | uncaught errors | console errors | non-blank render | axe (a11y rules) | **PRIMARY** |
 |---|---|---|---|---|---|
@@ -42,11 +51,20 @@ non-blank render.
 
 > **PRIMARY OUTCOME: NULL — no measured difference.** All four games actually run (0 uncaught errors,
 > non-blank render). The harness arm did **not** beat the fair single-shot control on the held-out primary.
+> **Read this honestly:** the primary discriminated **zero** arms — even both *rubric-blind* committed
+> baselines PASS — so this null is an **absence of signal on a coarse instrument** ("does it boot + render
+> without errors"), **not** positive evidence that the arms are equivalent. A discriminating held-out
+> primary is the #1 thing a stronger future showcase needs.
 
 ## SECONDARY — gate scorecards (exploratory; favor rubric-aware arms by construction)
 
-Deterministic (re-run `python scoring/aggregate.py` → bit-identical static numbers). `uiux_states` =
-**H**over / **F**ocus-visible / **B**reakpoint / **S**pacing-scale present.
+Deterministic **static** scorers: re-run `python scoring/aggregate.py --static-only` (writes
+`scorecards_static.json`, so it never clobbers the committed live capture) or `score_static.py <arm>`
+per-arm → **bit-identical** static numbers. The a11y/runtime row is a **live one-shot Playwright capture**
+(non-deterministic; pixvar varies run-to-run). `uiux_states` = **H**over / **F**ocus-visible /
+**B**reakpoint / **S**pacing-scale present. `assets` and `feature-completeness` came out **degenerate**
+(identical across all four arms) — kept here for transparency, but per the pre-registration's drop-rule
+they carry no discriminating signal.
 
 | Metric (instrument) | baseline OFF | baseline ON | fair control | harness | Det.? |
 |---|---|---|---|---|---|
@@ -61,12 +79,15 @@ Deterministic (re-run `python scoring/aggregate.py` → bit-identical static num
 **What the secondaries actually show (read carefully):**
 - The two **rubric-aware** arms (`fair_control`, `harness`) both add **`:focus-visible`**, a **spacing
   scale**, and **0 a11y-gating violations** — exactly the gate criteria — which **both rubric-blind
-  committed baselines lack** (`H·B·`, 1 a11y violation each). So *knowing the rubric* clearly moves the
-  gated metrics.
-- But **harness vs `fair_control` are essentially tied**: identical `HFBS`, identical 0 a11y-gating,
-  identical 4/4 robustness and 7/7 features; the harness even scores **lower** on the (under-counting)
-  contrast heuristic (6/6 vs 9/9). The harness produced **2.3× more code** (3071 vs 1349 lines) with **no
-  measured quality advantage** over the single-shot control.
+  committed baselines lack** (`H·B·`, 1 a11y violation each). So *knowing the rubric* appears to move the
+  gated metrics — though this committed-vs-new comparison **also carries the build-method confound**
+  (subagent orchestration vs human `/loop`), so it is suggestive, not clean. The *clean* rubric isolation
+  is harness-vs-fair (both rubric-aware), and there they are tied.
+- **harness vs `fair_control` are essentially tied** (the one clean comparison): identical `HFBS`,
+  identical 0 a11y-gating, identical 4/4 robustness and 7/7 features; the harness's contrast heuristic
+  detects **fewer pairs** (6 vs 9 — **both at 100% pass**, an artifact of the under-counting heuristic, not
+  worse contrast). The harness produced **2.3× more code** (3071 vs 1349 lines) with **no measured quality
+  advantage** over the single-shot control.
 
 ## AUXILIARY — playability critic (separate-context, non-deterministic)
 
@@ -120,6 +141,7 @@ uplift" — should make only the claim the data supports, or run a stronger show
 | `game/index.html` | the harness-arm build (3071 ln) |
 | `baseline-fair/index.html` | the fair single-shot control (1349 ln) |
 | `../baseline/index.html`, `../agentic-swarm/index.html` | the committed pre-harness baselines |
-| `scoring/score_static.py`, `scoring/score_runtime.mjs`, `scoring/aggregate.py` | the one shared instrument |
-| `scoring/scorecards.json` | the raw per-arm scores |
-| `harness-arm.workflow.js` | the architect-harness build script (reproducible) |
+| `scoring/score_static.py`, `scoring/score_runtime.mjs`, `scoring/aggregate.py` | the one shared instrument (`--static-only` for the deterministic check) |
+| `scoring/scorecards.json` | the raw per-arm scores (static = deterministic; runtime = live one-shot) |
+| `harness-arm.workflow.js` | the architect-harness build script — committed + re-runnable (the build is a real multi-agent run, **not** bit-identical output) |
+| `fair-control.prompt.md` | the exact single-shot prompt for the fair control (build provenance) |

@@ -43,14 +43,19 @@ def a11y_gating(axe_ids):
 
 
 def main():
+    # --static-only: run ONLY the deterministic static scorer, do NOT launch Playwright, and write to a
+    # SEPARATE file so the documented determinism check can never clobber the committed scorecards.json
+    # (the committed runtime fields are a live one-shot capture and would otherwise be overwritten).
+    static_only = "--static-only" in sys.argv
     cards = {}
     for name, path in ARMS:
         static = run_json([sys.executable, os.path.join(HERE, "score_static.py"), path])
-        runtime = run_json(["node", os.path.join(HERE, "score_runtime.mjs"), path])
+        runtime = {} if static_only else run_json(["node", os.path.join(HERE, "score_runtime.mjs"), path])
         gating, advisory = a11y_gating(runtime.get("axe_violation_ids"))
         cards[name] = {"path": os.path.relpath(path, REPO).replace("\\", "/"), "static": static, "runtime": runtime,
                        "a11y_gating_violations": gating, "a11y_advisory_violations": advisory}
-    with open(os.path.join(HERE, "scorecards.json"), "w", encoding="utf-8") as fh:
+    out_name = "scorecards_static.json" if static_only else "scorecards.json"
+    with open(os.path.join(HERE, out_name), "w", encoding="utf-8") as fh:
         json.dump(cards, fh, indent=2)
 
     # Compact table
@@ -61,7 +66,8 @@ def main():
         con = s.get("contrast", {})
         ux = s.get("uiux_static", {})
         asset = s.get("assets", {})
-        primary = "PASS" if (r.get("loaded") and r.get("uncaught_errors") == 0 and r.get("render_nonblank")) else "FAIL"
+        primary = ("n/a-static" if not r else
+                   "PASS" if (r.get("loaded") and r.get("uncaught_errors") == 0 and r.get("render_nonblank")) else "FAIL")
         row = {
             "lines": s.get("meta", {}).get("lines", "?"),
             "contrast": "%s/%s" % (con.get("pairs_passing", "?"), con.get("pairs_checked", "?")),

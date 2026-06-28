@@ -34,8 +34,9 @@ Reported as measured, not inflated — see [`evals/loop-demo/game/RESULTS.md`](e
   non-blank render — the harness arm did **not** beat the fair control on the pre-registered primary.
 - **SECONDARY (in-brief, favors rubric-aware arms by construction):** both rubric-aware arms add
   `:focus-visible` + a spacing scale + **0 a11y-gating violations** the rubric-**blind** committed
-  baselines lack — but **harness vs fair control are essentially tied** (the harness even scores lower on
-  the contrast heuristic, with 2.3× the code).
+  baselines lack — but **harness vs fair control are essentially tied** (the harness's contrast heuristic
+  merely *detects fewer pairs* — both 100% pass — with 2.3× the code). The held-out primary discriminated
+  **zero** arms (all four boot + render clean), so the null is an absence-of-signal on a coarse instrument.
 - **Implication:** the evidence supports the narrow claim (gate-aware briefing > no rubric) but **not** a
   decomposition/orchestration uplift. The **v1.0** gate ("ship only after the showcase measures the
   uplift") is therefore **not met by this n=1 showcase** — v1.0 should narrow its claim to what the data
