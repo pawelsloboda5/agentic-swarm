@@ -93,13 +93,15 @@ machine-checkable criterion where the use-case allows; (b) uses a **separate-con
 **reports confidence** so graceful degradation (a missing backing skill / browser) never becomes *silent*
 quality degradation. This is the repo's "measured, not asserted" ethos enforced at the gate layer.
 
-## Starter library (v0.7.0)
+## Starter library (v0.7.1)
 
 | Gate | File | Tier | Objective floor (zero-dep) |
 |---|---|---|---|
 | tests | [`../gates/tests.md`](../gates/tests.md) | mixed | floor: tests exit 0 AND >0 collected; typecheck/build; diff-coverage. Critic rung: a separate-context check that the suite *exercises* the changed code. |
 | assets | [`../gates/assets.md`](../gates/assets.md) | mixed | placeholder sweep + stdlib stat + SVG well-formed + favicon; filler = advisory. |
 | ui-ux | [`../gates/ui-ux.md`](../gates/ui-ux.md) | mixed | WCAG contrast (`gates/lib/wcag_contrast.py`) + spacing + hover/focus + breakpoints + folded a11y; screenshot critic if a browser exists. |
+| a11y | [`../gates/a11y.md`](../gates/a11y.md) | mixed | scoped axe/pa11y/Lighthouse sweep (`gates/lib/a11y_report.py`, a11y-distinctive rules only — ui-ux-owned contrast/alt/name/tap-target advisory) + static-semantics/keyboard critic; no runner => flag, never a borrowed pass. |
 
-Full standalone **`a11y`** (axe/pa11y/Lighthouse runner + keyboard/semantics critic) is **deferred to
-v0.7.x**; its cheap checks are folded into `ui-ux` for now.
+Standalone **`a11y`** shipped in **v0.7.1**: a scoped runner sweep (the cheap contrast/alt/name/tap-target
+checks stay owned by `ui-ux`) + a keyboard/semantics critic, with a prominent "PASS ≠ conformance" caveat.
+The runner sweep is a browser-dependent optional enhancer (missing runner ⇒ skip-with-note per step 7).
