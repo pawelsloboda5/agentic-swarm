@@ -1,27 +1,32 @@
 # Gate: `tests`
 
-Run via [`../reference/gate-runner.md`](../reference/gate-runner.md). Objective tier: a green, meaningful
-test suite — not "tests exist."
+Run via [`../reference/gate-runner.md`](../reference/gate-runner.md). Mixed tier: an objective floor that
+**gates** (a green suite that actually ran something) plus a separate-context **critic rung** that checks
+the suite *exercises the change* — a green, meaningful test suite, not "tests exist."
 
 ## Definition
 
 - **id:** `tests`
 - **applies_when:** the workstream produces runnable code (a detectable test runner exists, or changed
   source files have a natural test home).
-- **tier:** `objective`
-- **criteria:** (all bundled, zero-dep)
-  1. **Runner detected** from manifests — `package.json` scripts.test / `pyproject.toml` / `pytest.ini` /
-     `Cargo.toml` / `go.mod` / `Makefile` test target.
-  2. **Suite passes AND collects > 0 tests** — exit 0 *and* a non-zero collected/ran count. **Zero
-     collected tests = FAIL** (the #1 test theater: a green run that ran nothing).
-  3. **Typecheck / build is clean** where the stack has one (`tsc --noEmit`, `mypy` if configured,
-     `cargo build`, `go build`).
-  4. **Diff-coverage presence** — every changed source file has at least one associated test (by
-     convention/path or by appearing in coverage). Coverage **percentage** is asserted only if a baseline
-     exists (don't invent a number).
+- **tier:** `mixed` (objective floor + critic rung)
+- **criteria:**
+  - **Objective floor (gates; bundled, zero-dep):**
+    1. **Runner detected** from manifests — `package.json` scripts.test / `pyproject.toml` / `pytest.ini` /
+       `Cargo.toml` / `go.mod` / `Makefile` test target.
+    2. **Suite passes AND collects > 0 tests** — exit 0 *and* a non-zero collected/ran count. **Zero
+       collected tests = FAIL** (the #1 test theater: a green run that ran nothing).
+    3. **Typecheck / build is clean** where the stack has one (`tsc --noEmit`, `mypy` if configured,
+       `cargo build`, `go build`).
+    4. **Diff-coverage presence** — every changed source file has at least one associated test (by
+       convention/path or by appearing in coverage). Coverage **percentage** is asserted only if a
+       baseline exists (don't invent a number).
+  - **Critic rung (separate context — the `verifier`, see below):** does the suite *exercise the changed
+    code* (the new/edited tests reference the new behavior), or is it green-but-irrelevant?
 - **verifier:** a separate-context check that the suite actually **exercises the changed code** (the new
   tests reference the new behavior), not merely that the command exits 0. Binary per-criterion; cite the
-  test names that cover each changed unit.
+  test names that cover each changed unit. (This is the critic rung the runner executes for the `mixed`
+  tier — never dead.)
 - **confidence:** high when the runner is detected and tests are collected and tied to the diff; lower
   (and `degraded: true`) if no runner is detectable (then this gate can only `flag`, never silently pass).
 - **backing_skill:** `gsd-add-tests` (auto-generate missing tests for uncovered changes),

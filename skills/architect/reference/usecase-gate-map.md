@@ -19,7 +19,7 @@ Default GATE-set per use-case. The orchestrator may extend this from research, b
 
 | Gate | Status | Notes |
 |---|---|---|
-| **tests** | **active (runner shipped)** | objective: runner detected, exit 0 AND >0 tests collected, typecheck/build, diff-coverage presence. |
+| **tests** | **active (runner shipped)** | mixed: floor (runner detected, exit 0 AND >0 collected, typecheck/build, diff-coverage presence) + critic rung (the suite exercises the change). |
 | **assets** | **active (runner shipped)** | mixed: local assets exist & >0 bytes, SVG well-formed, no placeholders; remote refs + "AI-filler" advisory. |
 | **ui-ux** | **active (runner shipped)** | mixed: browser-free objective floor (WCAG contrast, spacing, hover+focus-visible, breakpoints, **folded cheap a11y**: alt/accessible-name/tap-target) + screenshot critic if a browser is available. |
 | **a11y** (full) | **future / not-yet-built** | cheap a11y checks are folded into `ui-ux` for the MVP; the standalone axe/pa11y/Lighthouse runner + keyboard/semantics critic ships **v0.7.x**. |
@@ -34,9 +34,9 @@ Default GATE-set per use-case. The orchestrator may extend this from research, b
 
 | Use-case | Default gate-set | Active in MVP (forward-coupled now) |
 |---|---|---|
-| Web UI / game / frontend | `ui-ux`, `assets`, `a11y`, `tests` | `ui-ux`, `assets`, `tests` (a11y folded into `ui-ux`) |
-| Landing page | `ui-ux`, `assets`, `a11y`, `perf` | `ui-ux`, `assets` (a11y folded into `ui-ux`) |
-| Dashboard | `ui-ux`, `data-viz`, `a11y`, `tests` | `ui-ux`, `tests` (a11y folded into `ui-ux`) |
+| Web UI / game / frontend | `ui-ux`, `assets`, `a11y`, `tests` | `ui-ux`, `assets`, `tests` (cheap a11y folded into `ui-ux`) |
+| Landing page | `ui-ux`, `assets`, `a11y`, `perf` | `ui-ux`, `assets` (cheap a11y folded into `ui-ux`) |
+| Dashboard | `ui-ux`, `data-viz`, `a11y`, `tests` | `ui-ux`, `tests` (cheap a11y folded into `ui-ux`) |
 | API / backend / library | `api-contract`, `tests`, `security`, `docs` | `tests` |
 | Data / ML pipeline | `tests`, `api-contract`, `docs` | `tests` |
 | CLI | `tests`, `docs` | `tests` |

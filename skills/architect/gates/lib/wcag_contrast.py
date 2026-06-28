@@ -3,7 +3,7 @@
 
 Pure Python stdlib. Importable (ratio/passes/luminance/parse_hex) AND runnable as a machine check:
 
-    python wcag_contrast.py <fg> <bg> [normal|large|ui]
+    python gates/lib/wcag_contrast.py <fg> <bg> [normal|large|ui]   # (from the skill root)
     # prints {"ratio": .., "pass": bool, "threshold": ..}; exit 0 if pass, 1 if fail, 2 on bad input.
 
 The formula is the fixed W3C standard (no library, nothing to version):

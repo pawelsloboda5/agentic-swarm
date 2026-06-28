@@ -10,9 +10,11 @@ Run via [`../reference/gate-runner.md`](../reference/gate-runner.md). Mixed tier
 - **tier:** `mixed` (objective floor + advisory)
 - **criteria:**
   - **Objective floor (gates):**
-    1. **No placeholder markers** — ripgrep sweep (scoped to the workstream's files, with an allowlist for
-       legitimate uses) for placeholder hosts (`example.com`, `placehold`, `via.placeholder`,
-       `lorem`/`ipsum`), empty `src=""` / `href=""`, and `TODO`/`FIXME` in asset positions.
+    1. **No placeholder markers** — a content sweep (scoped to the workstream's files, with an allowlist
+       for legitimate uses) for placeholder hosts (`example.com`, `placehold`, `via.placeholder`,
+       `lorem`/`ipsum`), empty `src=""` / `href=""`, and `TODO`/`FIXME` in asset positions. Use the
+       built-in rg-backed Grep tool, or a stdlib `re` walk if `rg` is not on PATH — **no external binary
+       is required** for the floor to function.
     2. **Local assets exist & are non-empty** — stdlib `os.stat`: every *local* asset path referenced
        resolves to a file that exists and is **> 0 bytes**.
     3. **SVGs are well-formed XML** — parse each `.svg` with stdlib `xml.etree.ElementTree`; a parse error

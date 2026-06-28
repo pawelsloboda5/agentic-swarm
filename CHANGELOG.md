@@ -32,7 +32,9 @@ into briefs — a tiered, objective-anchored gate library that reports confidenc
 - **Tests** — `tests/test_wcag_contrast.py` (the util) and `tests/test_gate_library.py` (each gate
   declares all 7 keys with a valid tier and id==filename; the runner encodes the invariant + verdict
   schema + N=2 bound + graceful degradation; the map can't advertise an "active" gate the library
-  doesn't ship). Phase 3 of the architect skill is wired to the runner + library.
+  doesn't ship).
+- **Phase 3 wired** to the runner + library — the architect now runs each output through its gates via
+  `reference/gate-runner.md` and the shipped `gates/<id>.md` files.
 
 > Full standalone **`a11y`** (axe/pa11y/Lighthouse runner + keyboard/semantics critic) is deferred to
 > **v0.7.x**; the **measured Three.js showcase** that proves the quality uplift is **v0.8.0**; **v1.0**

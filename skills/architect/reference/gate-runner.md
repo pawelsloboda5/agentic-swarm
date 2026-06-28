@@ -11,7 +11,9 @@ critic; it never requires an external skill or binary to function.
 gate := {
   id            // 'tests' | 'assets' | 'ui-ux' | ...   (matches the gates/<id>.md filename)
   applies_when  // when this gate is relevant (use-case / output triggers)
-  tier          // 'objective' | 'critic' | 'advisory'   ('mixed' = objective floor + critic rung)
+  tier          // 'objective' | 'critic' | 'advisory'
+                //   ('mixed' = an objective floor that GATES + a non-gating rung: a separate-context
+                //    critic rung (e.g. ui-ux, tests) AND/OR an advisory layer (e.g. assets))
   criteria[]    // CONCRETE, self-contained pass conditions (shipped IN the gate file)
   verifier      // a separate-context adversarial-verify prompt that checks the criteria
   confidence    // how trustworthy this verdict is — REPORTED, never a silent pass
@@ -47,13 +49,19 @@ pass MUST cap at ≤ 0.6 — graceful degradation is never allowed to self-repor
 3. **RUN BY TIER:**
    - **`objective`** — run the gate's bundled machine command(s); status off exit code / threshold.
      (e.g. `ui-ux` contrast → `python gates/lib/wcag_contrast.py <fg> <bg> <size>`; `tests` → the
-     project's own test command; `assets` → ripgrep + stdlib stat.)
+     project's own test command; `assets` → a content sweep via the built-in rg-backed Grep tool — or a
+     stdlib `re` walk if `rg` is absent — + stdlib stat.)
    - **`critic`** — spawn a **separate-context** judge (a fresh subagent that never saw the producing
      context) using the gate's `verifier`: **binary per-criterion booleans + one grounded pass with
      citations.** The producer never grades itself; **no re-score loop.**
    - **`advisory`** — surface only; never a hard pass/fail.
-   - **`mixed`** = run the objective floor (gates) **then** the critic rung (high confidence if a browser
-     is available, else the holistic checks **downgrade to advisory** with reported confidence).
+   - **`mixed`** = run the objective floor (which **gates**) **then** its non-gating rung — a
+     separate-context **critic rung** (e.g. `ui-ux`'s screenshot critic, `tests`'s exercise-check
+     verifier) **and/or an advisory layer** (e.g. `assets`'s AI-filler check). The floor decides
+     pass/flag; the rung informs + adjusts confidence. A critic rung runs at high confidence if a
+     browser/runner is available, else its holistic checks **downgrade to advisory** with reported
+     confidence. When a `mixed` gate declares a `verifier`, the runner **must** execute it as that
+     critic rung (a `verifier` is never dead).
    - A present `backing_skill` is invoked (by its `plugin:skill` name) as an **enhancer over** — never
      instead of — the bundled path; set `skill_used: true`.
 4. **EMIT** exactly one verdict per applicable gate (verdict count == number of `applies_when`-true gates).
@@ -83,7 +91,7 @@ quality degradation. This is the repo's "measured, not asserted" ethos enforced 
 
 | Gate | File | Tier | Objective floor (zero-dep) |
 |---|---|---|---|
-| tests | [`../gates/tests.md`](../gates/tests.md) | objective | run the project's tests: exit 0 AND >0 collected; typecheck/build; diff-coverage. |
+| tests | [`../gates/tests.md`](../gates/tests.md) | mixed | floor: tests exit 0 AND >0 collected; typecheck/build; diff-coverage. Critic rung: a separate-context check that the suite *exercises* the changed code. |
 | assets | [`../gates/assets.md`](../gates/assets.md) | mixed | placeholder sweep + stdlib stat + SVG well-formed + favicon; filler = advisory. |
 | ui-ux | [`../gates/ui-ux.md`](../gates/ui-ux.md) | mixed | WCAG contrast (`gates/lib/wcag_contrast.py`) + spacing + hover/focus + breakpoints + folded a11y; screenshot critic if a browser exists. |
 
