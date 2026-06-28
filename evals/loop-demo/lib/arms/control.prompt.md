@@ -3,7 +3,9 @@
 > The fair single-shot control: one general-purpose worker, one shot, no decomposition, no gated
 > integration, no repair — given the **identical** frozen `SPEC.md` both arms receive. Committed for
 > build provenance. Built in an isolated sandbox (only `SPEC.md` reachable; the scorer is NOT present).
-> Output path varies per build (`arms/control-1/`, `-2`, `-3`).
+> Output path varies per build (`arms/control-1/`, `-2`, `-3`). **Effort:** run at the session default
+> (no per-call override); the harness sub-agents ran at `effort: high` — the asymmetry is conservative
+> against the harness (RESULTS.md confound #7).
 
 ---
 

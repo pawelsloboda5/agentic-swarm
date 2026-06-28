@@ -51,7 +51,10 @@ Re-runnable: `cd scoring && python aggregate.py control-1 ../arms/control-1 … 
 
 Identical completeness on every axis; the harness used **~5.4× the tokens** and ~**2×** the wall-clock,
 and produced **~24% more code** (658 vs 529 LOC mean) — the same qualitative "more resources, no measured
-quality edge" pattern as v0.8.0/v0.9.0.
+quality edge" pattern as v0.8.0/v0.9.0. (The token/agent/wall-clock figures are **operator-recorded** from
+the build-run telemetry — a pre-declared SECONDARY/exploratory measure, PREREGISTRATION §9 — **not**
+independently reproducible from committed artifacts; LOC **is** reproducible via `wc -l`. The cost runs
+**conservative against the harness**: it is a cost, and cannot inflate a non-existent win.)
 
 ## What the harness arms uniquely tested (and the new sub-finding)
 
@@ -109,11 +112,17 @@ expensive run, and a real SPEC bug was caught + fixed before the freeze.
 ## Confounds & integrity notes (named, not hidden)
 
 1. **Anti-leak audit — clean.** Every arm was built in an isolated sandbox with **no `scoring/`
-   reachable**; the grep of the entire harness build journal is clean — **0** occurrences of the
-   scorer-specific tokens (`score-one`, `vectors.json`, `scoring/`, the corpus seed `20260628`, held-out
-   base32 outputs `cpnmuog`/`cpnmuoj1`, `reference-broken`). (The metric is also largely property-based,
-   so even scorer access could not *fabricate* a passing score without actually implementing the
-   functions.)
+   reachable** (the live harness sandbox was verified filesystem-level: its `SPEC.md` sha256 matches the
+   frozen `f97e4ddf…` and it contains no `scoring/` dir). The grep of the entire harness build journal
+   (every agent brief + the emitted contracts + results) is clean — **0** occurrences of any held-out
+   **answer** token: `score-one`, the corpus seed `20260628`, the held-out base32 outputs
+   `cpnmuog`/`cpnmuoj1`, `reference-broken`. The same tokens are **0** across the committed agent-facing
+   artifacts too (`arms/`, `arms/control.prompt.md`, `SPEC.md`). The strings `scoring/` and `vectors.json`
+   **do** appear — but **only** inside the orchestrator's own isolation-WARNING comment
+   (`lib-harness.workflow.js` L11–12: "ROOT must be an ISOLATED copy … NO scoring/, no vectors.json"),
+   i.e. the *opposite* of a leak; they appear in **no** agent brief, emitted contract, control prompt, or
+   built arm. (The metric is also largely property-based, so even scorer access could not *fabricate* a
+   passing score without actually implementing the functions.)
 2. **Enumeration is the disclosed reason for the null.** Both arms received an explicit 40-export
    checklist — which is exactly why the OMISSION axis ceilings (a checklist defeats silent drops). This is
    pre-registered, not a post-hoc excuse; the honest reading is that the harness's *completeness*
@@ -130,6 +139,10 @@ expensive run, and a real SPEC bug was caught + fixed before the freeze.
    conditional on a harness loss; since the harness tied rather than lost, it was not needed.)
 6. **One pre-freeze SPEC fix** (`grayDecode` prose) — disclosed in PILOT.md; the vectors were already
    correct and did not change.
+7. **Per-agent effort asymmetry** — the harness sub-agents ran at `effort: high`
+   (`lib-harness.workflow.js`); the single-shot control prompt pinned no effort (default). This is
+   **conservative against the harness** (it had the richer per-call config and still only tied at ~5.4×
+   cost) and cannot inflate a non-existent win. Disclosed here for a clean match.
 
 ## Honest implication for v1.0
 
