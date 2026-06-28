@@ -12,3 +12,9 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SCRIPTS = os.path.join(_REPO_ROOT, "skills", "as-new-project", "scripts")
 if _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
+
+# The gate helper scripts (WCAG contrast util, etc.) live under the architect skill's gates/lib/
+# and are run directly / imported as modules under test, so put that dir on sys.path too.
+_GATES_LIB = os.path.join(_REPO_ROOT, "skills", "architect", "gates", "lib")
+if _GATES_LIB not in sys.path:
+    sys.path.insert(0, _GATES_LIB)
