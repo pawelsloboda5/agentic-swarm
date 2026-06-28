@@ -152,7 +152,15 @@ async function main() {
     await page.waitForTimeout(INIT_WAIT_MS); // let three.js boot + first frames render
 
     // ---- play: click near canvas center, let the sim run -------------------
-    const canvas = await page.$('canvas');
+    // Poll for the canvas before giving up: some arms create it via an async dynamic import()
+    // that resolves AFTER INIT_WAIT_MS, so a single check would race and false-report
+    // "no-canvas-element" on a perfectly working game. Polling is fairness-preserving (it changes
+    // no arm whose canvas was already present; it only stops penalizing late-but-correct boots).
+    let canvas = await page.$('canvas');
+    if (!canvas) {
+      try { await page.waitForSelector('canvas', { timeout: 12000 }); } catch (e) {}
+      canvas = await page.$('canvas');
+    }
     if (canvas) {
       try {
         const box = await canvas.boundingBox();

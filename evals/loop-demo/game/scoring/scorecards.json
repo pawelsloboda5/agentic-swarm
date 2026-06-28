@@ -1,0 +1,412 @@
+{
+  "baseline_off": {
+    "path": "evals/loop-demo/baseline/index.html",
+    "static": {
+      "meta": {
+        "lines": 1207,
+        "bytes": 54717
+      },
+      "contrast": {
+        "pairs_checked": 2,
+        "pairs_passing": 1,
+        "details": [
+          {
+            "fg": "#fff",
+            "bg": "rgba(255,90,90,.22)",
+            "ratio": 3.06,
+            "pass": false
+          },
+          {
+            "fg": "var(--muted)",
+            "bg": "var(--panel)",
+            "ratio": 8.59,
+            "pass": true
+          }
+        ]
+      },
+      "uiux_static": {
+        "has_hover": true,
+        "has_focus_visible": false,
+        "has_spacing_scale": false,
+        "has_breakpoint": true
+      },
+      "assets": {
+        "placeholder_hits": 0,
+        "external_asset_refs": 0,
+        "favicon_present": false,
+        "procedural_only": true
+      },
+      "features": {
+        "enemies_spawn": true,
+        "path_follow": true,
+        "tower_placement": true,
+        "shooting": true,
+        "wave_escalation": true,
+        "hud_score_lives_gold": true,
+        "tower_buy_upgrade": true,
+        "features_count": 7
+      },
+      "runtime_static_robustness": {
+        "webgl_guard": {
+          "value": false,
+          "why": "no WebGL feature-detect, context-loss handler, or fallback message"
+        },
+        "disposes_objects": {
+          "value": true,
+          "why": "calls .dispose()/scene.remove() on objects"
+        },
+        "delta_clamped_loop": {
+          "value": true,
+          "why": "frame delta clamped via Math.min cap"
+        },
+        "init_wrapped": {
+          "value": false,
+          "why": "init not wrapped in try/catch -- a throw fails silently"
+        },
+        "score": 2
+      }
+    },
+    "runtime": {
+      "loaded": true,
+      "uncaught_errors": 0,
+      "console_errors": 0,
+      "render_nonblank": true,
+      "axe_violations_total": 1,
+      "axe_violation_ids": [
+        "meta-viewport"
+      ],
+      "notes": "pixvar=799.6,range=222"
+    },
+    "a11y_gating_violations": 1,
+    "a11y_advisory_violations": 0
+  },
+  "baseline_on": {
+    "path": "evals/loop-demo/agentic-swarm/index.html",
+    "static": {
+      "meta": {
+        "lines": 1476,
+        "bytes": 57638
+      },
+      "contrast": {
+        "pairs_checked": 6,
+        "pairs_passing": 6,
+        "details": [
+          {
+            "fg": "var(--txt)",
+            "bg": "var(--bg)",
+            "ratio": 16.22,
+            "pass": true
+          },
+          {
+            "fg": "var(--muted)",
+            "bg": "rgba(0,0,0,0.2)",
+            "ratio": 9.68,
+            "pass": true
+          },
+          {
+            "fg": "var(--txt)",
+            "bg": "var(--glass-2)",
+            "ratio": 12.88,
+            "pass": true
+          },
+          {
+            "fg": "var(--accent)",
+            "bg": "rgba(0,0,0,0.45)",
+            "ratio": 13.67,
+            "pass": true
+          },
+          {
+            "fg": "#dbe5ff",
+            "bg": "rgba(0,0,0,0.22)",
+            "ratio": 16.66,
+            "pass": true
+          },
+          {
+            "fg": "#ff9aa2",
+            "bg": "#0b1026",
+            "ratio": 9.31,
+            "pass": true
+          }
+        ]
+      },
+      "uiux_static": {
+        "has_hover": true,
+        "has_focus_visible": false,
+        "has_spacing_scale": false,
+        "has_breakpoint": true
+      },
+      "assets": {
+        "placeholder_hits": 0,
+        "external_asset_refs": 0,
+        "favicon_present": false,
+        "procedural_only": true
+      },
+      "features": {
+        "enemies_spawn": true,
+        "path_follow": true,
+        "tower_placement": true,
+        "shooting": true,
+        "wave_escalation": true,
+        "hud_score_lives_gold": true,
+        "tower_buy_upgrade": true,
+        "features_count": 7
+      },
+      "runtime_static_robustness": {
+        "webgl_guard": {
+          "value": true,
+          "why": "graceful load/render failure message present"
+        },
+        "disposes_objects": {
+          "value": true,
+          "why": "calls .dispose()/scene.remove() on objects"
+        },
+        "delta_clamped_loop": {
+          "value": true,
+          "why": "frame delta clamped via Math.min cap"
+        },
+        "init_wrapped": {
+          "value": true,
+          "why": "init/render wrapped in try/catch (throw surfaces)"
+        },
+        "score": 4
+      }
+    },
+    "runtime": {
+      "loaded": true,
+      "uncaught_errors": 0,
+      "console_errors": 0,
+      "render_nonblank": true,
+      "axe_violations_total": 1,
+      "axe_violation_ids": [
+        "meta-viewport"
+      ],
+      "notes": "pixvar=681.3,range=225"
+    },
+    "a11y_gating_violations": 1,
+    "a11y_advisory_violations": 0
+  },
+  "fair_control": {
+    "path": "evals/loop-demo/game/baseline-fair/index.html",
+    "static": {
+      "meta": {
+        "lines": 1349,
+        "bytes": 56606
+      },
+      "contrast": {
+        "pairs_checked": 9,
+        "pairs_passing": 9,
+        "details": [
+          {
+            "fg": "var(--text)",
+            "bg": "var(--bg)",
+            "ratio": 16.46,
+            "pass": true
+          },
+          {
+            "fg": "var(--text)",
+            "bg": "var(--panel-2)",
+            "ratio": 13.28,
+            "pass": true
+          },
+          {
+            "fg": "var(--text)",
+            "bg": "var(--panel)",
+            "ratio": 14.87,
+            "pass": true
+          },
+          {
+            "fg": "var(--text)",
+            "bg": "var(--panel-2)",
+            "ratio": 13.28,
+            "pass": true
+          },
+          {
+            "fg": "var(--on-amber)",
+            "bg": "var(--amber)",
+            "ratio": 9.54,
+            "pass": true
+          },
+          {
+            "fg": "var(--text)",
+            "bg": "var(--ok-bg)",
+            "ratio": 5.19,
+            "pass": true
+          },
+          {
+            "fg": "var(--text)",
+            "bg": "var(--danger-bg)",
+            "ratio": 4.66,
+            "pass": true
+          },
+          {
+            "fg": "var(--text)",
+            "bg": "var(--panel)",
+            "ratio": 14.87,
+            "pass": true
+          },
+          {
+            "fg": "var(--muted)",
+            "bg": "rgba(22,26,32,0.96)",
+            "ratio": 8.63,
+            "pass": true
+          }
+        ]
+      },
+      "uiux_static": {
+        "has_hover": true,
+        "has_focus_visible": true,
+        "has_spacing_scale": true,
+        "has_breakpoint": true
+      },
+      "assets": {
+        "placeholder_hits": 0,
+        "external_asset_refs": 0,
+        "favicon_present": false,
+        "procedural_only": true
+      },
+      "features": {
+        "enemies_spawn": true,
+        "path_follow": true,
+        "tower_placement": true,
+        "shooting": true,
+        "wave_escalation": true,
+        "hud_score_lives_gold": true,
+        "tower_buy_upgrade": true,
+        "features_count": 7
+      },
+      "runtime_static_robustness": {
+        "webgl_guard": {
+          "value": true,
+          "why": "context-loss/feature-detect present"
+        },
+        "disposes_objects": {
+          "value": true,
+          "why": "calls .dispose()/scene.remove() on objects"
+        },
+        "delta_clamped_loop": {
+          "value": true,
+          "why": "THREE.Clock getDelta with a Math.min cap"
+        },
+        "init_wrapped": {
+          "value": true,
+          "why": "init/render wrapped in try/catch (throw surfaces)"
+        },
+        "score": 4
+      }
+    },
+    "runtime": {
+      "loaded": true,
+      "uncaught_errors": 0,
+      "console_errors": 0,
+      "render_nonblank": true,
+      "axe_violations_total": 0,
+      "axe_violation_ids": [],
+      "notes": "pixvar=572.6,range=237"
+    },
+    "a11y_gating_violations": 0,
+    "a11y_advisory_violations": 0
+  },
+  "harness": {
+    "path": "evals/loop-demo/game/index.html",
+    "static": {
+      "meta": {
+        "lines": 3071,
+        "bytes": 129917
+      },
+      "contrast": {
+        "pairs_checked": 6,
+        "pairs_passing": 6,
+        "details": [
+          {
+            "fg": "var(--text)",
+            "bg": "var(--bg-deep)",
+            "ratio": 17.86,
+            "pass": true
+          },
+          {
+            "fg": "var(--text)",
+            "bg": "var(--panel-2)",
+            "ratio": 13.34,
+            "pass": true
+          },
+          {
+            "fg": "var(--ink)",
+            "bg": "var(--accent)",
+            "ratio": 12.95,
+            "pass": true
+          },
+          {
+            "fg": "var(--on-danger)",
+            "bg": "var(--danger-deep)",
+            "ratio": 5.69,
+            "pass": true
+          },
+          {
+            "fg": "var(--text)",
+            "bg": "var(--panel)",
+            "ratio": 15.84,
+            "pass": true
+          },
+          {
+            "fg": "var(--text)",
+            "bg": "var(--panel-2)",
+            "ratio": 13.34,
+            "pass": true
+          }
+        ]
+      },
+      "uiux_static": {
+        "has_hover": true,
+        "has_focus_visible": true,
+        "has_spacing_scale": true,
+        "has_breakpoint": true
+      },
+      "assets": {
+        "placeholder_hits": 0,
+        "external_asset_refs": 0,
+        "favicon_present": false,
+        "procedural_only": true
+      },
+      "features": {
+        "enemies_spawn": true,
+        "path_follow": true,
+        "tower_placement": true,
+        "shooting": true,
+        "wave_escalation": true,
+        "hud_score_lives_gold": true,
+        "tower_buy_upgrade": true,
+        "features_count": 7
+      },
+      "runtime_static_robustness": {
+        "webgl_guard": {
+          "value": true,
+          "why": "context-loss/feature-detect present"
+        },
+        "disposes_objects": {
+          "value": true,
+          "why": "calls .dispose()/scene.remove() on objects"
+        },
+        "delta_clamped_loop": {
+          "value": true,
+          "why": "THREE.Clock getDelta with a Math.min cap"
+        },
+        "init_wrapped": {
+          "value": true,
+          "why": "init/render wrapped in try/catch (throw surfaces)"
+        },
+        "score": 4
+      }
+    },
+    "runtime": {
+      "loaded": true,
+      "uncaught_errors": 0,
+      "console_errors": 0,
+      "render_nonblank": true,
+      "axe_violations_total": 0,
+      "axe_violation_ids": [],
+      "notes": "pixvar=399.7,range=206"
+    },
+    "a11y_gating_violations": 0,
+    "a11y_advisory_violations": 0
+  }
+}
