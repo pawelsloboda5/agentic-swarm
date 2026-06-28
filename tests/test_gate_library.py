@@ -1,7 +1,7 @@
 """Structural + invariant tests for the v0.7.0 gate library and gate runner.
 
 Guards the design contract (mvp-gate-library plan §1/§2) without re-implementing it:
-- each MVP gate file declares all 7 keys with a valid tier and id==filename,
+- each active gate file declares all 7 keys with a valid tier and id==filename,
 - the gate runner encodes the anti-theater invariant, the verdict schema, the N=2 bound, and graceful
   (non-silent) degradation,
 - the ui-ux gate is wired to the shipped WCAG util,
@@ -17,8 +17,11 @@ _GATES = os.path.join(_REPO_ROOT, "skills", "architect", "gates")
 _RUNNER = os.path.join(_REPO_ROOT, "skills", "architect", "reference", "gate-runner.md")
 _GATEMAP = os.path.join(_REPO_ROOT, "skills", "architect", "reference", "usecase-gate-map.md")
 _WCAG = os.path.join(_GATES, "lib", "wcag_contrast.py")
+_A11Y_REPORT = os.path.join(_GATES, "lib", "a11y_report.py")
 
-MVP_GATES = ("tests", "assets", "ui-ux")
+# Every gate the library ships with a runnable file + a forward-couplable definition. a11y joined in
+# v0.7.1 (the standalone runner gate), so it is guarded across all the structural + tier-drift checks.
+ACTIVE_GATES = ("tests", "assets", "ui-ux", "a11y")
 SEVEN_KEYS = ("id", "applies_when", "tier", "criteria", "verifier", "confidence", "backing_skill")
 VALID_TIERS = {"objective", "critic", "advisory", "mixed"}
 
@@ -29,19 +32,19 @@ def _read(path):
 
 
 def test_mvp_gate_files_exist():
-    for gid in MVP_GATES:
+    for gid in ACTIVE_GATES:
         assert os.path.isfile(os.path.join(_GATES, gid + ".md")), "missing gates/%s.md" % gid
 
 
 def test_each_gate_declares_seven_keys():
-    for gid in MVP_GATES:
+    for gid in ACTIVE_GATES:
         text = _read(os.path.join(_GATES, gid + ".md"))
         for key in SEVEN_KEYS:
             assert ("**%s:**" % key) in text, "gates/%s.md missing key '%s'" % (gid, key)
 
 
 def test_each_gate_tier_is_valid():
-    for gid in MVP_GATES:
+    for gid in ACTIVE_GATES:
         text = _read(os.path.join(_GATES, gid + ".md"))
         m = re.search(r"\*\*tier:\*\*\s*`?([a-z-]+)`?", text)
         assert m, "gates/%s.md has no parseable tier" % gid
@@ -49,7 +52,7 @@ def test_each_gate_tier_is_valid():
 
 
 def test_tier_labels_consistent_across_docs():
-    """Each MVP gate's tier must match the gate file's DECLARED tier across EVERY surface that names it —
+    """Each active gate's tier must match the gate file's DECLARED tier across EVERY surface that names it —
     SKILL.md's '(tier)' annotation, the gate-runner starter table, the usecase-gate-map status row, and
     the CHANGELOG. Guards the cross-file tier-label drift class (e.g. a doc still saying 'objective' after
     a gate was re-tiered to 'mixed')."""
@@ -57,7 +60,7 @@ def test_tier_labels_consistent_across_docs():
     runner = _read(_RUNNER)
     gatemap = _read(_GATEMAP)
     changelog = _read(os.path.join(_REPO_ROOT, "CHANGELOG.md"))
-    for gid in MVP_GATES:
+    for gid in ACTIVE_GATES:
         gate = _read(os.path.join(_GATES, gid + ".md"))
         declared = re.search(r"\*\*tier:\*\*\s*`?([a-z-]+)`?", gate).group(1)
         surfaces = {
@@ -74,7 +77,7 @@ def test_tier_labels_consistent_across_docs():
 
 
 def test_each_gate_id_matches_filename():
-    for gid in MVP_GATES:
+    for gid in ACTIVE_GATES:
         text = _read(os.path.join(_GATES, gid + ".md"))
         m = re.search(r"\*\*id:\*\*\s*`([^`]+)`", text)
         assert m and m.group(1) == gid, "gates/%s.md id must be `%s`" % (gid, gid)
@@ -112,6 +115,23 @@ def test_ui_ux_gate_uses_the_wcag_util():
     text = _read(os.path.join(_GATES, "ui-ux.md"))
     assert "wcag_contrast.py" in text, "ui-ux gate must reference the bundled WCAG util"
     assert os.path.isfile(_WCAG), "gates/lib/wcag_contrast.py must exist"
+
+
+def test_a11y_gate_uses_the_normalizer():
+    text = _read(os.path.join(_GATES, "a11y.md"))
+    assert "a11y_report.py" in text, "a11y gate must reference the bundled runner-output normalizer"
+    assert os.path.isfile(_A11Y_REPORT), "gates/lib/a11y_report.py must exist"
+
+
+def test_a11y_does_not_regate_uiux_checks():
+    """Single-owner decomposition guard: a11y must defer contrast/alt/name/tap-target to ui-ux (advisory)
+    and never re-gate them; its no-runner path must FLAG (not a borrowed-evidence pass); and it must carry
+    the PASS != conformance caveat. Cheap guard against a future edit silently double-gating ui-ux's checks."""
+    text = _read(os.path.join(_GATES, "a11y.md")).lower()
+    assert "ui-ux" in text, "a11y must reference ui-ux as the owner of the cheap checks"
+    assert "advisory" in text, "a11y must surface ui-ux-owned violations as advisory (not gating)"
+    assert "flag" in text, "a11y no-runner/browserless path must flag, never a borrowed-evidence pass"
+    assert "conformance" in text, "a11y must carry the PASS != conformance caveat"
 
 
 def test_gatemap_active_gates_have_shipped_files():

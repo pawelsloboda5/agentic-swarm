@@ -7,6 +7,46 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-06-27
+
+The standalone-`a11y` release: completes the v0.7 gate library with the full **`a11y`** gate the v0.7.0
+design deferred — an auto-detected accessibility-runner sweep + a keyboard/semantics critic — **without
+double-counting** the cheap checks `ui-ux` already owns and **without ever rubber-stamping** ("PASS ≠
+conformance"). Shipped as a patch because it is an **additive feature completing v0.7.0's originally-scoped
+a11y** (per the 0.7.0 deferral note), not a bugfix; the measured Three.js showcase remains **v0.8.0**.
+
+### Added
+
+- **a11y** (mixed — `skills/architect/gates/a11y.md`): the standalone accessibility gate, a 7-key
+  definition whose objective floor is a
+  **scoped** automated runner sweep (axe → pa11y → Lighthouse priority) and whose critic rung is a
+  separate-context **static-semantics + keyboard** check. It gates only on **a11y-distinctive** rules —
+  contrast / alt-text / accessible-name presence / tap-target stay **single-owned by `ui-ux`** and are
+  surfaced **advisory** here (no double-count). The automated runner is a **browser-dependent optional
+  enhancer**: with no runner present the gate **skips-with-note** and falls back to the browserless static
+  critic, and if nothing a11y-specific is verifiable it emits an honest **`flag`** — never a borrowed-
+  evidence pass (mirroring the `tests`/`ui-ux` precedent). Carries a prominent **"PASS ≠ conformance"**
+  caveat (automation covers ~30–50% of WCAG SC; confidence never reaches 1.0 on automation alone).
+- **Zero-dep a11y runner-output normalizer** (`skills/architect/gates/lib/a11y_report.py`): turns the
+  **heterogeneous** JSON each runner emits into one verdict. Defensive by construction — accepts both the
+  programmatic-object and the **CLI bare-array** serializations of axe and pa11y (the pa11y CLI emits a
+  bare array — the silent-false-pass trap), **fails closed** on malformed input (`error` + `pass: False` +
+  exit 2, never `count == 0 ⇒ pass`), treats the Lighthouse score as **advisory + null-safe** (never a hard
+  gate, never coerced to 0), and partitions ui-ux-owned rules to advisory. CLI exit `0/1/2` + ASCII-only
+  output mirror the WCAG util. Unit-tested with fixtures for every shape (`tests/test_a11y_report.py`).
+- **a11y activated across the harness** — un-folded from `ui-ux` in `reference/usecase-gate-map.md`
+  (future → active; added to the Web-UI / landing / dashboard gate-sets), added to the
+  `reference/gate-runner.md` starter table, the `SKILL.md` active-gates line + starter-library annotation,
+  and the `reference/brief-template.md` (a conditional a11y block — only the browserless-capable subset is
+  inlined when no browser, so a "MUST PASS" instruction is never unsatisfiable).
+- **Tests** — the gate-library guard now covers `a11y` across all structural + **tier-drift** surfaces
+  (renamed to `ACTIVE_GATES`), plus a decomposition guard that `a11y` defers ui-ux-owned checks to advisory
+  and flags (never borrow-passes) when no runner is present.
+
+> The full design rationale + the 6-lens adversarial planning critique that reconciled it are in
+> `docs/plans/2026-06-27-v0.7.1-standalone-a11y-gate.md`; the **measured Three.js showcase** (v0.8.0) and
+> the schema-freezing **v1.0** still follow — see `docs/plans/`.
+
 ## [0.7.0] — 2026-06-27
 
 The gate-runner release: the architect's Phase 3 can now **run** the quality gates it forward-couples
@@ -242,7 +282,8 @@ Initial release.
 - **Docs & trust** — full `README.md`, plain-language `docs/PRIVACY.md`, `CONTRIBUTING.md`,
   this changelog, and the MIT `LICENSE`.
 
-[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/pawelsloboda5/agentic-swarm/compare/v0.4.0...v0.5.0
