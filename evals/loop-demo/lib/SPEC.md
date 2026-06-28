@@ -171,12 +171,13 @@ Inverse of `zigzagEncode`. Nonnegative `u`: if even → `u/2`; if odd → `-(u +
 Examples: `zigzagDecode(0) -> 0`, `zigzagDecode(1) -> -1`.
 
 ### `grayEncode(n) -> integer`
-Nonnegative integer `n` → its binary-reflected Gray code: `n XOR (n >> 1)`.
+Nonnegative integer `n` (domain `0 <= n < 2^31`) → its binary-reflected Gray code: `n XOR (n >> 1)`.
 Examples: `grayEncode(0) -> 0`, `grayEncode(2) -> 3`.
 
 ### `grayDecode(g) -> integer`
-Inverse of `grayEncode` (XOR-prefix of `g`: `n = g; for shift = 1,2,4,8,...: n ^= (g >> shift)` until
-the shift exceeds the bit width).
+Inverse of `grayEncode` (domain `0 <= g < 2^31`): XOR `g` with **every** right-shift of itself, i.e.
+`n = g ^ (g>>1) ^ (g>>2) ^ (g>>3) ^ ...` continuing until the shifted term is `0`. (`grayDecode` must
+satisfy `grayDecode(grayEncode(n)) === n`.)
 Examples: `grayDecode(3) -> 2`, `grayDecode(0) -> 0`.
 
 ---
